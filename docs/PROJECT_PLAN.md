@@ -1,0 +1,808 @@
+# FlashDec 12 周详细执行计划
+
+> 开始日期：2026-06-17
+>
+> 目标完成日期：2026-09-13
+>
+> 每周投入：12-18 小时
+>
+> 项目定位：面向 AI Infra / 高性能算子岗位的公开 GitHub 作品集项目。
+
+## 1. 项目目标
+
+FlashDec 的目标是围绕 **LLM decode 阶段的 PagedAttention 与 Paged KV Cache** 做一个小而深的 AI Infra 项目。
+
+它要证明四件事：
+
+1. 你理解 LLM 推理中的真实瓶颈，而不是只会写零散 demo。
+2. 你能用 PyTorch + Triton + 少量 CUDA 实现和验证 GPU 算子。
+3. 你能把 correctness、benchmark、profiling 做成工程闭环。
+4. 你能从内存布局、访存合并、带宽、occupancy、kernel launch overhead 等角度解释性能。
+
+项目不追求完整 serving engine。核心范围是：
+
+- 单 token decode attention。
+- Paged KV Cache 的 block table 索引。
+- 变长 batch。
+- GQA / MQA。
+- FP16 / BF16。
+- 在 RTX 5070 上可复现 benchmark。
+
+## 2. 最终成果
+
+12 周结束时，仓库应包含：
+
+- `flashdec` Python package。
+- PyTorch reference 实现。
+- Triton dense decode attention kernel。
+- Triton paged decode attention kernel。
+- `PagedKVCache` 运行时：分配 block、append KV、生成 block table。
+- 单元测试：覆盖主要 shape 和边界条件。
+- benchmark 脚本：输出 CSV / Markdown 表格。
+- profiling 报告：解释主要瓶颈和优化效果。
+- 一个小型 CUDA extension，优先做 fused RoPE + KV append。
+- 中文 README、中文设计文档、中文性能报告、中文面试问答。
+- 中英文简历 bullet。
+
+## 3. 成功标准
+
+最低可交付版本：
+
+- PyTorch reference 正确且可读。
+- dense decode Triton kernel 与 paged decode Triton kernel 均能在 RTX 5070 上运行。
+- Paged KV Cache 支持变长序列和非连续物理 block。
+- correctness tests 覆盖 FP16/BF16、head_dim 64/128、batch 1-128、context 128-8192。
+- benchmark 至少明显快于 naive PyTorch reference。
+- README 能清楚解释 decode attention 为什么偏 memory-bound，以及 paged KV cache 解决什么问题。
+
+优秀作品集版本：
+
+- 支持 GQA/MQA。
+- 性能报告包含 latency/token、有效内存带宽、shape sweep。
+- profiling 能解释至少 3 个有效优化和 1 个无效优化。
+- 有一个能构建、能测试、能 benchmark 的 CUDA extension。
+- 面试时能从算法、kernel、内存布局、工程验证四层讲清楚。
+
+进阶版本：
+
+- 能和 FlashInfer 或 vLLM 的公开实现做部分 shape 对比。
+- 做一个简单 autotune：按 shape 选择 block size / num warps / num stages。
+- 写一篇中文技术文章：《从零实现 Paged Decode Attention》。
+
+## 4. 技术路线
+
+### 为什么主线用 Triton
+
+Triton 可以理解成一种面向 GPU kernel 的 Python 风格 DSL。它比手写 CUDA 更容易快速实现和迭代，又能暴露 block size、program id、mask load/store、num warps、autotune 等算子优化关键点。
+
+本项目采用：
+
+- Triton：主力实现 attention kernel。
+- PyTorch：reference、测试、benchmark 驱动。
+- CUDA：小范围实现一个 extension，展示底层能力。
+
+### 核心 API 方向
+
+```python
+import flashdec
+
+out = flashdec.decode(
+    q,
+    k_cache,
+    v_cache,
+    block_tables,
+    seq_lens,
+    sm_scale=1.0 / head_dim**0.5,
+    block_size=16,
+)
+```
+
+缓存管理接口：
+
+```python
+cache = flashdec.PagedKVCache(
+    num_layers=1,
+    num_kv_heads=8,
+    head_dim=128,
+    block_size=16,
+    max_blocks=4096,
+    dtype=torch.float16,
+    device="cuda",
+)
+
+block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
+```
+
+接口可以在实现中微调，但 README、tests、benchmark 应保持一致。
+
+## 5. 里程碑
+
+### 里程碑 A：基础能力跑通
+
+截止：2026-07-05
+
+成果：
+
+- 项目骨架完整。
+- 环境可用。
+- 能写简单 Triton kernel。
+- pytest 与 benchmark 框架可运行。
+
+### 里程碑 B：Dense Decode Attention
+
+截止：2026-07-19
+
+成果：
+
+- PyTorch reference 正确。
+- dense decode Triton kernel 正确。
+- 可以测 correctness 与 latency。
+
+### 里程碑 C：Paged Decode Attention
+
+截止：2026-08-09
+
+成果：
+
+- Paged KV Cache 运行时可用。
+- block table 索引正确。
+- paged decode Triton kernel 支持主要 shape。
+
+### 里程碑 D：优化与 profiling
+
+截止：2026-08-23
+
+成果：
+
+- 有性能实验记录。
+- 有 profiling 报告。
+- 默认 kernel 参数来自实测结果。
+
+### 里程碑 E：公开作品集
+
+截止：2026-09-13
+
+成果：
+
+- 中文 README、中文设计文档、中文性能报告完整。
+- benchmark 可复现。
+- 简历与面试材料准备好。
+
+## 6. 每周计划
+
+### Week 0：2026-06-17 至 2026-06-21
+
+主题：仓库、环境、学习路径准备。
+
+目标：
+
+- 把项目从想法落到仓库。
+- 明确公开边界，避免任何公司保密风险。
+- 在 RTX 5070 开发板上验证 PyTorch / CUDA / Triton。
+- 建立中文资料学习路线。
+
+任务：
+
+- 建立目录：
+  - `flashdec/`
+  - `tests/`
+  - `benchmarks/`
+  - `docs/`
+  - `scripts/`
+- 在 5070 开发板运行：
+  - `python scripts/check_env.py`
+  - `nvidia-smi`
+  - `nvcc --version`
+- 把环境输出记录到 `docs/environment.md`。
+- 阅读中文资料导航的第 0 阶段和第 1 阶段。
+- 写第一篇笔记：`docs/notes/triton_basics.md`。
+
+交付物：
+
+- `README.md`
+- `docs/PROJECT_PLAN.md`
+- `docs/PREP_CHECKLIST.md`
+- `docs/CHINESE_RESOURCES.md`
+- `docs/environment.md`
+
+验收标准：
+
+- 你能用 2 分钟说清楚 FlashDec 做什么、不做什么。
+- 5070 开发板上能跑一个最小 PyTorch CUDA snippet。
+- 确认 Triton 是否能在当前驱动和 Python 环境中正常 import。
+
+### Week 1：2026-06-22 至 2026-06-28
+
+主题：Triton 入门与测试/benchmark 框架。
+
+目标：
+
+- 掌握 Triton 最基本的编程模型。
+- 建立以后所有 kernel 共用的 correctness 和 benchmark 方法。
+
+中文学习输入：
+
+- Triton 中文文档：安装、教程、`triton.language` 基本 API。
+- PyTorch 中文教程：Tensor、CUDA tensor、基本 profiling/计时。
+
+编码任务：
+
+- 实现 3 个小 kernel：
+  - vector add。
+  - row-wise softmax。
+  - RMSNorm forward。
+- 为每个 kernel 写 PyTorch reference。
+- 为每个 kernel 写 pytest correctness test。
+- 实现 benchmark helper：
+  - warmup。
+  - CUDA event 计时。
+  - p50 / p90 / mean latency。
+  - CSV 输出。
+
+交付物：
+
+- `flashdec/kernels/vector_add.py`
+- `flashdec/kernels/softmax.py`
+- `flashdec/kernels/rmsnorm.py`
+- `tests/test_triton_basics.py`
+- `benchmarks/run_microbench.py`
+- `docs/notes/triton_basics.md`
+
+验收标准：
+
+- `pytest` 通过。
+- microbench 能输出 CSV。
+- 你能解释：
+  - `program_id`
+  - block size
+  - mask load/store
+  - stride
+  - contiguous/coalesced memory access
+
+### Week 2：2026-06-29 至 2026-07-05
+
+主题：matmul、访存、autotune、profiling 入门。
+
+目标：
+
+- 建立 GPU kernel 性能直觉。
+- 知道什么时候算子是 compute-bound，什么时候是 memory-bound。
+
+中文学习输入：
+
+- Triton 中文 matmul 教程。
+- Triton 中文 autotune 相关内容。
+- CUDA 中文入门资料中关于 grid/block/thread、global/shared/register memory 的章节。
+
+编码任务：
+
+- 实现一个小型 FP16 matmul Triton kernel。
+- 和 `torch.matmul` 对比 correctness。
+- 做 M/N/K shape sweep。
+- 加入小范围 Triton autotune。
+- 跑一次 PyTorch profiler 或 Nsight。
+
+笔记任务：
+
+- 写 `docs/notes/gpu_memory_basics.md`，回答：
+  - global memory、shared memory、register 分别是什么。
+  - 为什么合并访存重要。
+  - 为什么 cuBLAS 很难被手写 matmul 打败。
+  - 为什么 decode attention 常常比 prefill 更偏内存带宽瓶颈。
+
+交付物：
+
+- matmul kernel。
+- matmul benchmark CSV。
+- 一份 profiler 截图或文本摘要。
+- `docs/notes/gpu_memory_basics.md`
+
+验收标准：
+
+- 你能读懂一个简单 profiler timeline。
+- 你能说明 kernel launch time 和 GPU execution time 的区别。
+
+### Week 3：2026-07-06 至 2026-07-12
+
+主题：attention reference 与 dense decode baseline。
+
+目标：
+
+- 先把 attention 语义定义清楚。
+- 后续所有 Triton kernel 都能对齐这个 reference。
+
+中文学习输入：
+
+- Transformer attention 中文讲解。
+- FlashAttention / online softmax 中文讲解。
+- vLLM 中文 Paged Attention 页面中的输入、概念、QK、Softmax 部分。
+
+编码任务：
+
+- 实现 dense decode PyTorch reference：
+  - `q`: `[num_seqs, num_q_heads, head_dim]`
+  - `k/v`: `[num_seqs, max_seq_len, num_kv_heads, head_dim]`
+  - `seq_lens`: `[num_seqs]`
+  - `out`: `[num_seqs, num_q_heads, head_dim]`
+- 支持 GQA 映射：
+  - `kv_head = q_head // (num_q_heads // num_kv_heads)`
+- 实现数值稳定 softmax。
+- 写随机 shape tests。
+
+交付物：
+
+- `flashdec/reference.py`
+- `tests/test_decode_reference.py`
+- `benchmarks/run_decode_reference.py`
+- `docs/design.md` 初稿。
+
+验收标准：
+
+- reference 代码清晰、朴素、可信。
+- 可以一键生成随机 shape，与手写小例子对齐。
+
+### Week 4：2026-07-13 至 2026-07-19
+
+主题：dense decode attention Triton kernel。
+
+目标：
+
+- 写出第一个真正的 decode attention kernel。
+- 掌握 online softmax 在 kernel 内部的写法。
+
+编码任务：
+
+- 实现 dense decode kernel：
+  - 每个 program 处理一个 `(sequence, q_head)`。
+  - 沿 context 维度分 block 遍历 K/V。
+  - 使用 FP32 accumulation。
+  - 实现 running max、running exp sum、running output accumulator。
+- 先支持 head_dim 64，再支持 head_dim 128。
+- 写 correctness tests。
+- 和 naive PyTorch reference benchmark。
+
+笔记任务：
+
+- 写 `docs/notes/online_softmax.md`：
+  - safe softmax。
+  - online softmax。
+  - 为什么 attention 不能真的 materialize 整个 attention matrix。
+
+交付物：
+
+- `flashdec/kernels/dense_decode.py`
+- `tests/test_dense_decode.py`
+- `benchmarks/run_dense_decode.py`
+- `docs/notes/online_softmax.md`
+
+验收标准：
+
+- dense Triton decode 正确。
+- 在中等 batch/context 上快于 naive PyTorch reference。
+- 你能在白板上推导 online softmax 的更新公式。
+
+### Week 5：2026-07-20 至 2026-07-26
+
+主题：Paged KV Cache 数据结构。
+
+目标：
+
+- 先把 block table 和 cache 语义做清楚，再写 paged kernel。
+
+中文学习输入：
+
+- vLLM 中文 Paged Attention 页面。
+- vLLM 中文文档中 KV cache、prefix cache、性能分析相关内容。
+- 操作系统分页/虚拟内存的中文资料，用来辅助理解 block table。
+
+编码任务：
+
+- 实现 `PagedKVCache`：
+  - 固定大小 physical block。
+  - 每个 request 维护 logical block list。
+  - append 一个 token。
+  - 生成 padded block table tensor。
+  - 维护 `seq_lens`。
+- 实现基于 block table 的 PyTorch paged reference。
+- 测试 dense KV 与 paged KV 输出一致。
+
+交付物：
+
+- `flashdec/cache.py`
+- `flashdec/paged_reference.py`
+- `tests/test_paged_cache.py`
+- `docs/design_paged_kv.md`
+
+验收标准：
+
+- 你能画出 logical token index 到 physical block / offset 的映射。
+- paged reference 与 dense reference 对齐。
+
+### Week 6：2026-07-27 至 2026-08-02
+
+主题：paged decode kernel v1。
+
+目标：
+
+- 写出第一个可正确运行的 paged decode Triton kernel。
+
+编码任务：
+
+- 把 dense decode 逻辑改成 block table 索引。
+- 每个 `(sequence, q_head)`：
+  - 读取 `seq_len`。
+  - 遍历 logical block。
+  - 查 block table 得到 physical block。
+  - 从 physical KV cache 读取 K/V。
+  - 对最后一个 block 做 mask。
+- v1 限定：
+  - `block_size = 16`
+  - `head_dim = 64`
+  - FP16
+  - GQA 可以先不做。
+
+交付物：
+
+- `flashdec/kernels/paged_decode.py`
+- `tests/test_paged_decode.py`
+- 第一版 paged decode benchmark CSV。
+
+验收标准：
+
+- 变长序列 correctness 通过。
+- 你能指出 v1 慢在哪里：访存、索引、launch overhead，还是 occupancy。
+
+### Week 7：2026-08-03 至 2026-08-09
+
+主题：真实 decode shape 补全。
+
+目标：
+
+- 让 paged decode 支持更贴近 LLM 的 shape。
+
+编码任务：
+
+- 支持 head_dim 128。
+- 支持 BF16。
+- 支持 GQA/MQA：
+  - 例如 32 q heads / 8 kv heads。
+  - 例如 16 q heads / 1 kv head。
+- 做 batch sweep：
+  - 1, 2, 4, 8, 16, 32, 64, 128。
+- 做 context sweep：
+  - 128, 256, 512, 1024, 2048, 4096, 8192。
+- 明确记录暂不支持的 shape。
+
+交付物：
+
+- 更新后的 paged decode kernel。
+- 更新后的 tests。
+- `benchmarks/results/week7_paged_decode.csv`
+- `docs/compatibility.md`
+
+验收标准：
+
+- 主 shape matrix correctness 通过。
+- benchmark 不再只是 toy shape。
+
+### Week 8：2026-08-10 至 2026-08-16
+
+主题：优化第一轮：参数、布局、访存。
+
+目标：
+
+- 用实验而不是猜测来决定默认 kernel 配置。
+
+实验任务：
+
+- sweep：
+  - block size：8/16/32。
+  - `BLOCK_N`。
+  - `num_warps`。
+  - `num_stages`。
+- 比较 KV cache layout：
+  - `[num_blocks, num_kv_heads, block_size, head_dim]`
+  - `[num_blocks, num_kv_heads, head_dim, block_size]`
+  - vLLM 风格 layout 可作为参考。
+- 优化 K/V load 的合并访存。
+- 减少 benchmark 中 Python 侧开销。
+
+记录任务：
+
+- 建立 `docs/perf_experiments.md`：
+  - 假设。
+  - 改动。
+  - 测试 shape。
+  - 结果。
+  - 结论。
+
+交付物：
+
+- `docs/perf_experiments.md`
+- 更新后的 benchmark CSV。
+- RTX 5070 默认 kernel config。
+
+验收标准：
+
+- 至少 3 个性能实验有清晰 before/after。
+- 默认配置来自测量结果。
+
+### Week 9：2026-08-17 至 2026-08-23
+
+主题：profiling 与对比。
+
+目标：
+
+- 把性能工作变成面试能讲的证据。
+
+实验任务：
+
+- profile 三类场景：
+  - 小 batch / 短 context。
+  - 中 batch / 中 context。
+  - 大 batch / 长 context。
+- 记录：
+  - kernel latency。
+  - latency/token。
+  - 有效内存带宽。
+  - occupancy 或 achieved occupancy。
+  - memory throughput。
+- 对比：
+  - naive PyTorch reference。
+  - dense Triton baseline。
+  - FlashInfer，如果安装顺利。
+  - vLLM，至少做设计层面对比。
+
+文档任务：
+
+- 写 `docs/performance_report.md`：
+  - 瓶颈是什么。
+  - 哪些优化有效。
+  - 哪些优化无效。
+  - 下一步会怎么做。
+
+交付物：
+
+- `docs/performance_report.md`
+- `benchmarks/results/week9_summary.md`
+- profiler artifact，体积太大则只保留截图/摘要。
+
+验收标准：
+
+- 你能用数据解释性能。
+- 报告里至少包含一个负结果，体现真实工程判断。
+
+### Week 10：2026-08-24 至 2026-08-30
+
+主题：CUDA extension。
+
+目标：
+
+- 加一个小而清楚的原生 CUDA 部分。
+
+首选范围：
+
+- fused RoPE + KV append：
+  - 输入新 K/V。
+  - 对 K 做 RoPE。
+  - 写入 paged KV cache 的 physical block layout。
+
+备选范围：
+
+- 如果 fused RoPE 过大，就做一个单独 KV append CUDA kernel。
+
+编码任务：
+
+- 建立 PyTorch C++/CUDA extension。
+- 注册 Python 可调用 op。
+- 写 PyTorch reference。
+- 写 correctness test。
+- benchmark append overhead。
+
+文档任务：
+
+- 写 `docs/cuda_extension.md`：
+  - 为什么 attention kernel 用 Triton。
+  - 为什么 append kernel 用 CUDA。
+  - build 流程。
+  - 主要瓶颈。
+
+交付物：
+
+- `flashdec/csrc/`
+- `flashdec/cuda_ops.py`
+- `tests/test_cuda_extension.py`
+- `docs/cuda_extension.md`
+
+验收标准：
+
+- extension 能本地 build 和运行。
+- 代码小到可以逐行讲清楚。
+
+### Week 11：2026-08-31 至 2026-09-06
+
+主题：整理成可公开项目。
+
+目标：
+
+- 让面试官或同学能快速运行、理解、复现实验。
+
+任务：
+
+- 清理 package API。
+- 完善安装说明。
+- 完善环境检查脚本。
+- 增加一键测试和 benchmark 命令。
+- 生成最终 benchmark 表。
+- 画图：
+  - dense KV vs paged KV。
+  - logical block 到 physical block。
+  - decode kernel 数据流。
+- 完善 README：
+  - 项目动机。
+  - quick start。
+  - API 示例。
+  - benchmark 表。
+  - 设计说明。
+  - 限制。
+  - roadmap。
+
+交付物：
+
+- 完整中文 `README.md`
+- `docs/design.md`
+- `docs/performance_report.md`
+- `scripts/check_env.py`
+- 一键测试脚本，可选。
+
+验收标准：
+
+- 新读者 5 分钟内能理解项目价值。
+- 兼容 GPU 环境下能按 README 跑至少一个 test 和一个 benchmark。
+
+### Week 12：2026-09-07 至 2026-09-13
+
+主题：发布、简历、面试准备。
+
+目标：
+
+- 把项目转化为求职信号。
+
+任务：
+
+- 打 `v0.1.0` release tag。
+- 固化最终结果表和已知限制。
+- 写中英文简历 bullet。
+- 写面试问答：
+  - decode attention 为什么重要。
+  - KV cache 为什么是推理瓶颈。
+  - Paged KV Cache 解决什么内存问题。
+  - online softmax 如何保证数值稳定。
+  - GQA/MQA 如何映射 q heads 到 kv heads。
+  - kernel 主要时间花在哪里。
+  - 下一步优化什么。
+- 准备三种讲法：
+  - 3 分钟。
+  - 8 分钟。
+  - 20 分钟。
+
+交付物：
+
+- `docs/resume_bullets.md`
+- `docs/interview_qa.md`
+- `CHANGELOG.md`
+- GitHub release `v0.1.0`
+
+验收标准：
+
+- 项目可以直接写进简历。
+- 你能从系统、算法、kernel、性能实验四个层次回答问题。
+
+## 7. 每周时间分配
+
+每周 12-18 小时建议这样分：
+
+- 3-4 小时：中文资料阅读与笔记。
+- 5-8 小时：编码。
+- 2-3 小时：测试与 debug。
+- 1-2 小时：benchmark / profiling。
+- 1 小时：周总结和文档。
+
+不要跳过文档时间。这个项目最终能不能写进简历，很大程度取决于证据是否清楚。
+
+## 8. 每周复盘模板
+
+每周结束写一篇：
+
+```markdown
+# Week N 复盘
+
+## 本周完成
+
+## 正确性结果
+
+## 性能结果
+
+## Bug / 阻塞
+
+## 下周调整
+```
+
+每周最好有一个 commit，包含：
+
+- 代码。
+- 测试。
+- benchmark 或实验结果。
+- 对应文档。
+
+## 9. 风险与应对
+
+### 风险：Triton 学习成本高
+
+应对：
+
+- Week 1-2 只做小 kernel。
+- 先 dense decode，再 paged decode。
+- 永远先 correctness，再 performance。
+
+### 风险：RTX 5070 环境兼容问题
+
+应对：
+
+- Week 0 先验证环境。
+- 能跑后立刻 pin 版本。
+- PyTorch reference 与 CPU 侧测试独立存在。
+- 必要时租一块常见云 GPU 做最终 benchmark。
+
+### 风险：PagedAttention 太复杂
+
+应对：
+
+- 先写 paged reference。
+- v1 限定 block_size 16、head_dim 64、FP16。
+- v1 正确后再加 GQA、head_dim 128、BF16。
+
+### 风险：性能比不过成熟库
+
+应对：
+
+- 主要对比 naive PyTorch 和自己的 dense baseline。
+- FlashInfer/vLLM 用作设计参考和可选对比。
+- 简历强调从零实现、正确性、benchmark、profiling 和优化过程，不夸张宣称超过工业库。
+
+### 风险：公司保密边界
+
+应对：
+
+- 只使用公开中文资料、公开英文论文的中文笔记、公开代码和个人实验。
+- 不发布公司内部代码、数据、硬件细节、性能结论。
+- 所有公开 benchmark 明确标注个人 RTX 5070 或公开云 GPU。
+
+## 10. 中文学习顺序
+
+1. PyTorch tensor、stride、CUDA tensor、CUDA event 计时。
+2. Triton vector add、mask load/store。
+3. Triton softmax、reduction。
+4. Triton matmul、autotune。
+5. dense attention 与 online softmax。
+6. KV cache、GQA、MQA。
+7. Paged KV Cache、block table。
+8. profiling 与 memory bandwidth。
+9. PyTorch C++/CUDA custom operators。
+10. README、性能报告、面试表达。
+
+具体链接见 `docs/CHINESE_RESOURCES.md`。
+
+## 11. 最终简历目标
+
+中文 bullet：
+
+```text
+基于 PyTorch/Triton/CUDA 从零实现面向 LLM decode 阶段的 PagedAttention 算子与 Paged KV Cache 运行时，支持 variable-length batch、GQA/MQA、FP16/BF16 与 head_dim 64/128；构建 correctness/benchmark/profiling 框架，在 RTX 5070 上完成延迟、带宽与 shape sweep 分析，并基于 block layout、访存合并与 Triton autotune 进行性能优化。
+```
+
+英文 bullet：
+
+```text
+Built FlashDec, a PyTorch/Triton/CUDA LLM decode kernel project implementing PagedAttention-style decode and paged KV cache runtime with variable-length batching, GQA/MQA, FP16/BF16, and head_dim 64/128; developed correctness, benchmark, and profiling infrastructure on RTX 5070 and optimized kernel performance through block layout, coalesced memory access, and Triton autotuning.
+```

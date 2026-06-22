@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flashdec"
+version = "0.0.0"
+description = "LLM decode attention and paged KV cache experiments with PyTorch, Triton, and CUDA."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch",
+  "triton",
+  "pytest",
+  "pandas",
+  "matplotlib",
+  "tabulate",
+]
+
+[tool.setuptools.packages.find]
+include = ["flashdec*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+

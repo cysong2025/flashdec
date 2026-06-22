@@ -1,0 +1,73 @@
+# FlashDec
+
+FlashDec 是一个 12 周 AI Infra 作品集项目，主题是 **LLM decode 阶段的 PagedAttention 与 Paged KV Cache 高性能算子**。
+
+这个项目的目标不是做一个完整推理服务框架，而是做一个能在简历和面试里讲深的公开项目：
+
+- 用 PyTorch 写清楚、可靠的 reference 实现。
+- 用 Triton 实现 dense decode attention 和 paged decode attention。
+- 实现一个简单的 Paged KV Cache 运行时，支持 block table。
+- 建立 correctness、benchmark、profiling 三件套。
+- 补一个小型 CUDA extension，展示底层算子经验。
+
+## 当前状态
+
+Week 1 基础代码已实现，GPU correctness 与 benchmark 待在 RTX 5070 开发板验证。
+
+主要文档：
+
+- [12 周详细执行计划](docs/PROJECT_PLAN.md)
+- [准备清单](docs/PREP_CHECKLIST.md)
+- [中文学习资料导航](docs/CHINESE_RESOURCES.md)
+- [环境记录](docs/environment.md)
+- [Week 1 状态记录](docs/weekly/week_1_status.md)
+
+## 项目边界
+
+这个仓库只包含公开、自写、可复现的内容。
+
+不得包含：
+
+- 公司内部源码。
+- 公司内部 benchmark 数据。
+- 公司芯片、编译器、运行时、内部 API 的非公开细节。
+- 任何来自实习工作的保密材料。
+
+公开 benchmark 只基于个人 RTX 5070 开发板或后续租借的公开云 GPU。
+
+## 目标 API
+
+```python
+import flashdec
+
+out = flashdec.decode(
+    q,
+    k_cache,
+    v_cache,
+    block_tables,
+    seq_lens,
+    sm_scale=1.0 / head_dim**0.5,
+    block_size=16,
+)
+```
+
+## 计划里程碑
+
+- Week 0-2：环境、Triton 基础、小算子、测试与 benchmark 框架。
+- Week 3-4：PyTorch reference 与 dense decode Triton kernel。
+- Week 5-7：Paged KV Cache 与 paged decode Triton kernel。
+- Week 8-9：性能优化、profiling、对比实验。
+- Week 10：小型 CUDA extension。
+- Week 11-12：README、设计文档、benchmark 报告、简历 bullet、面试材料。
+
+## 中文资料入口
+
+学习主线优先使用中文材料：
+
+- Triton 中文文档：https://triton-lang.cn/main/index.html
+- PyTorch 中文站：https://pytorch.ac.cn/
+- PyTorch 自定义 C++/CUDA 算子中文教程：https://docs.pytorch.ac.cn/tutorials/advanced/cpp_custom_ops.html
+- vLLM 中文文档：https://docs.vllm.com.cn/
+- vLLM Paged Attention 中文页面：https://docs.vllm.com.cn/en/latest/design/paged_attention/
+
+更详细的阅读顺序见 [中文学习资料导航](docs/CHINESE_RESOURCES.md)。
