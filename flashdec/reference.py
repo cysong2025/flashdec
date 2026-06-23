@@ -24,3 +24,9 @@ def rmsnorm_ref(x, weight, eps=1e-6):
     normalized = x_fp32 * torch.rsqrt(variance + eps)
     return (normalized * weight.to(torch.float32)).to(x.dtype)
 
+
+def matmul_ref(a, b):
+    """Reference 2D matrix multiplication."""
+    import torch
+
+    return torch.matmul(a, b)

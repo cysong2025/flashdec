@@ -17,3 +17,9 @@ benchmark 记录至少包含：
 - 计时迭代次数。
 - p50 / p90 / mean latency。
 - 简单结论。
+
+当前脚本：
+
+- `run_microbench.py`：Week 1 小算子 benchmark。
+- `run_matmul_bench.py`：Week 2 matmul shape sweep，对比 `torch.matmul`、fixed Triton 和 autotuned Triton。
+- `profile_matmul.py`：Week 2 PyTorch profiler 文本摘要。

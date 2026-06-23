@@ -4,7 +4,19 @@ Imports are lazy so documentation and CPU-only helper code can be used on
 machines without PyTorch/Triton installed.
 """
 
-__all__ = ["rmsnorm", "row_softmax", "vector_add"]
+__all__ = ["matmul", "matmul_autotuned", "rmsnorm", "row_softmax", "vector_add"]
+
+
+def matmul(*args, **kwargs):
+    from .matmul import matmul as _matmul
+
+    return _matmul(*args, **kwargs)
+
+
+def matmul_autotuned(*args, **kwargs):
+    from .matmul import matmul_autotuned as _matmul_autotuned
+
+    return _matmul_autotuned(*args, **kwargs)
 
 
 def vector_add(*args, **kwargs):
