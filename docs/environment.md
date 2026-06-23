@@ -2,7 +2,7 @@
 
 这里记录 FlashDec 使用过的开发环境。
 
-当前 Codex 工作区是 macOS 环境，没有 NVIDIA CUDA。真正的 RTX 5070 开发板环境需要你在开发板上单独运行 `scripts/check_env.py` 后补充。
+当前 Codex 工作区是 macOS 环境，没有 NVIDIA CUDA。RTX 5070 台式机环境通过 Windows 11 + WSL2 Ubuntu 24.04 运行 PyTorch/Triton。
 
 ## 当前 Codex 工作区
 
@@ -49,36 +49,77 @@ not found
 - 当前工作区不能运行 CUDA/Triton benchmark。
 - 最终版本应以 RTX 5070 开发板环境为准。
 
-## RTX 5070 开发板
+## RTX 5070 台式机（WSL2 Ubuntu 24.04）
 
-在开发板上运行：
+运行命令：
 
 ```bash
 python scripts/check_env.py
 ```
 
-然后填写：
+### 机器
 
-- 日期：
-- OS：
-- GPU：
-- GPU 显存：
-- Driver：
-- Python：
-- PyTorch：
-- PyTorch CUDA：
-- Triton：
-- NVCC：
+- 日期：2026-06-23
+- OS：Linux-6.18.33.1-microsoft-standard-WSL2-x86_64-with-glibc2.39
+- GPU：NVIDIA GeForce RTX 5070
+- GPU 显存：11.94 GiB
+- Driver：581.29
+
+### 软件
+
+- Python：3.12.3
+- PyTorch：2.11.0+cu128
+- PyTorch CUDA：12.8
+- Triton：3.6.0
+- CUDA available：true
+- NVCC：not found
 
 ### 原始输出
 
 ```text
-粘贴开发板上的输出。
+FlashDec environment check
+==========================
+Python: 3.12.3
+Platform: Linux-6.18.33.1-microsoft-standard-WSL2-x86_64-with-glibc2.39
+PyTorch: 2.11.0+cu128
+Triton: 3.6.0
+
+CUDA available: True
+PyTorch CUDA: 12.8
+CUDA device count: 1
+GPU 0: NVIDIA GeForce RTX 5070, 11.94 GiB, sm_12.0
+
+nvidia-smi
+----------
+Tue Jun 23 11:22:00 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.82.10              Driver Version: 581.29         CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 5070        On  |   00000000:01:00.0  On |                  N/A |
+|  0%   49C    P0             30W /  250W |    1003MiB /  12227MiB |      1%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+
+nvcc --version
+--------------
+not found
 ```
 
 ### 兼容性结论
 
-- 是否能 import torch：
-- 是否能 import triton：
-- 是否能运行最小 CUDA tensor：
-- 是否需要调整 PyTorch / CUDA / Triton 版本：
+- 是否能 import torch：是。
+- 是否能 import triton：是。
+- 是否能运行最小 CUDA tensor：是，PyTorch 可识别 RTX 5070。
+- 是否需要调整 PyTorch / CUDA / Triton 版本：Week 1 不需要。`nvcc` 暂未安装，不影响 PyTorch/Triton 小算子验证；后续 CUDA extension 阶段需要补 CUDA Toolkit。
