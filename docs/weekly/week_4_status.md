@@ -63,21 +63,29 @@ kv_head = q_head // (num_q_heads // num_kv_heads)
 - 文件结构和 import 路径检查。
 - 文档记录。
 
-## 需要在 RTX 5070 上验证
+## RTX 5070 验证记录（2026-06-26）
 
 ### Correctness
+
+运行命令：
 
 ```bash
 pytest tests/test_dense_decode.py
 ```
 
-建议也一起回归 Week 3 reference：
+结果：
 
-```bash
-pytest tests/test_decode_reference.py tests/test_dense_decode.py
+```text
+collected 14 items
+tests/test_dense_decode.py .............. [100%]
+14 passed in 5.62s
 ```
 
+这说明 Week 4 dense decode Triton kernel 的 correctness tests 已经在 RTX 5070 环境通过。覆盖内容包括 padding mask、`seq_len == 0`、MHA/GQA/MQA、`head_dim=64`、`head_dim=128`、variable `seq_lens`、自定义 `sm_scale`，以及不同 `BLOCK_SEQ` 配置。
+
 ### Benchmark
+
+待在 RTX 5070 上运行。
 
 默认 shape sweep：
 
@@ -96,15 +104,6 @@ python benchmarks/run_dense_decode.py --block-seq 128 --output benchmarks/result
 
 ## 上板后要记录
 
-- `pytest tests/test_dense_decode.py` 是否通过。
-- 哪些 shape 通过：
-  - MHA。
-  - GQA。
-  - MQA。
-  - `head_dim=64`。
-  - `head_dim=128`。
-  - variable `seq_lens`。
-  - `seq_len == 0`。
 - benchmark CSV 输出路径。
 - Triton dense decode 相比 Week 3 PyTorch reference 的 `speedup_vs_ref`。
 - `BLOCK_SEQ` 对 p50/p90 的影响。
@@ -113,8 +112,8 @@ python benchmarks/run_dense_decode.py --block-seq 128 --output benchmarks/result
 ## Week 4 完成判定
 
 - `dense_decode_attention` Triton kernel 实现完成。
-- correctness tests 在 RTX 5070 上通过。
-- benchmark 生成 `benchmarks/results/week4_dense_decode.csv`。
+- correctness tests 在 RTX 5070 上通过：`14 passed in 5.62s`。
+- benchmark 待生成：`benchmarks/results/week4_dense_decode.csv`。
 - 能解释 online softmax 的三个状态变量：
   - running max。
   - running exp sum。
