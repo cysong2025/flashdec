@@ -206,44 +206,61 @@ benchmarks/run_decode_reference.py
 - 更新本文件的完成状态。
 - 提交 GitHub。
 
-## 需要运行的命令
+## RTX 5070 验证记录（2026-06-26）
+
+### Correctness
+
+用户已说明 Week 3 代码已经在 RTX 5070 上完成测试。原始 pytest 输出待补充到本节，建议补充以下命令的完整输出：
 
 ```bash
 pytest tests/test_decode_reference.py
+```
+
+### Benchmark
+
+运行命令：
+
+```bash
 python benchmarks/run_decode_reference.py --output benchmarks/results/week3_decode_reference.csv
 ```
 
-如果还没有实现 benchmark，可以先运行：
+结果文件：
 
 ```bash
-pytest tests/test_decode_reference.py
+benchmarks/results/week3_decode_reference.csv
 ```
 
-如果完整 benchmark 太慢，可以先跑小集合：
+硬件和软件环境：
 
-```bash
-python benchmarks/run_decode_reference.py --shape 1,8,8,64,128 --shape 4,8,8,64,512 --output benchmarks/results/week3_decode_reference_small.csv
-```
+- GPU：NVIDIA GeForce RTX 5070
+- PyTorch：2.11.0+cu128
+- CUDA：12.8
+- dtype：float16
+- repeats：30
 
-## 上板后要记录
+| num_seqs | num_q_heads | num_kv_heads | head_dim | max_seq_len | actual_seq_len | mean_ms | p50_ms | p90_ms | min_ms | max_ms |
+| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 8 | 8 | 64 | 128 | 70-70 | 1.480278 | 1.029536 | 1.448640 | 0.911712 | 12.898208 |
+| 4 | 8 | 8 | 64 | 512 | 325-451 | 4.097298 | 3.687136 | 4.644384 | 3.301856 | 9.444896 |
+| 8 | 16 | 4 | 64 | 512 | 307-502 | 15.455861 | 14.764896 | 16.754496 | 13.650176 | 27.230560 |
+| 16 | 16 | 4 | 128 | 1024 | 566-1024 | 31.033368 | 29.498720 | 35.093216 | 27.113216 | 47.425087 |
 
-- `pytest tests/test_decode_reference.py` 是否通过。
-- 覆盖了哪些 shape：
-  - MHA。
-  - GQA。
-  - MQA。
-  - variable seq lens。
-- benchmark CSV 输出路径。
-- dense reference 的主要耗时趋势。
-- 哪些语义会传递到 Week 4 Triton kernel。
+### 观察
+
+- dense decode reference benchmark 已能稳定生成 CSV，说明 Week 3 的 baseline 路径跑通。
+- latency 随 `num_seqs`、head 数量、`head_dim`、`max_seq_len` 和实际 `seq_lens` 增大而明显上升。
+- 第 4 组 shape 的 p50 已达到约 29.5 ms，说明朴素 PyTorch dense reference 只适合作为 correctness anchor，不适合真实 decode serving。
+- 第 3、4 组覆盖 GQA 场景：`num_q_heads=16`，`num_kv_heads=4`，后续 Triton kernel 必须保持相同 head 映射语义。
+- `max_ms` 明显高于 p50/p90，说明 benchmark 中存在尾部抖动；后续对比 Triton kernel 时应优先看 p50/p90，同时保留 mean/max 用于观察稳定性。
+- Week 4 的目标不是和 cuBLAS 类 matmul 对比，而是用 Triton 把 decode attention 中 QK、softmax、V accumulation 合成一个 kernel，减少 PyTorch reference 的多次调度和中间张量开销。
 
 ## Week 3 完成判定
 
 - `dense_decode_attention_ref` 实现完成。
-- 手写小例子和随机 shape tests 通过。
+- 手写小例子和随机 shape tests 已在 RTX 5070 上运行，pytest 原始输出待补充。
 - 支持 MHA/GQA/MQA。
 - 支持变长 `seq_lens`。
-- `benchmarks/run_decode_reference.py` 可生成 baseline CSV。
+- `benchmarks/run_decode_reference.py` 已生成 baseline CSV：`benchmarks/results/week3_decode_reference.csv`。
 - `docs/design.md` 初稿完成。
 - 你能口头解释：
   - decode attention 与 prefill attention 的区别。
