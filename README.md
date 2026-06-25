@@ -12,7 +12,7 @@ FlashDec 是一个 12 周 AI Infra 作品集项目，主题是 **LLM decode 阶�
 
 ## 当前状态
 
-Week 1 基础代码已实现，GPU correctness 与 benchmark 待在 RTX 5070 开发板验证。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 代码已实现，RTX 5070 correctness 与 benchmark 待验证。
 
 主要文档：
 
@@ -21,6 +21,9 @@ Week 1 基础代码已实现，GPU correctness 与 benchmark 待在 RTX 5070 开
 - [中文学习资料导航](docs/CHINESE_RESOURCES.md)
 - [环境记录](docs/environment.md)
 - [Week 1 状态记录](docs/weekly/week_1_status.md)
+- [Week 2 状态记录](docs/weekly/week_2_status.md)
+- [Week 3 状态记录](docs/weekly/week_3_status.md)
+- [Week 4 状态记录](docs/weekly/week_4_status.md)
 
 ## 项目边界
 

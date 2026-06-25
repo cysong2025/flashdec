@@ -4,7 +4,20 @@ Imports are lazy so documentation and CPU-only helper code can be used on
 machines without PyTorch/Triton installed.
 """
 
-__all__ = ["matmul", "matmul_autotuned", "rmsnorm", "row_softmax", "vector_add"]
+__all__ = [
+    "dense_decode_attention",
+    "matmul",
+    "matmul_autotuned",
+    "rmsnorm",
+    "row_softmax",
+    "vector_add",
+]
+
+
+def dense_decode_attention(*args, **kwargs):
+    from .dense_decode import dense_decode_attention as _dense_decode_attention
+
+    return _dense_decode_attention(*args, **kwargs)
 
 
 def matmul(*args, **kwargs):
