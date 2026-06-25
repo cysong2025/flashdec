@@ -131,6 +131,25 @@ benchmarks/run_decode_reference.py
 - 为什么 dense reference 是后续 paged reference 的 correctness anchor。
 - Week 4 Triton kernel 的计划。
 
+## 当前已完成
+
+- 新增 dense decode attention PyTorch reference：
+  - `flashdec.reference.dense_decode_attention_ref`
+- 新增 reference correctness tests：
+  - `tests/test_decode_reference.py`
+- 新增 reference benchmark：
+  - `benchmarks/run_decode_reference.py`
+- 新增设计文档初稿：
+  - `docs/design.md`
+
+实现范围：
+
+- 支持 MHA/GQA/MQA。
+- 支持 variable `seq_lens`。
+- 支持 `sm_scale=None` 时默认使用 `head_dim ** -0.5`。
+- reference 内部使用 FP32 计算 score、softmax 和 value accumulation，再转回输入 dtype。
+- `seq_len == 0` 时输出 zero，便于后续处理空上下文边界。
+
 ## 本周学习任务
 
 重点理解：
@@ -198,6 +217,12 @@ python benchmarks/run_decode_reference.py --output benchmarks/results/week3_deco
 
 ```bash
 pytest tests/test_decode_reference.py
+```
+
+如果完整 benchmark 太慢，可以先跑小集合：
+
+```bash
+python benchmarks/run_decode_reference.py --shape 1,8,8,64,128 --shape 4,8,8,64,512 --output benchmarks/results/week3_decode_reference_small.csv
 ```
 
 ## 上板后要记录
