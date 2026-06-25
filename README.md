@@ -12,7 +12,7 @@ FlashDec 是一个 12 周 AI Infra 作品集项目，主题是 **LLM decode 阶�
 
 ## 当前状态
 
-Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 代码已实现，RTX 5070 correctness 已通过，benchmark 待验证。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。
 
 主要文档：
 

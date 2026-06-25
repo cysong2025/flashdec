@@ -85,15 +85,42 @@ tests/test_dense_decode.py .............. [100%]
 
 ### Benchmark
 
-待在 RTX 5070 上运行。
-
-默认 shape sweep：
+运行命令：
 
 ```bash
 python benchmarks/run_dense_decode.py --output benchmarks/results/week4_dense_decode.csv
 ```
 
-不同 `BLOCK_SEQ` 对比：
+结果文件：
+
+```bash
+benchmarks/results/week4_dense_decode.csv
+```
+
+硬件和软件环境：
+
+- GPU：NVIDIA GeForce RTX 5070
+- PyTorch：2.11.0+cu128
+- CUDA：12.8
+- dtype：float16
+- repeats：30
+- Triton 配置：`block_seq=64`，`num_warps=4`
+
+| shape `(num_seqs,q_heads,kv_heads,head_dim,max_seq_len)` | actual_seq_len | ref mean_ms | ref p50_ms | triton mean_ms | triton p50_ms | triton p90_ms | speedup_vs_ref |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `(1,8,8,64,128)` | 69-69 | 1.057916 | 1.021696 | 0.029214 | 0.032192 | 0.040384 | 36.2128 |
+| `(4,8,8,64,512)` | 302-489 | 3.687276 | 3.687296 | 0.030478 | 0.019904 | 0.047008 | 120.9821 |
+| `(8,16,4,64,512)` | 259-482 | 15.873489 | 15.055104 | 0.027958 | 0.021184 | 0.051520 | 567.7538 |
+| `(16,16,4,128,1024)` | 512-994 | 31.804113 | 29.516577 | 0.093687 | 0.084320 | 0.126048 | 339.4703 |
+
+观察：
+
+- Triton dense decode kernel 在默认 shape sweep 中明显快于 Week 3 的朴素 PyTorch reference。
+- 最大 shape 上，PyTorch reference mean 为 31.804113 ms，Triton mean 为 0.093687 ms，说明把 QK、softmax 和 V accumulation 合成一个 kernel 后，Python 循环、多次 kernel launch 和中间张量开销被大幅减少。
+- 第 3、4 组覆盖 GQA：`num_q_heads=16`，`num_kv_heads=4`，benchmark 说明当前 GQA head 映射路径可以正常参与性能测试。
+- 这里的 `speedup_vs_ref` 是相对朴素 PyTorch reference 的加速，不代表已经达到 FlashInfer/vLLM 等成熟实现水平。后续 Week 8-9 仍需要 profiling 和优化。
+
+待补充不同 `BLOCK_SEQ` 对比：
 
 ```bash
 python benchmarks/run_dense_decode.py --block-seq 16 --output benchmarks/results/week4_dense_decode_block16.csv
@@ -104,8 +131,6 @@ python benchmarks/run_dense_decode.py --block-seq 128 --output benchmarks/result
 
 ## 上板后要记录
 
-- benchmark CSV 输出路径。
-- Triton dense decode 相比 Week 3 PyTorch reference 的 `speedup_vs_ref`。
 - `BLOCK_SEQ` 对 p50/p90 的影响。
 - 哪些 shape 仍然不够快，后续需要 profiling。
 
@@ -113,7 +138,8 @@ python benchmarks/run_dense_decode.py --block-seq 128 --output benchmarks/result
 
 - `dense_decode_attention` Triton kernel 实现完成。
 - correctness tests 在 RTX 5070 上通过：`14 passed in 5.62s`。
-- benchmark 待生成：`benchmarks/results/week4_dense_decode.csv`。
+- benchmark 已生成：`benchmarks/results/week4_dense_decode.csv`。
+- 默认 `block_seq=64` 下，Triton dense decode 相比朴素 PyTorch reference 的 mean speedup 为 36.2128x 到 567.7538x。
 - 能解释 online softmax 的三个状态变量：
   - running max。
   - running exp sum。
