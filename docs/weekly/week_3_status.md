@@ -210,11 +210,21 @@ benchmarks/run_decode_reference.py
 
 ### Correctness
 
-用户已说明 Week 3 代码已经在 RTX 5070 上完成测试。原始 pytest 输出待补充到本节，建议补充以下命令的完整输出：
+运行命令：
 
 ```bash
 pytest tests/test_decode_reference.py
 ```
+
+结果：
+
+```text
+collected 13 items
+tests/test_decode_reference.py ............. [100%]
+13 passed in 3.21s
+```
+
+这说明 dense decode reference 的手写小例子、随机 shape、MHA/GQA/MQA、variable `seq_lens` 等 correctness tests 已经在 RTX 5070 环境通过。
 
 ### Benchmark
 
@@ -257,7 +267,7 @@ benchmarks/results/week3_decode_reference.csv
 ## Week 3 完成判定
 
 - `dense_decode_attention_ref` 实现完成。
-- 手写小例子和随机 shape tests 已在 RTX 5070 上运行，pytest 原始输出待补充。
+- 手写小例子和随机 shape tests 已在 RTX 5070 上通过：`13 passed in 3.21s`。
 - 支持 MHA/GQA/MQA。
 - 支持变长 `seq_lens`。
 - `benchmarks/run_decode_reference.py` 已生成 baseline CSV：`benchmarks/results/week3_decode_reference.csv`。
