@@ -105,6 +105,8 @@ Week 4 的 Triton dense decode kernel 会进一步使用 online softmax，避免
 
 这也是 Week 3 先写 reference、测试和 benchmark，而不是直接写 Triton attention kernel 的原因。
 
+Paged KV Cache 的 block table、physical block layout 和 paged reference 语义见 `docs/design_paged_kv.md`。
+
 ## 8. Week 4 Triton Kernel 计划
 
 Week 4 的 dense decode Triton kernel 计划：

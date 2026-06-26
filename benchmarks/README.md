@@ -23,3 +23,5 @@ benchmark 记录至少包含：
 - `run_microbench.py`：Week 1 小算子 benchmark。
 - `run_matmul_bench.py`：Week 2 matmul shape sweep，对比 `torch.matmul`、fixed Triton 和 autotuned Triton。
 - `profile_matmul.py`：Week 2 PyTorch profiler 文本摘要。
+- `run_decode_reference.py`：Week 3 dense decode PyTorch reference baseline。
+- `run_dense_decode.py`：Week 4 dense decode Triton kernel benchmark。
