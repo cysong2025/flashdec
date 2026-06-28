@@ -25,3 +25,4 @@ benchmark 记录至少包含：
 - `profile_matmul.py`：Week 2 PyTorch profiler 文本摘要。
 - `run_decode_reference.py`：Week 3 dense decode PyTorch reference baseline。
 - `run_dense_decode.py`：Week 4 dense decode Triton kernel benchmark。
+- `run_paged_decode.py`：Week 6 paged decode Triton kernel benchmark。

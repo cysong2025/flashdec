@@ -1,0 +1,175 @@
+# Week 6 状态记录
+
+## 本周主题
+
+paged decode kernel v1。
+
+## 本周学习目标
+
+- 理解 paged decode attention 中 logical token 到 physical block 的间接索引。
+- 把 Week 4 dense decode kernel 的 online softmax 改造成 paged KV cache 版本。
+- 掌握最后一个 block 的 mask 处理，避免 padding token 参与 attention。
+- 建立第一版 paged decode correctness 和 benchmark 路径。
+- 能解释 paged v1 的潜在瓶颈：block table 间接索引、K/V 访存、launch overhead、occupancy。
+
+## 本周学习计划
+
+### Day 1：复盘 Week 5 语义
+
+- 复习 `docs/design_paged_kv.md`。
+- 手画 logical token index 到 `(physical_block, block_offset)` 的映射。
+- 明确 paged reference 是 Week 6 kernel 的 correctness anchor。
+
+### Day 2：阅读 dense decode kernel
+
+- 对照 `flashdec/kernels/dense_decode.py` 理解：
+  - 每个 program 处理一个 `(sequence, q_head)`。
+  - online softmax 的 `m_i`、`l_i`、`acc`。
+  - `seq_lens` 如何控制有效 token 范围。
+
+### Day 3-4：实现 paged decode v1
+
+- 把 dense kernel 中的 dense token address 改成 block table address：
+
+```text
+logical_block = token_idx // block_size
+block_offset = token_idx % block_size
+physical_block = block_tables[seq_idx, logical_block]
+```
+
+- 先限定：
+  - `block_size = 16`
+  - `head_dim = 64`
+  - FP16
+- 保留 MHA/GQA/MQA head 映射：
+
+```python
+kv_head = q_head // (num_q_heads // num_kv_heads)
+```
+
+### Day 5：correctness tests
+
+- 对齐 `paged_decode_attention_ref`。
+- 覆盖：
+  - 变长 sequence。
+  - 非连续 physical blocks。
+  - `seq_len == 0`。
+  - GQA head mapping。
+  - 自定义 `sm_scale`。
+  - v1 不支持 shape 的报错。
+
+### Day 6：benchmark 脚本
+
+- 新增 paged decode benchmark。
+- 记录 shape、dtype、block size、used blocks、p50/p90/mean latency。
+- 上板后生成第一版 CSV。
+
+### Day 7：复盘
+
+- 记录 correctness 和 benchmark 结果。
+- 判断 v1 的主要瓶颈来自访存、索引、launch overhead 还是 occupancy。
+- 给 Week 7 的 head_dim 128、BF16 和更完整 shape matrix 做准备。
+
+## 当前已完成
+
+- 新增 Triton paged decode kernel v1：
+  - `flashdec.kernels.paged_decode.paged_decode_attention`
+- 新增 CUDA-only correctness tests：
+  - `tests/test_paged_decode.py`
+- 新增 benchmark 脚本：
+  - `benchmarks/run_paged_decode.py`
+- 更新 kernel lazy export：
+  - `flashdec.kernels.paged_decode_attention`
+- 更新 benchmark 文档：
+  - `benchmarks/README.md`
+
+## Kernel 实现范围
+
+当前 v1 支持：
+
+- physical K/V cache layout：
+
+```text
+[num_blocks, num_kv_heads, block_size, head_dim]
+```
+
+- block table layout：
+
+```text
+[num_seqs, max_blocks_per_seq]
+```
+
+- 每个 Triton program 处理一个 `(sequence, q_head)`。
+- 沿 logical block 遍历 K/V。
+- 每个 logical block 通过 `block_tables` 查 physical block。
+- 对最后一个 block 使用 `seq_lens` mask。
+- 使用 FP32 accumulation 和 online softmax。
+- `seq_len == 0` 时输出 zero。
+- 支持 MHA/GQA/MQA 的 q head 到 kv head 映射。
+
+v1 限制：
+
+- 仅支持 FP16。
+- 仅支持 `head_dim = 64`。
+- 仅支持 `block_size = 16`。
+- 尚未做 kernel 参数 sweep 和 profiling。
+
+## 当前环境限制
+
+当前 Codex macOS 环境没有 PyTorch / pytest / CUDA / Triton，因此不能在本机直接运行 Triton correctness 和 benchmark。
+
+可在本机完成：
+
+```bash
+/Users/songchuangye/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -m compileall flashdec tests benchmarks
+```
+
+结果：编译通过。
+
+## 需要在 RTX 5070 开发板完成
+
+最小 correctness：
+
+```bash
+pytest -vv tests/test_paged_decode.py
+```
+
+联合回归 Week 5 + Week 6：
+
+```bash
+pytest -vv tests/test_paged_cache.py tests/test_paged_decode.py
+```
+
+如果要连同 dense decode 一起回归：
+
+```bash
+pytest -vv tests/test_dense_decode.py tests/test_paged_cache.py tests/test_paged_decode.py
+```
+
+第一版 benchmark：
+
+```bash
+python benchmarks/run_paged_decode.py --output benchmarks/results/week6_paged_decode.csv
+```
+
+可选只跑 Triton：
+
+```bash
+python benchmarks/run_paged_decode.py --mode triton --output benchmarks/results/week6_paged_decode_triton.csv
+```
+
+## 上板后要记录
+
+- `tests/test_paged_decode.py` 的通过数量和耗时。
+- 是否有 Triton compile/runtime 错误。
+- `benchmarks/results/week6_paged_decode.csv` 的默认 shape 结果。
+- 对比 paged reference 的 speedup。
+- p50/p90 是否稳定。
+- 哪些 shape 慢，初步判断瓶颈是 block table 索引、K/V 访存、launch overhead 还是 occupancy。
+
+## Week 6 完成判定
+
+- paged decode Triton kernel v1 代码已完成。
+- correctness tests 已写好，待 RTX 5070 上板验证。
+- benchmark 脚本已写好，待 RTX 5070 生成 CSV。
+- 本地静态编译通过。

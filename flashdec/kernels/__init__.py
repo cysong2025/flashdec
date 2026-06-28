@@ -8,6 +8,7 @@ __all__ = [
     "dense_decode_attention",
     "matmul",
     "matmul_autotuned",
+    "paged_decode_attention",
     "rmsnorm",
     "row_softmax",
     "vector_add",
@@ -30,6 +31,12 @@ def matmul_autotuned(*args, **kwargs):
     from .matmul import matmul_autotuned as _matmul_autotuned
 
     return _matmul_autotuned(*args, **kwargs)
+
+
+def paged_decode_attention(*args, **kwargs):
+    from .paged_decode import paged_decode_attention as _paged_decode_attention
+
+    return _paged_decode_attention(*args, **kwargs)
 
 
 def vector_add(*args, **kwargs):
