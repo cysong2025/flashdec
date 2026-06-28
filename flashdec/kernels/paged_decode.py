@@ -169,7 +169,7 @@ def paged_decode_attention(
     seq_lens,
     sm_scale=None,
     block_size=16,
-    num_warps=4,
+    num_warps=2,
 ):
     """Return paged single-token decode attention using Triton.
 
@@ -180,7 +180,7 @@ def paged_decode_attention(
     - seq_lens: [num_seqs]
     - return: [num_seqs, num_q_heads, head_dim]
 
-    Week 7 scope: block_size=16, head_dim 64/128, float16/bfloat16.
+    Week 8 default config: num_warps=2 based on RTX 5070 sweep.
     """
     block_size = int(block_size)
     _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size)

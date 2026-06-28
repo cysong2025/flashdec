@@ -63,12 +63,14 @@
 - RTX 5070 上完成 paged decode correctness 回归：
   - `tests/test_paged_decode.py`：`14 passed in 3.66s`
 - RTX 5070 上完成 Week 8 quick `num_warps` sweep。
+- RTX 5070 上完成 Week 8 full `num_warps` sweep。
+- paged decode 默认 `num_warps` 已从 4 调整为 2。
 
 ## 当前实现范围
 
 `benchmarks/run_week8_paged_decode.py` 当前支持：
 
-- `num_warps=2/4/8` sweep。
+- `num_warps=2/4/8` sweep，当前默认配置为 `num_warps=2`。
 - `head_dim=64/128`。
 - FP16/BF16。
 - `mode=triton` 或 `mode=all`。
@@ -184,7 +186,91 @@ quick sweep 配置：
 - 中大 shape 上 `num_warps=2` 优势非常明显：相比 `num_warps=4`，p50 通常快约 2.0x-2.5x；相比 `num_warps=8`，p50 通常快约 3.4x-4.6x。
 - FP16 和 BF16 结果基本同量级，说明当前主要瓶颈不在 dtype 算力差异，而更像是 kernel 配置、访存和并行粒度。
 - 有效带宽估算随 batch/context 增大明显上升，说明小 shape 受固定开销影响较大，大 shape 更接近访存主导。
-- `num_warps=2` 已成为候选默认配置，但仍应先跑完整 sweep，再决定是否修改 kernel wrapper 的默认 `num_warps`。
+- quick 结果已经提示 `num_warps=2` 是更好的候选配置；完整 sweep 进一步确认后，默认配置已调整为 `num_warps=2`。
+
+## RTX 5070 Full Benchmark 记录（2026-06-29）
+
+运行命令：
+
+```bash
+python benchmarks/run_week8_paged_decode.py --output benchmarks/results/week8_paged_decode_warps.csv
+```
+
+输出文件：
+
+```text
+benchmarks/results/week8_paged_decode_warps.csv
+```
+
+完整 sweep 配置：
+
+- dtype：FP16/BF16。
+- batch sweep：`1,2,4,8,16,32,64,128`，固定 `max_seq_len=1024`。
+- context sweep：`128,256,512,2048,4096,8192`，固定 `batch=16`。
+- `head_dim=128`。
+- `num_q_heads=32`。
+- `num_kv_heads=8`。
+- `block_size=16`。
+- `num_warps=2/4/8`。
+- 总计 84 条 Triton benchmark 记录。
+
+最优配置统计：
+
+| 指标 | 结果 |
+| --- | ---: |
+| dtype/case 组合数 | 28 |
+| `num_warps=2` p50 最优次数 | 28 |
+| `num_warps=4` p50 最优次数 | 0 |
+| `num_warps=8` p50 最优次数 | 0 |
+| `num_warps=2` 相对 `num_warps=4` 的 p50 平均加速 | 2.10x |
+| `num_warps=2` 相对 `num_warps=8` 的 p50 平均加速 | 3.75x |
+
+batch sweep 中 `num_warps=2` 结果：
+
+| dtype | batch | p50_ms | p90_ms | mean_ms | effective_total_gbps_p50 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| float16 | 1 | 0.060672 | 0.061664 | 0.065063 | 206.1456 |
+| float16 | 2 | 0.060064 | 0.096576 | 0.066580 | 356.9824 |
+| float16 | 4 | 0.059360 | 0.088352 | 0.064257 | 692.6059 |
+| float16 | 8 | 0.124992 | 0.144896 | 0.128722 | 748.4526 |
+| float16 | 16 | 0.212768 | 0.218784 | 0.212847 | 1036.6383 |
+| float16 | 32 | 0.371712 | 0.377504 | 0.373450 | 1017.3554 |
+| float16 | 64 | 0.600288 | 0.611936 | 0.605295 | 1347.2787 |
+| float16 | 128 | 1.142720 | 1.162752 | 1.146318 | 1424.7250 |
+| bfloat16 | 1 | 0.061184 | 0.062880 | 0.065021 | 204.4205 |
+| bfloat16 | 2 | 0.061440 | 0.101696 | 0.075761 | 348.9875 |
+| bfloat16 | 4 | 0.059232 | 0.086592 | 0.065114 | 694.1026 |
+| bfloat16 | 8 | 0.119968 | 0.145792 | 0.120962 | 779.7962 |
+| bfloat16 | 16 | 0.213792 | 0.219008 | 0.215164 | 1031.6731 |
+| bfloat16 | 32 | 0.375392 | 0.383040 | 0.375718 | 1007.3822 |
+| bfloat16 | 64 | 0.603648 | 0.609216 | 0.604226 | 1339.7795 |
+| bfloat16 | 128 | 1.153120 | 1.175040 | 1.190499 | 1411.8753 |
+
+context sweep 中 `num_warps=2` 结果：
+
+| dtype | max_seq_len | p50_ms | p90_ms | mean_ms | effective_total_gbps_p50 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| float16 | 128 | 0.029568 | 0.059904 | 0.041477 | 873.3507 |
+| float16 | 256 | 0.047584 | 0.052608 | 0.052138 | 1070.5259 |
+| float16 | 512 | 0.089376 | 0.132224 | 0.105509 | 1128.8793 |
+| float16 | 2048 | 0.359296 | 0.366496 | 0.361342 | 1084.7567 |
+| float16 | 4096 | 0.663072 | 0.679904 | 0.667005 | 1283.5304 |
+| float16 | 8192 | 1.322528 | 1.328288 | 1.321173 | 1238.3688 |
+| bfloat16 | 128 | 0.029952 | 0.035104 | 0.033959 | 862.1538 |
+| bfloat16 | 256 | 0.048992 | 0.075136 | 0.054050 | 1039.7596 |
+| bfloat16 | 512 | 0.087840 | 0.130496 | 0.105999 | 1148.6193 |
+| bfloat16 | 2048 | 0.361216 | 0.370176 | 0.362059 | 1078.9908 |
+| bfloat16 | 4096 | 0.664480 | 0.685536 | 0.668438 | 1280.8107 |
+| bfloat16 | 8192 | 1.322112 | 1.331520 | 1.325954 | 1238.7585 |
+
+观察：
+
+- 完整 sweep 进一步确认 `num_warps=2` 是当前 kernel 最优默认配置：28 个 dtype/case 组合中全部 p50 最优。
+- `num_warps=2` 相比 `num_warps=4` 平均 p50 加速约 2.10x，相比 `num_warps=8` 平均 p50 加速约 3.75x。
+- `context=8192` 时 FP16/BF16 p50 均约 1.322 ms，有效带宽约 1.24 TB/s，说明长 context 更接近 K/V 访存主导。
+- batch 增加到 128 时，p50 约 1.14-1.15 ms，有效带宽约 1.41-1.42 TB/s，说明大 batch 能更好摊薄固定开销。
+- FP16/BF16 曲线几乎重合，继续说明主要瓶颈不在 dtype 算力。
+- 根据完整 sweep，已将 `flashdec.kernels.paged_decode.paged_decode_attention` 默认 `num_warps` 从 4 调整为 2。
 
 ## 需要在 RTX 5070 开发板完成
 
@@ -211,6 +297,8 @@ python benchmarks/run_week8_paged_decode.py --quick --output benchmarks/results/
 python benchmarks/run_week8_paged_decode.py --output benchmarks/results/week8_paged_decode_warps.csv
 ```
 
+已完成。
+
 如需同时记录 reference 对比：
 
 ```bash
@@ -219,11 +307,9 @@ python benchmarks/run_week8_paged_decode.py --quick --mode all --output benchmar
 
 ## 上板后要记录
 
-- 每个 shape 下 `num_warps=2/4/8` 的 p50/p90/mean。
-- 每个 shape 的最优 `num_warps`。
-- `effective_total_gbps_p50` 随 context 增长的变化。
-- FP16 和 BF16 的 latency 是否仍基本同量级。
-- 是否需要把默认 `num_warps` 从 4 改成按 shape 选择。
+- 下一轮 profiling 的三类代表 shape。
+- `num_warps=2` 默认配置在 profiler 中的 occupancy、memory throughput 和 register 使用。
+- KV cache layout 是否值得作为下一轮优化方向。
 
 ## Week 8 当前完成判定
 
@@ -231,4 +317,5 @@ python benchmarks/run_week8_paged_decode.py --quick --mode all --output benchmar
 - `num_warps` sweep 脚本已实现。
 - 性能实验文档已建立。
 - RTX 5070 quick correctness 和 quick benchmark 已完成。
-- 完整 Week 8 benchmark 待补充。
+- RTX 5070 完整 Week 8 benchmark 已完成。
+- paged decode 默认配置已根据实测结果调整为 `num_warps=2`。

@@ -33,6 +33,7 @@
 | MHA | 支持 |
 | GQA | 支持 |
 | MQA | 支持 |
+| 默认 `num_warps` | `2` |
 | variable seq lens | 支持 |
 | non-contiguous physical blocks | 支持 |
 | `seq_len == 0` | 输出 zero |
@@ -42,7 +43,8 @@
 - 暂不支持 `block_size=8/32`。
 - 暂不支持 `head_dim` 之外的 64/128。
 - 暂不支持 FP32 Triton paged decode kernel。
-- 暂未做 `num_warps` / layout / block size autotune。
+- 已完成 `num_warps=2/4/8` 手动 sweep，但暂未做自动 autotune。
+- 暂未做 layout / block size autotune。
 - 暂未和 FlashInfer / vLLM / TensorRT-LLM 做成熟库性能对比。
 
 ## 已验证 Correctness
@@ -125,5 +127,5 @@ python benchmarks/run_week8_paged_decode.py --output benchmarks/results/week8_pa
 
 ## 后续计划
 
-- Week 8：先做 `num_warps` 参数实验和有效带宽估算，再推进 block size / layout / `num_stages` 对比。
+- Week 8：`num_warps` 参数实验和有效带宽估算已完成，默认配置调整为 `num_warps=2`；后续推进 block size / layout / `num_stages` 对比。
 - Week 9：补 profiling 报告和性能瓶颈分析。

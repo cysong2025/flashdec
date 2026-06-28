@@ -24,7 +24,7 @@
 
 假设：
 
-- 当前 paged decode kernel 默认使用 `num_warps=4`。
+- Week 8 初始 paged decode kernel 默认使用 `num_warps=4`。
 - 对短 context、小 batch 来说，更少 warps 可能降低调度和同步开销。
 - 对长 context、大 batch 来说，更多 warps 可能提升并行度，但也可能增加 register pressure 或降低 occupancy。
 
@@ -60,7 +60,8 @@ python benchmarks/run_week8_paged_decode.py --quick --mode all --output benchmar
 当前状态：
 
 - 脚本已实现。
-- RTX 5070 quick sweep 已完成，完整 sweep 待补充。
+- RTX 5070 quick sweep 与完整 sweep 均已完成。
+- 完整 sweep 支持将默认 `num_warps` 从 4 调整为 2。
 
 ### Quick 结果（RTX 5070，2026-06-28）
 
@@ -97,7 +98,89 @@ benchmarks/results/week8_paged_decode_warps_quick.csv
 - 除了 `batch=1, context=1024` 这种小 batch case 外，`num_warps=2` 相比 `num_warps=4` 通常有约 2.0x-2.5x p50 优势。
 - `num_warps=8` 在当前 kernel 形态下明显更慢，说明更多 warps 没有带来收益，反而可能增加调度、同步或 register pressure。
 - `batch_b64_ctx1024` 和 `context_b16_ctx4096` 的有效带宽估算达到约 1.2-1.36 TB/s，说明更大 batch 或更长 context 更能摊薄固定开销。
-- 当前 quick 结果已经说明默认 `num_warps=4` 很可能不是最佳配置；正式改默认值前仍需要完整 sweep 确认 `batch=128` 和 `context=8192` 等更大 shape。
+- quick 结果已经提示默认 `num_warps=4` 可能不是最佳配置；完整 sweep 进一步确认了这一点。
+
+### Full 结果（RTX 5070，2026-06-29）
+
+运行命令：
+
+```bash
+python benchmarks/run_week8_paged_decode.py --output benchmarks/results/week8_paged_decode_warps.csv
+```
+
+输出文件：
+
+```text
+benchmarks/results/week8_paged_decode_warps.csv
+```
+
+完整 sweep 覆盖：
+
+- dtype：FP16/BF16。
+- batch sweep：`1,2,4,8,16,32,64,128`，固定 `max_seq_len=1024`。
+- context sweep：`128,256,512,2048,4096,8192`，固定 `batch=16`。
+- `num_warps=2/4/8`。
+- 总计 84 条 Triton benchmark 记录。
+
+最优配置统计：
+
+| 指标 | 结果 |
+| --- | ---: |
+| dtype/case 组合数 | 28 |
+| `num_warps=2` p50 最优次数 | 28 |
+| `num_warps=4` p50 最优次数 | 0 |
+| `num_warps=8` p50 最优次数 | 0 |
+| `num_warps=2` 相对 `num_warps=4` 的 p50 加速范围 | 1.00x-2.99x |
+| `num_warps=2` 相对 `num_warps=4` 的 p50 平均加速 | 2.10x |
+| `num_warps=2` 相对 `num_warps=8` 的 p50 加速范围 | 1.33x-4.81x |
+| `num_warps=2` 相对 `num_warps=8` 的 p50 平均加速 | 3.75x |
+
+batch sweep 中 `num_warps=2` 结果：
+
+| dtype | batch | p50_ms | p90_ms | mean_ms | total_context_tokens | effective_total_gbps_p50 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| float16 | 1 | 0.060672 | 0.061664 | 0.065063 | 762 | 206.1456 |
+| float16 | 2 | 0.060064 | 0.096576 | 0.066580 | 1306 | 356.9824 |
+| float16 | 4 | 0.059360 | 0.088352 | 0.064257 | 2504 | 692.6059 |
+| float16 | 8 | 0.124992 | 0.144896 | 0.128722 | 5698 | 748.4526 |
+| float16 | 16 | 0.212768 | 0.218784 | 0.212847 | 13438 | 1036.6383 |
+| float16 | 32 | 0.371712 | 0.377504 | 0.373450 | 23033 | 1017.3554 |
+| float16 | 64 | 0.600288 | 0.611936 | 0.605295 | 49266 | 1347.2787 |
+| float16 | 128 | 1.142720 | 1.162752 | 1.146318 | 99176 | 1424.7250 |
+| bfloat16 | 1 | 0.061184 | 0.062880 | 0.065021 | 762 | 204.4205 |
+| bfloat16 | 2 | 0.061440 | 0.101696 | 0.075761 | 1306 | 348.9875 |
+| bfloat16 | 4 | 0.059232 | 0.086592 | 0.065114 | 2504 | 694.1026 |
+| bfloat16 | 8 | 0.119968 | 0.145792 | 0.120962 | 5698 | 779.7962 |
+| bfloat16 | 16 | 0.213792 | 0.219008 | 0.215164 | 13438 | 1031.6731 |
+| bfloat16 | 32 | 0.375392 | 0.383040 | 0.375718 | 23033 | 1007.3822 |
+| bfloat16 | 64 | 0.603648 | 0.609216 | 0.604226 | 49266 | 1339.7795 |
+| bfloat16 | 128 | 1.153120 | 1.175040 | 1.190499 | 99176 | 1411.8753 |
+
+context sweep 中 `num_warps=2` 结果：
+
+| dtype | max_seq_len | p50_ms | p90_ms | mean_ms | total_context_tokens | effective_total_gbps_p50 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| float16 | 128 | 0.029568 | 0.059904 | 0.041477 | 1559 | 873.3507 |
+| float16 | 256 | 0.047584 | 0.052608 | 0.052138 | 3091 | 1070.5259 |
+| float16 | 512 | 0.089376 | 0.132224 | 0.105509 | 6138 | 1128.8793 |
+| float16 | 2048 | 0.359296 | 0.366496 | 0.361342 | 23757 | 1084.7567 |
+| float16 | 4096 | 0.663072 | 0.679904 | 0.667005 | 51899 | 1283.5304 |
+| float16 | 8192 | 1.322528 | 1.328288 | 1.321173 | 99883 | 1238.3688 |
+| bfloat16 | 128 | 0.029952 | 0.035104 | 0.033959 | 1559 | 862.1538 |
+| bfloat16 | 256 | 0.048992 | 0.075136 | 0.054050 | 3091 | 1039.7596 |
+| bfloat16 | 512 | 0.087840 | 0.130496 | 0.105999 | 6138 | 1148.6193 |
+| bfloat16 | 2048 | 0.361216 | 0.370176 | 0.362059 | 23757 | 1078.9908 |
+| bfloat16 | 4096 | 0.664480 | 0.685536 | 0.668438 | 51899 | 1280.8107 |
+| bfloat16 | 8192 | 1.322112 | 1.331520 | 1.325954 | 99883 | 1238.7585 |
+
+结论：
+
+- `num_warps=2` 在完整 sweep 中稳定胜出，可以作为当前默认配置。
+- `num_warps=4` 和 `num_warps=8` 没有在任何 full sweep case 中取得 p50 最优。
+- 长 context 下有效带宽稳定在约 1.1-1.3 TB/s，说明随着上下文变长，kernel 越来越接近 K/V 访存主导。
+- batch 增大时有效带宽明显上升，说明较大 batch 能摊薄固定开销，并让 GPU 更充分工作。
+- FP16 与 BF16 仍基本同量级，继续支持“瓶颈主要在访存和 launch/config，而不是 dtype 算力”的判断。
+- 后续优化应继续围绕 K/V layout、block table 间接索引开销和 profiler 证据展开。
 
 ## E2：长 context 访存瓶颈分析
 
@@ -122,7 +205,7 @@ benchmarks/results/week8_paged_decode_warps_quick.csv
 
 - 指标估算逻辑已实现。
 - Quick benchmark 已显示小 batch 有效带宽较低，而 batch/context 增大后有效带宽明显上升。
-- 完整 context sweep 待补充，重点观察 `context=8192` 是否继续接近 memory-bound。
+- 完整 context sweep 已显示 `context=8192` 下 p50 约 1.322 ms，有效带宽约 1.24 TB/s，长 context 更接近 memory-bound。
 
 ## E3：profiling 准备
 
