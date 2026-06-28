@@ -170,28 +170,50 @@ tests/test_paged_decode.py::test_paged_decode_attention_rejects_unsupported_bloc
 pytest -vv tests/test_paged_cache.py tests/test_paged_decode.py
 ```
 
-第一版 benchmark：
+## RTX 5070 Benchmark 记录（2026-06-28）
+
+运行环境：
+
+- GPU：NVIDIA GeForce RTX 5070。
+- PyTorch：2.11.0+cu128。
+- CUDA：12.8。
+- dtype：float16。
+- block size：16。
+- num warps：4。
+- repeats：30。
+
+运行命令：
 
 ```bash
 python benchmarks/run_paged_decode.py --output benchmarks/results/week6_paged_decode.csv
 ```
 
-可选只跑 Triton：
+输出文件：
 
-```bash
-python benchmarks/run_paged_decode.py --mode triton --output benchmarks/results/week6_paged_decode_triton.csv
+```text
+benchmarks/results/week6_paged_decode.csv
 ```
 
-## 上板后要记录
+结果摘要：
 
-- `benchmarks/results/week6_paged_decode.csv` 的默认 shape 结果。
-- 对比 paged reference 的 speedup。
-- p50/p90 是否稳定。
-- 哪些 shape 慢，初步判断瓶颈是 block table 索引、K/V 访存、launch overhead 还是 occupancy。
+| shape `(num_seqs,q_heads,kv_heads,head_dim,max_seq_len)` | actual_seq_len | used_blocks | ref mean_ms | ref p50_ms | triton mean_ms | triton p50_ms | triton p90_ms | speedup_vs_ref |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `(1,8,8,64,128)` | 95-95 | 6 | 1.146363 | 1.114496 | 0.029984 | 0.017952 | 0.049056 | 38.2325 |
+| `(4,8,8,64,512)` | 301-486 | 96 | 4.598040 | 4.519072 | 0.037918 | 0.034816 | 0.036736 | 121.2631 |
+| `(8,16,4,64,512)` | 256-476 | 191 | 18.400075 | 15.830560 | 0.054101 | 0.044960 | 0.084640 | 340.1039 |
+| `(16,16,4,64,1024)` | 562-1018 | 762 | 33.337782 | 31.871328 | 0.178548 | 0.177024 | 0.178560 | 186.7158 |
+
+观察：
+
+- paged decode Triton v1 在默认 shape 上均明显快于 paged PyTorch reference，mean speedup 为 38.2325x 到 340.1039x。
+- 最大 shape 上 Triton p50 为 0.177024 ms，p90 为 0.178560 ms，默认 benchmark 下尾部比较稳定。
+- 第 3 组 reference 出现较大 max latency：73.098045 ms，因此后续比较时应继续优先看 p50/p90，并保留 mean/max 观察抖动。
+- 当前 speedup 只表示相对自写 paged PyTorch reference 的加速，不代表已经达到 FlashInfer/vLLM 等成熟实现水平。
+- Week 7 需要补 head_dim 128、BF16、更多 batch/context sweep，并开始判断主要瓶颈来自 K/V 访存、block table 间接索引还是 occupancy。
 
 ## Week 6 完成判定
 
 - paged decode Triton kernel v1 代码已完成。
 - correctness tests 已在 RTX 5070 上通过：`6 passed in 3.79s`。
-- benchmark 脚本已写好，待 RTX 5070 生成 CSV。
+- benchmark 已在 RTX 5070 上完成，结果文件为 `benchmarks/results/week6_paged_decode.csv`。
 - 本地静态编译通过。
