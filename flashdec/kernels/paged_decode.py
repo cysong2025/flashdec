@@ -127,8 +127,8 @@ def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size):
         raise ValueError("seq_lens must have shape [num_seqs]")
     if q.dtype != k_cache.dtype or q.dtype != v_cache.dtype:
         raise ValueError("q, k_cache, and v_cache must have the same dtype")
-    if q.dtype != torch.float16:
-        raise ValueError("paged_decode_attention v1 currently supports float16 tensors")
+    if q.dtype not in (torch.float16, torch.bfloat16):
+        raise ValueError("paged_decode_attention currently supports float16 and bfloat16 tensors")
     if block_tables.dtype not in (torch.int32, torch.int64):
         raise ValueError("block_tables must be int32 or int64")
     if seq_lens.dtype not in (torch.int32, torch.int64):
@@ -155,8 +155,8 @@ def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size):
         raise ValueError("paged_decode_attention v1 currently supports block_size 16")
     if k_head_dim != head_dim or v_head_dim != head_dim:
         raise ValueError("q, k_cache, and v_cache must have the same head_dim")
-    if head_dim != 64:
-        raise ValueError("paged_decode_attention v1 currently supports head_dim 64")
+    if head_dim not in (64, 128):
+        raise ValueError("paged_decode_attention currently supports head_dim 64 or 128")
     if num_q_heads % num_kv_heads != 0:
         raise ValueError("num_q_heads must be divisible by num_kv_heads")
 
@@ -180,7 +180,7 @@ def paged_decode_attention(
     - seq_lens: [num_seqs]
     - return: [num_seqs, num_q_heads, head_dim]
 
-    Week 6 v1 scope: block_size=16, head_dim=64, float16.
+    Week 7 scope: block_size=16, head_dim 64/128, float16/bfloat16.
     """
     block_size = int(block_size)
     _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size)

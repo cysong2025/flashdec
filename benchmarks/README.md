@@ -26,3 +26,4 @@ benchmark 记录至少包含：
 - `run_decode_reference.py`：Week 3 dense decode PyTorch reference baseline。
 - `run_dense_decode.py`：Week 4 dense decode Triton kernel benchmark。
 - `run_paged_decode.py`：Week 6 paged decode Triton kernel benchmark。
+- `run_week7_paged_decode.py`：Week 7 paged decode batch/context/dtype shape sweep。

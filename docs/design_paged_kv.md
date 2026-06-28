@@ -181,7 +181,7 @@ PagedKVCache append tokens
 
 - 当前只实现 append，不实现 free/reuse request。
 - 当前 Week 5 tests 验证单 layer 路径。
-- Week 6 已新增 paged Triton kernel v1；当前仅覆盖 `block_size=16`、`head_dim=64`、FP16。
+- Week 7 已将 paged Triton kernel 扩展到 `block_size=16`、`head_dim=64/128`、FP16/BF16。
 - 当前 reference 会显式 gather logical K/V，适合作 correctness，不适合当性能实现。
 
 ## 8. Week 6 接口衔接
@@ -198,9 +198,9 @@ seq_lens
 Week 6 v1 当前限制：
 
 - `block_size = 16`
-- `head_dim = 64`
-- FP16
-- 保留 GQA/MQA head 映射，但更完整 shape matrix 放到 Week 7。
+- `head_dim = 64/128`
+- FP16/BF16
+- 保留 GQA/MQA head 映射。
 
 正确性仍然对齐：
 
