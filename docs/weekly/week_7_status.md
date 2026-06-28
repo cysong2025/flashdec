@@ -158,6 +158,61 @@ python benchmarks/run_week7_paged_decode.py --output benchmarks/results/week7_pa
 python benchmarks/run_week7_paged_decode.py --quick --mode triton --output benchmarks/results/week7_paged_decode_quick.csv
 ```
 
+## RTX 5070 Quick Benchmark 记录（2026-06-28）
+
+运行环境：
+
+- GPU：NVIDIA GeForce RTX 5070。
+- PyTorch：2.11.0+cu128。
+- CUDA：12.8。
+- dtype：float16 / bfloat16。
+- head_dim：128。
+- `num_q_heads=32`，`num_kv_heads=8`。
+- block size：16。
+- num warps：4。
+- repeats：30。
+
+运行命令：
+
+```bash
+python benchmarks/run_week7_paged_decode.py --quick --mode triton --output benchmarks/results/week7_paged_decode_quick.csv
+```
+
+输出文件：
+
+```text
+benchmarks/results/week7_paged_decode_quick.csv
+```
+
+batch quick sweep，固定 `max_seq_len=1024`：
+
+| dtype | batch | actual_seq_len | used_blocks | mean_ms | p50_ms | p90_ms |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| float16 | 1 | 1000-1000 | 63 | 0.101050 | 0.078272 | 0.125792 |
+| float16 | 8 | 520-1019 | 355 | 0.267021 | 0.264704 | 0.279488 |
+| float16 | 32 | 516-1007 | 1517 | 0.774960 | 0.773792 | 0.781792 |
+| bfloat16 | 1 | 572-572 | 36 | 0.057907 | 0.048672 | 0.092320 |
+| bfloat16 | 8 | 543-950 | 346 | 0.304409 | 0.256480 | 0.374112 |
+| bfloat16 | 32 | 551-1005 | 1579 | 0.776469 | 0.774048 | 0.775488 |
+
+context quick sweep，固定 `batch=16`：
+
+| dtype | max_seq_len | actual_seq_len | used_blocks | mean_ms | p50_ms | p90_ms |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| float16 | 128 | 67-123 | 103 | 0.071132 | 0.068352 | 0.074944 |
+| float16 | 1024 | 538-995 | 789 | 0.451404 | 0.450976 | 0.460416 |
+| float16 | 4096 | 2061-3824 | 2843 | 1.577713 | 1.561408 | 1.620192 |
+| bfloat16 | 128 | 66-128 | 102 | 0.065961 | 0.057632 | 0.099456 |
+| bfloat16 | 1024 | 548-957 | 734 | 0.405505 | 0.405120 | 0.406592 |
+| bfloat16 | 4096 | 2049-3930 | 2887 | 1.659111 | 1.600544 | 1.773216 |
+
+观察：
+
+- quick benchmark 覆盖了 FP16/BF16、`head_dim=128`、GQA 配置 `32 q heads / 8 kv heads`。
+- batch 从 1 增加到 32 时，p50 从约 0.078 ms / 0.049 ms 增加到约 0.774 ms，说明总 work 和 program 数增加后 latency 明显上升。
+- context 从 128 增加到 4096 时，p50 从约 0.068 ms / 0.058 ms 增加到约 1.56-1.60 ms，符合 decode attention 随 K/V 读取量增长而变慢的预期。
+- BF16 与 FP16 的 quick 结果整体同量级，部分小 shape 存在随机 seq_len 差异和尾部波动，完整 sweep 需要统一看更多 shape。
+
 ## 上板后要记录
 
 - `benchmarks/results/week7_paged_decode.csv` 的结果摘要。
@@ -169,5 +224,5 @@ python benchmarks/run_week7_paged_decode.py --quick --mode triton --output bench
 
 - 代码已支持 `head_dim=64/128` 与 FP16/BF16。
 - correctness tests 已在 RTX 5070 上通过：`14 passed in 4.48s`。
-- benchmark sweep 脚本已完成，待 RTX 5070 生成 CSV。
+- quick Triton benchmark 已在 RTX 5070 上完成，完整 shape sweep 待生成 CSV。
 - 兼容性文档已新增。
