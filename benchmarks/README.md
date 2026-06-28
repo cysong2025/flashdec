@@ -27,3 +27,4 @@ benchmark 记录至少包含：
 - `run_dense_decode.py`：Week 4 dense decode Triton kernel benchmark。
 - `run_paged_decode.py`：Week 6 paged decode Triton kernel benchmark。
 - `run_week7_paged_decode.py`：Week 7 paged decode batch/context/dtype shape sweep。
+- `run_week8_paged_decode.py`：Week 8 paged decode `num_warps` sweep，并输出 tokens/s、估算字节数和有效 GB/s。

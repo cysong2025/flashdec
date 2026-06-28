@@ -12,7 +12,7 @@ FlashDec 是一个 12 周 AI Infra 作品集项目，主题是 **LLM decode 阶�
 
 ## 当前状态
 
-Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已开始补充性能估算与 `num_warps` sweep 工具，待 RTX 5070 上板验证。
 
 主要文档：
 
@@ -27,6 +27,8 @@ Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 den
 - [Week 5 状态记录](docs/weekly/week_5_status.md)
 - [Week 6 状态记录](docs/weekly/week_6_status.md)
 - [Week 7 状态记录](docs/weekly/week_7_status.md)
+- [Week 8 状态记录](docs/weekly/week_8_status.md)
+- [性能实验记录](docs/perf_experiments.md)
 - [Paged KV Cache 设计说明](docs/design_paged_kv.md)
 - [兼容性记录](docs/compatibility.md)
 

@@ -116,8 +116,14 @@ python benchmarks/run_week7_paged_decode.py --output benchmarks/results/week7_pa
 python benchmarks/run_week7_paged_decode.py --quick --mode triton --output benchmarks/results/week7_paged_decode_quick.csv
 ```
 
+Week 8 `num_warps` sweep 与有效带宽估算：
+
+```bash
+python benchmarks/run_week8_paged_decode.py --quick --output benchmarks/results/week8_paged_decode_warps_quick.csv
+python benchmarks/run_week8_paged_decode.py --output benchmarks/results/week8_paged_decode_warps.csv
+```
+
 ## 后续计划
 
-- Week 7：完成 head_dim 128、BF16、batch/context sweep 的 RTX 5070 验证。
-- Week 8：做 block size、layout、`num_warps`、`num_stages` 参数实验。
+- Week 8：先做 `num_warps` 参数实验和有效带宽估算，再推进 block size / layout / `num_stages` 对比。
 - Week 9：补 profiling 报告和性能瓶颈分析。
