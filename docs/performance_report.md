@@ -31,15 +31,25 @@ Chrome trace 命令：
 python benchmarks/profile_paged_decode.py --case medium --repeat 10 --export-trace --output-dir benchmarks/profiles/week9_paged_decode_trace
 ```
 
-## 待补充结果
+## PyTorch Profiler 结果
 
-上板后需要补充：
+RTX 5070 上已完成 PyTorch profiler 三场景 profiling：
 
-| 场景 | p50_ms | p90_ms | profiler CUDA time | 观察 |
-| --- | ---: | ---: | ---: | --- |
-| small | 待补充 | 待补充 | 待补充 | 待补充 |
-| medium | 待补充 | 待补充 | 待补充 | 待补充 |
-| large | 待补充 | 待补充 | 待补充 | 待补充 |
+```bash
+python benchmarks/profile_paged_decode.py --case all --repeat 10 --output-dir benchmarks/profiles/week9_paged_decode
+```
+
+| 场景 | profiler CUDA total | profiler CUDA avg/call | 观察 |
+| --- | ---: | ---: | --- |
+| small_b1_ctx128 | 74.285 us | 7.428 us | kernel 本体极短，固定开销和 launch overhead 更重要 |
+| medium_b16_ctx1024 | 1.585 ms | 158.493 us | 常规 decode workload，适合作为后续 profiler 重点 |
+| large_b16_ctx8192 | 12.524 ms | 1.252 ms | 长 context 下 kernel 时间明显上升，符合 K/V 访存主导判断 |
+
+注意：
+
+- 这里记录的是 PyTorch profiler 表中的 CUDA kernel time。
+- CUDA event 的 p50/p90 已由脚本写入 `benchmarks/profiles/...txt` 和 `benchmarks/results/week9_summary.md`，本次粘贴日志未展开这些文件内容。
+- 下一步需要用 Nsight Compute / Nsight Systems 补硬件计数，例如 memory throughput、achieved occupancy、register 使用。
 
 ## 已验证有效优化
 
@@ -63,6 +73,13 @@ python benchmarks/profile_paged_decode.py --case medium --repeat 10 --export-tra
 - block table 间接索引在长 context 下是否可见。
 - `seq_len`、mask 和 logical block loop 的控制开销是否影响短 context。
 - 当前 register 使用是否限制 occupancy。
+
+## Profiling 初步判断
+
+- small shape：kernel 本体只有约 7.4 us/call，固定开销可能比算子本体更值得关注。
+- medium shape：kernel 本体约 158 us/call，可作为后续 Nsight 分析的主力代表场景。
+- large shape：kernel 本体约 1.25 ms/call，随 context 变长明显增长，继续支持 memory-bound 判断。
+- PyTorch profiler 已经能确认主要 CUDA 时间集中在 `_paged_decode_attention_kernel`；但它还不能替代 Nsight 的硬件计数。
 
 ## 下一步优化候选
 

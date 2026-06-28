@@ -58,6 +58,10 @@ profiling 与对比。
   - `docs/performance_report.md`
 - 新增 Week 9 profiling summary 占位：
   - `benchmarks/results/week9_summary.md`
+- RTX 5070 上完成 correctness 回归：
+  - `tests/test_paged_decode.py tests/test_perf_metrics.py tests/test_benchmark_helpers.py`：`20 passed in 5.16s`
+- RTX 5070 上完成 small profiling smoke。
+- RTX 5070 上完成 small / medium / large 三场景 PyTorch profiler。
 
 ## 当前环境限制
 
@@ -77,11 +81,15 @@ python3 -m compileall flashdec tests benchmarks
 pytest -vv tests/test_paged_decode.py tests/test_perf_metrics.py tests/test_benchmark_helpers.py
 ```
 
+已完成：`20 passed in 5.16s`。
+
 快速 profiling smoke：
 
 ```bash
 python benchmarks/profile_paged_decode.py --case small --repeat 3 --output-dir benchmarks/profiles/week9_paged_decode_smoke
 ```
+
+已完成。
 
 完整三场景 profiling：
 
@@ -89,11 +97,72 @@ python benchmarks/profile_paged_decode.py --case small --repeat 3 --output-dir b
 python benchmarks/profile_paged_decode.py --case all --repeat 10 --output-dir benchmarks/profiles/week9_paged_decode
 ```
 
+已完成。
+
 如需 Chrome trace：
 
 ```bash
 python benchmarks/profile_paged_decode.py --case medium --repeat 10 --export-trace --output-dir benchmarks/profiles/week9_paged_decode_trace
 ```
+
+## RTX 5070 Profiling 记录（2026-06-29）
+
+运行环境：
+
+- OS：Linux / WSL2。
+- Python：3.12.3。
+- pytest：9.1.1。
+- GPU：NVIDIA GeForce RTX 5070。
+- PyTorch：2.11.0+cu128。
+- CUDA：12.8。
+- dtype：FP16。
+- `num_warps=2`。
+
+correctness 回归：
+
+```bash
+pytest -vv tests/test_paged_decode.py tests/test_perf_metrics.py tests/test_benchmark_helpers.py
+```
+
+结果：
+
+```text
+20 passed in 5.16s
+```
+
+profiling smoke：
+
+```bash
+python benchmarks/profile_paged_decode.py --case small --repeat 3 --output-dir benchmarks/profiles/week9_paged_decode_smoke
+```
+
+结果摘要：
+
+| case | repeat | profiler CUDA total | profiler CUDA avg/call | output |
+| --- | ---: | ---: | ---: | --- |
+| small_b1_ctx128 | 3 | 22.238 us | 7.413 us | `benchmarks/profiles/week9_paged_decode_smoke/small_b1_ctx128_float16_triton_w2.txt` |
+
+完整三场景 profiling：
+
+```bash
+python benchmarks/profile_paged_decode.py --case all --repeat 10 --output-dir benchmarks/profiles/week9_paged_decode
+```
+
+结果摘要：
+
+| case | repeat | profiler CUDA total | profiler CUDA avg/call | profiler observation |
+| --- | ---: | ---: | ---: | --- |
+| small_b1_ctx128 | 10 | 74.285 us | 7.428 us | kernel 本体很短，固定开销和 profiler overhead 更显眼 |
+| medium_b16_ctx1024 | 10 | 1.585 ms | 158.493 us | GPU kernel 时间开始成为主要可解释对象 |
+| large_b16_ctx8192 | 10 | 12.524 ms | 1.252 ms | 长 context 下 GPU kernel 时间占主导，符合 K/V 访存主导判断 |
+
+观察：
+
+- PyTorch profiler 中 `_paged_decode_attention_kernel` 是唯一主要 CUDA kernel，说明当前 profile 对象明确。
+- small case 的 kernel avg 约 7.4 us/call，已经接近固定开销区域；这类 shape 更适合关注 launch / wrapper overhead。
+- medium case 的 kernel avg 约 158 us/call，适合作为常规 decode workload 的 profiling 代表。
+- large case 的 kernel avg 约 1.25 ms/call，和 Week 8 中长 context 有效带宽估算相互印证：context 变长后主要矛盾转向 K/V 读取。
+- 日志中 PyTorch profiler 提示可设置 `acc_events=True`，脚本已更新以保留跨 cycle 事件，后续输出会更干净。
 
 ## 上板后要记录
 
@@ -107,4 +176,5 @@ python benchmarks/profile_paged_decode.py --case medium --repeat 10 --export-tra
 
 - profiling 脚本已实现。
 - profiling 文档入口已建立。
-- RTX 5070 profiler 结果待补充。
+- RTX 5070 PyTorch profiler smoke 和三场景结果已补充。
+- Nsight Compute / Nsight Systems 结果待补充。

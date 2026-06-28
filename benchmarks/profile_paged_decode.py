@@ -137,6 +137,7 @@ def _profile_callable(torch, args, label, fn):
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         record_shapes=True,
         profile_memory=args.profile_memory,
+        acc_events=True,
     ) as prof:
         for _ in range(args.repeat):
             with record_function(label):
