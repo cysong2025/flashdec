@@ -75,6 +75,7 @@ class PagedKVCache:
             self.head_dim,
         )
         self.k_cache = torch.zeros(shape, device=self.device, dtype=self.dtype)
+        self.device = self.k_cache.device
         self.v_cache = torch.zeros_like(self.k_cache)
         self._free_blocks = list(range(self.max_blocks))
         self._requests: dict[Hashable, _RequestState] = {}
