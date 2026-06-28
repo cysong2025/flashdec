@@ -84,33 +84,47 @@ No module named pytest
 No module named torch
 ```
 
-## 需要在 RTX 5070 开发板完成
+## RTX 5070 验证记录（2026-06-28）
 
-在 WSL2 Ubuntu + RTX 5070 环境运行：
+运行环境：
+
+- OS：Linux / WSL2。
+- Python：3.12.3。
+- pytest：9.1.1。
+- 测试路径：`/home/user/work/flashdec`。
+
+运行命令：
 
 ```bash
 pytest tests/test_paged_cache.py
-pytest tests/test_decode_reference.py tests/test_paged_cache.py
 ```
 
-如果要一起回归前几周：
+结果：
 
-```bash
-pytest tests/test_triton_basics.py tests/test_matmul.py tests/test_decode_reference.py tests/test_dense_decode.py tests/test_paged_cache.py
+```text
+collected 6 items
+
+tests/test_paged_cache.py::test_paged_kv_cache_append_tracks_non_contiguous_blocks PASSED
+tests/test_paged_cache.py::test_paged_decode_attention_matches_dense_reference[dtype0] PASSED
+tests/test_paged_cache.py::test_paged_decode_attention_matches_dense_reference[dtype1] PASSED
+tests/test_paged_cache.py::test_paged_decode_attention_zero_seq_len_outputs_zero PASSED
+tests/test_paged_cache.py::test_paged_decode_attention_rejects_missing_physical_block PASSED
+tests/test_paged_cache.py::test_paged_kv_cache_rejects_capacity_overflow PASSED
+
+6 passed in 1.68s
 ```
 
-## 上板后要记录
+覆盖结论：
 
-- `tests/test_paged_cache.py` 的通过数量和耗时。
-- FP16 CUDA 路径是否与 dense reference 对齐。
-- interleaved append 是否生成预期的非连续 block table。
-- 若失败，记录具体 shape、dtype、block_size 和误差范围。
+- `PagedKVCache.append` 可以正确处理 interleaved request，并生成非连续 physical block table。
+- paged reference 与 dense reference 在 FP32 和 FP16 CUDA 路径均已对齐。
+- `seq_len == 0`、无效 physical block、physical block 容量不足等边界测试通过。
 
 ## Week 5 完成判定
 
 - `PagedKVCache` 实现完成。
 - `paged_decode_attention_ref` 实现完成。
-- dense KV 与 paged KV 对齐测试已写好。
+- dense KV 与 paged KV 对齐测试已在 RTX 5070 上通过。
 - paged KV 设计文档完成。
 - 本地语法编译通过。
-- RTX 5070 correctness 仍待上板验证，不能写成已通过。
+- RTX 5070 correctness 通过：`6 passed in 1.68s`。
