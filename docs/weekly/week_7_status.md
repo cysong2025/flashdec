@@ -213,16 +213,89 @@ context quick sweep，固定 `batch=16`：
 - context 从 128 增加到 4096 时，p50 从约 0.068 ms / 0.058 ms 增加到约 1.56-1.60 ms，符合 decode attention 随 K/V 读取量增长而变慢的预期。
 - BF16 与 FP16 的 quick 结果整体同量级，部分小 shape 存在随机 seq_len 差异和尾部波动，完整 sweep 需要统一看更多 shape。
 
+## RTX 5070 Full Benchmark 记录（2026-06-28）
+
+运行环境：
+
+- GPU：NVIDIA GeForce RTX 5070。
+- PyTorch：2.11.0+cu128。
+- CUDA：12.8。
+- dtype：float16 / bfloat16。
+- head_dim：128。
+- `num_q_heads=32`，`num_kv_heads=8`。
+- block size：16。
+- num warps：4。
+- repeats：30。
+- mode：all，包含 paged PyTorch reference 与 Triton kernel。
+
+运行命令：
+
+```bash
+python benchmarks/run_week7_paged_decode.py --output benchmarks/results/week7_paged_decode.csv
+```
+
+输出文件：
+
+```text
+benchmarks/results/week7_paged_decode.csv
+```
+
+batch sweep，固定 `max_seq_len=1024`：
+
+| dtype | batch | actual_seq_len | used_blocks | triton p50_ms | triton p90_ms | triton mean_ms | speedup_vs_ref |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| float16 | 1 | 581-581 | 37 | 0.080000 | 0.130464 | 0.087395 | 65.2440 |
+| float16 | 2 | 608-750 | 85 | 0.073760 | 0.115904 | 0.083419 | 96.8117 |
+| float16 | 4 | 863-926 | 224 | 0.159392 | 0.166080 | 0.159271 | 125.8175 |
+| float16 | 8 | 539-910 | 352 | 0.241344 | 0.243392 | 0.240126 | 143.1503 |
+| float16 | 16 | 513-967 | 763 | 0.443040 | 0.453920 | 0.441274 | 142.3299 |
+| float16 | 32 | 561-1010 | 1644 | 0.786048 | 0.794880 | 0.788991 | 164.6468 |
+| float16 | 64 | 519-1024 | 3189 | 1.474528 | 1.488160 | 1.479383 | 173.0416 |
+| float16 | 128 | 513-1022 | 6129 | 2.877760 | 2.924800 | 3.158624 | 169.0484 |
+| bfloat16 | 1 | 960-960 | 60 | 0.074144 | 0.115808 | 0.084798 | 43.5779 |
+| bfloat16 | 2 | 937-952 | 119 | 0.091904 | 0.135776 | 0.106111 | 70.5114 |
+| bfloat16 | 4 | 555-795 | 167 | 0.130720 | 0.149280 | 0.129535 | 134.6661 |
+| bfloat16 | 8 | 564-916 | 351 | 0.245056 | 0.248352 | 0.244814 | 129.6497 |
+| bfloat16 | 16 | 518-989 | 763 | 0.418176 | 0.422496 | 0.421465 | 156.6867 |
+| bfloat16 | 32 | 514-1006 | 1545 | 0.775744 | 0.780896 | 0.775779 | 163.4091 |
+| bfloat16 | 64 | 515-1020 | 3115 | 1.475584 | 1.541248 | 1.488649 | 177.8657 |
+| bfloat16 | 128 | 514-1013 | 6114 | 2.884512 | 2.893696 | 2.883469 | 177.8489 |
+
+context sweep，固定 `batch=16`：
+
+| dtype | max_seq_len | actual_seq_len | used_blocks | triton p50_ms | triton p90_ms | triton mean_ms | speedup_vs_ref |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| float16 | 128 | 67-119 | 102 | 0.057632 | 0.087424 | 0.064421 | 989.2193 |
+| float16 | 256 | 130-254 | 203 | 0.145632 | 0.163776 | 0.139689 | 446.6203 |
+| float16 | 512 | 357-500 | 423 | 0.241760 | 0.243296 | 0.238071 | 275.9466 |
+| float16 | 1024 | 513-967 | 763 | 0.443040 | 0.453920 | 0.441274 | 142.3299 |
+| float16 | 2048 | 1269-1916 | 1543 | 0.869440 | 0.884320 | 0.851031 | 78.2837 |
+| float16 | 4096 | 2123-3746 | 3029 | 1.547840 | 1.563168 | 1.549796 | 41.5249 |
+| float16 | 8192 | 4889-8180 | 6536 | 3.304384 | 3.316736 | 3.303728 | 20.1878 |
+| bfloat16 | 128 | 65-124 | 101 | 0.059200 | 0.100544 | 0.072750 | 889.7430 |
+| bfloat16 | 256 | 148-249 | 211 | 0.134208 | 0.148704 | 0.135898 | 471.9845 |
+| bfloat16 | 512 | 279-505 | 395 | 0.241440 | 0.307840 | 0.256333 | 262.7931 |
+| bfloat16 | 1024 | 518-989 | 763 | 0.418176 | 0.422496 | 0.421465 | 156.6867 |
+| bfloat16 | 2048 | 1035-1933 | 1476 | 0.821664 | 0.828832 | 0.822369 | 77.1214 |
+| bfloat16 | 4096 | 2069-3912 | 2894 | 1.604704 | 1.629536 | 1.609332 | 38.6654 |
+| bfloat16 | 8192 | 4465-7856 | 5906 | 3.166912 | 3.186240 | 3.169148 | 20.9854 |
+
+观察：
+
+- 完整 sweep 覆盖了 FP16/BF16、batch 1-128、context 128-8192、`head_dim=128`、GQA 配置 `32 q heads / 8 kv heads`。
+- batch sweep 中，Triton p50 大致随 batch 增大而上升：FP16 从 0.080000 ms 增至 2.877760 ms，BF16 从 0.074144 ms 增至 2.884512 ms。
+- context sweep 中，Triton p50 随上下文长度增长明显上升：FP16 从 0.057632 ms 增至 3.304384 ms，BF16 从 0.059200 ms 增至 3.166912 ms。
+- speedup_vs_ref 在短 context 上非常高，最长 context 上降到约 20x，说明随着 K/V 读取量增大，kernel 更接近 memory-bound。
+- reference 结果存在明显尾部抖动，因此性能判断优先看 Triton p50/p90 与趋势。
+- Week 8 优化应优先围绕长 context 下的 K/V 访存、block table 间接索引开销、`num_warps` 和 cache layout 做实验。
+
 ## 上板后要记录
 
-- `benchmarks/results/week7_paged_decode.csv` 的结果摘要。
-- batch sweep 中 latency 随 batch 的变化。
-- context sweep 中 latency 随 context 的变化。
 - Week 8 优化优先级。
 
 ## Week 7 完成判定
 
 - 代码已支持 `head_dim=64/128` 与 FP16/BF16。
 - correctness tests 已在 RTX 5070 上通过：`14 passed in 4.48s`。
-- quick Triton benchmark 已在 RTX 5070 上完成，完整 shape sweep 待生成 CSV。
+- quick Triton benchmark 与完整 shape sweep benchmark 均已在 RTX 5070 上完成。
 - 兼容性文档已新增。
