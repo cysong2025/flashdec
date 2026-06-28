@@ -99,19 +99,52 @@
 
 结果：编译通过。
 
-## 需要在 RTX 5070 开发板完成
+## RTX 5070 验证记录（2026-06-28）
 
-Correctness：
+运行环境：
+
+- OS：Linux / WSL2。
+- Python：3.12.3。
+- pytest：9.1.1。
+- 测试路径：`/home/user/work/flashdec`。
+
+运行命令：
 
 ```bash
 pytest -vv tests/test_paged_decode.py
 ```
 
-完整一点的回归：
+结果：
 
-```bash
-pytest -vv tests/test_paged_cache.py tests/test_paged_decode.py
+```text
+collected 14 items
+
+tests/test_paged_decode.py::test_paged_decode_attention_matches_reference_variable_lengths[64-dtype0] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_matches_reference_variable_lengths[64-dtype1] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_matches_reference_variable_lengths[128-dtype0] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_matches_reference_variable_lengths[128-dtype1] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_supports_gqa_mapping[dtype0] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_supports_gqa_mapping[dtype1] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_supports_mqa_mapping[dtype0] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_supports_mqa_mapping[dtype1] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_zero_seq_len_outputs_zero[dtype0] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_zero_seq_len_outputs_zero[dtype1] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_supports_custom_scale[dtype0] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_supports_custom_scale[dtype1] PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_rejects_unsupported_head_dim PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_rejects_unsupported_block_size PASSED
+
+14 passed in 4.48s
 ```
+
+覆盖结论：
+
+- `head_dim=64/128` 均已通过 correctness。
+- FP16/BF16 均已通过 correctness。
+- GQA 和 MQA 映射均已通过 correctness。
+- `seq_len == 0`、自定义 `sm_scale` 和不支持 shape 的报错路径均正常。
+
+## 需要在 RTX 5070 开发板完成
 
 Week 7 shape sweep：
 
@@ -127,9 +160,6 @@ python benchmarks/run_week7_paged_decode.py --quick --mode triton --output bench
 
 ## 上板后要记录
 
-- `tests/test_paged_decode.py` 的通过数量和耗时。
-- BF16 是否在 RTX 5070 环境正常通过。
-- `head_dim=128` 是否通过 correctness。
 - `benchmarks/results/week7_paged_decode.csv` 的结果摘要。
 - batch sweep 中 latency 随 batch 的变化。
 - context sweep 中 latency 随 context 的变化。
@@ -138,6 +168,6 @@ python benchmarks/run_week7_paged_decode.py --quick --mode triton --output bench
 ## Week 7 完成判定
 
 - 代码已支持 `head_dim=64/128` 与 FP16/BF16。
-- correctness tests 已补充，待 RTX 5070 验证。
+- correctness tests 已在 RTX 5070 上通过：`14 passed in 4.48s`。
 - benchmark sweep 脚本已完成，待 RTX 5070 生成 CSV。
 - 兼容性文档已新增。

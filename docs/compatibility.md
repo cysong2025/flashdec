@@ -80,20 +80,21 @@
 - `seq_len == 0`。
 - 自定义 `sm_scale`。
 
-### Week 7 待验证
+### Week 7
 
-Week 7 新增支持范围需要在 RTX 5070 上验证：
+`tests/test_paged_decode.py` 在 RTX 5070 上通过：
 
-```bash
-pytest -vv tests/test_paged_decode.py
+```text
+14 passed in 4.48s
 ```
 
-重点确认：
+覆盖：
 
 - `head_dim=128`。
-- BF16。
+- FP16/BF16。
 - `num_q_heads=32, num_kv_heads=2` 的 GQA。
 - `num_q_heads=16, num_kv_heads=1` 的 MQA。
+- `seq_len == 0`、自定义 `sm_scale` 和不支持 shape 的报错路径。
 
 ## Benchmark 路径
 
