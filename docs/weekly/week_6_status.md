@@ -126,24 +126,48 @@ v1 限制：
 
 结果：编译通过。
 
-## 需要在 RTX 5070 开发板完成
+## RTX 5070 验证记录（2026-06-28）
 
-最小 correctness：
+运行环境：
+
+- OS：Linux / WSL2。
+- Python：3.12.3。
+- pytest：9.1.1。
+- 测试路径：`/home/user/work/flashdec`。
+
+运行命令：
 
 ```bash
 pytest -vv tests/test_paged_decode.py
 ```
 
+结果：
+
+```text
+collected 6 items
+
+tests/test_paged_decode.py::test_paged_decode_attention_matches_reference_variable_lengths PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_supports_gqa_mapping PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_zero_seq_len_outputs_zero PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_supports_custom_scale PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_rejects_unsupported_head_dim PASSED
+tests/test_paged_decode.py::test_paged_decode_attention_rejects_unsupported_block_size PASSED
+
+6 passed in 3.79s
+```
+
+覆盖结论：
+
+- paged decode Triton kernel v1 与 `paged_decode_attention_ref` 对齐。
+- 变长 sequence、非连续 physical block、`seq_len == 0`、GQA head mapping 和自定义 `sm_scale` 均通过。
+- v1 不支持的 `head_dim=128` 和 `block_size=8` 会按预期报错。
+
+## 需要在 RTX 5070 开发板完成
+
 联合回归 Week 5 + Week 6：
 
 ```bash
 pytest -vv tests/test_paged_cache.py tests/test_paged_decode.py
-```
-
-如果要连同 dense decode 一起回归：
-
-```bash
-pytest -vv tests/test_dense_decode.py tests/test_paged_cache.py tests/test_paged_decode.py
 ```
 
 第一版 benchmark：
@@ -160,8 +184,6 @@ python benchmarks/run_paged_decode.py --mode triton --output benchmarks/results/
 
 ## 上板后要记录
 
-- `tests/test_paged_decode.py` 的通过数量和耗时。
-- 是否有 Triton compile/runtime 错误。
 - `benchmarks/results/week6_paged_decode.csv` 的默认 shape 结果。
 - 对比 paged reference 的 speedup。
 - p50/p90 是否稳定。
@@ -170,6 +192,6 @@ python benchmarks/run_paged_decode.py --mode triton --output benchmarks/results/
 ## Week 6 完成判定
 
 - paged decode Triton kernel v1 代码已完成。
-- correctness tests 已写好，待 RTX 5070 上板验证。
+- correctness tests 已在 RTX 5070 上通过：`6 passed in 3.79s`。
 - benchmark 脚本已写好，待 RTX 5070 生成 CSV。
 - 本地静态编译通过。
