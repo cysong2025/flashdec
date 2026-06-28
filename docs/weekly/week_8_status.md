@@ -58,6 +58,11 @@
   - `benchmarks/run_week8_paged_decode.py`
 - 新增性能实验记录：
   - `docs/perf_experiments.md`
+- RTX 5070 上完成性能指标 correctness：
+  - `tests/test_perf_metrics.py tests/test_benchmark_helpers.py`：`6 passed in 0.02s`
+- RTX 5070 上完成 paged decode correctness 回归：
+  - `tests/test_paged_decode.py`：`14 passed in 3.66s`
+- RTX 5070 上完成 Week 8 quick `num_warps` sweep。
 
 ## 当前实现范围
 
@@ -98,6 +103,89 @@ python3 -m pytest -q tests/test_perf_metrics.py tests/test_benchmark_helpers.py
 
 原因：当前 macOS Python 环境没有安装 `pytest`。
 
+## RTX 5070 验证记录（2026-06-28）
+
+运行环境：
+
+- OS：Linux / WSL2。
+- Python：3.12.3。
+- pytest：9.1.1。
+- GPU：NVIDIA GeForce RTX 5070。
+- PyTorch：2.11.0+cu128。
+- CUDA：12.8。
+
+性能指标与 benchmark helper correctness：
+
+```bash
+pytest -vv tests/test_perf_metrics.py tests/test_benchmark_helpers.py
+```
+
+结果：
+
+```text
+6 passed in 0.02s
+```
+
+paged decode correctness 回归：
+
+```bash
+pytest -vv tests/test_paged_decode.py
+```
+
+结果：
+
+```text
+14 passed in 3.66s
+```
+
+## RTX 5070 Quick Benchmark 记录（2026-06-28）
+
+运行命令：
+
+```bash
+python benchmarks/run_week8_paged_decode.py --quick --output benchmarks/results/week8_paged_decode_warps_quick.csv
+```
+
+输出文件：
+
+```text
+benchmarks/results/week8_paged_decode_warps_quick.csv
+```
+
+quick sweep 配置：
+
+- dtype：FP16/BF16。
+- `head_dim=128`。
+- `num_q_heads=32`。
+- `num_kv_heads=8`。
+- `block_size=16`。
+- `num_warps=2/4/8`。
+- 每个 Triton config 计时前均完成 reference validation：`validated=True`。
+
+结果摘要：
+
+| dtype | case | p50 w2 | p50 w4 | p50 w8 | best | best effective_total_gbps_p50 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| float16 | batch_b1_ctx1024 | 0.060704 | 0.061920 | 0.081824 | 2 | 206.0369 |
+| float16 | batch_b16_ctx1024 | 0.206656 | 0.426976 | 0.758464 | 2 | 944.0942 |
+| float16 | batch_b64_ctx1024 | 0.593024 | 1.454432 | 2.732800 | 2 | 1358.9605 |
+| float16 | context_b16_ctx128 | 0.029120 | 0.058304 | 0.104928 | 2 | 892.4132 |
+| float16 | context_b16_ctx4096 | 0.680000 | 1.638880 | 2.821824 | 2 | 1193.8966 |
+| bfloat16 | batch_b1_ctx1024 | 0.060960 | 0.062304 | 0.082048 | 2 | 205.1717 |
+| bfloat16 | batch_b16_ctx1024 | 0.208576 | 0.429088 | 0.753888 | 2 | 935.4035 |
+| bfloat16 | batch_b64_ctx1024 | 0.590688 | 1.453280 | 2.711936 | 2 | 1364.3348 |
+| bfloat16 | context_b16_ctx128 | 0.029184 | 0.057696 | 0.100064 | 2 | 890.4561 |
+| bfloat16 | context_b16_ctx4096 | 0.681664 | 1.651424 | 2.804256 | 2 | 1190.9823 |
+
+观察：
+
+- quick sweep 的所有 dtype/case 组合中，`num_warps=2` 在 p50 上都是最优。
+- `batch=1, context=1024` 中 `num_warps=2` 和 `num_warps=4` 的 p50 很接近，属于小 shape 固定开销主导区间。
+- 中大 shape 上 `num_warps=2` 优势非常明显：相比 `num_warps=4`，p50 通常快约 2.0x-2.5x；相比 `num_warps=8`，p50 通常快约 3.4x-4.6x。
+- FP16 和 BF16 结果基本同量级，说明当前主要瓶颈不在 dtype 算力差异，而更像是 kernel 配置、访存和并行粒度。
+- 有效带宽估算随 batch/context 增大明显上升，说明小 shape 受固定开销影响较大，大 shape 更接近访存主导。
+- `num_warps=2` 已成为候选默认配置，但仍应先跑完整 sweep，再决定是否修改 kernel wrapper 的默认 `num_warps`。
+
 ## 需要在 RTX 5070 开发板完成
 
 正确性回归：
@@ -107,11 +195,15 @@ pytest -vv tests/test_perf_metrics.py tests/test_benchmark_helpers.py
 pytest -vv tests/test_paged_decode.py
 ```
 
+已完成。
+
 quick benchmark：
 
 ```bash
 python benchmarks/run_week8_paged_decode.py --quick --output benchmarks/results/week8_paged_decode_warps_quick.csv
 ```
+
+已完成。
 
 完整 benchmark：
 
@@ -138,4 +230,5 @@ python benchmarks/run_week8_paged_decode.py --quick --mode all --output benchmar
 - 性能指标工具已实现。
 - `num_warps` sweep 脚本已实现。
 - 性能实验文档已建立。
-- RTX 5070 实测结果待补充。
+- RTX 5070 quick correctness 和 quick benchmark 已完成。
+- 完整 Week 8 benchmark 待补充。

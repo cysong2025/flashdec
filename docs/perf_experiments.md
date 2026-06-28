@@ -60,7 +60,44 @@ python benchmarks/run_week8_paged_decode.py --quick --mode all --output benchmar
 当前状态：
 
 - 脚本已实现。
-- RTX 5070 实测结果待补充。
+- RTX 5070 quick sweep 已完成，完整 sweep 待补充。
+
+### Quick 结果（RTX 5070，2026-06-28）
+
+运行命令：
+
+```bash
+python benchmarks/run_week8_paged_decode.py --quick --output benchmarks/results/week8_paged_decode_warps_quick.csv
+```
+
+输出文件：
+
+```text
+benchmarks/results/week8_paged_decode_warps_quick.csv
+```
+
+结果摘要：
+
+| dtype | case | p50 w2 | p50 w4 | p50 w8 | best | best effective_total_gbps_p50 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| float16 | batch_b1_ctx1024 | 0.060704 | 0.061920 | 0.081824 | 2 | 206.0369 |
+| float16 | batch_b16_ctx1024 | 0.206656 | 0.426976 | 0.758464 | 2 | 944.0942 |
+| float16 | batch_b64_ctx1024 | 0.593024 | 1.454432 | 2.732800 | 2 | 1358.9605 |
+| float16 | context_b16_ctx128 | 0.029120 | 0.058304 | 0.104928 | 2 | 892.4132 |
+| float16 | context_b16_ctx4096 | 0.680000 | 1.638880 | 2.821824 | 2 | 1193.8966 |
+| bfloat16 | batch_b1_ctx1024 | 0.060960 | 0.062304 | 0.082048 | 2 | 205.1717 |
+| bfloat16 | batch_b16_ctx1024 | 0.208576 | 0.429088 | 0.753888 | 2 | 935.4035 |
+| bfloat16 | batch_b64_ctx1024 | 0.590688 | 1.453280 | 2.711936 | 2 | 1364.3348 |
+| bfloat16 | context_b16_ctx128 | 0.029184 | 0.057696 | 0.100064 | 2 | 890.4561 |
+| bfloat16 | context_b16_ctx4096 | 0.681664 | 1.651424 | 2.804256 | 2 | 1190.9823 |
+
+观察：
+
+- quick sweep 的 10 个 dtype/case 组合中，`num_warps=2` 在 p50 上全部最优。
+- 除了 `batch=1, context=1024` 这种小 batch case 外，`num_warps=2` 相比 `num_warps=4` 通常有约 2.0x-2.5x p50 优势。
+- `num_warps=8` 在当前 kernel 形态下明显更慢，说明更多 warps 没有带来收益，反而可能增加调度、同步或 register pressure。
+- `batch_b64_ctx1024` 和 `context_b16_ctx4096` 的有效带宽估算达到约 1.2-1.36 TB/s，说明更大 batch 或更长 context 更能摊薄固定开销。
+- 当前 quick 结果已经说明默认 `num_warps=4` 很可能不是最佳配置；正式改默认值前仍需要完整 sweep 确认 `batch=128` 和 `context=8192` 等更大 shape。
 
 ## E2：长 context 访存瓶颈分析
 
@@ -84,7 +121,8 @@ python benchmarks/run_week8_paged_decode.py --quick --mode all --output benchmar
 当前状态：
 
 - 指标估算逻辑已实现。
-- RTX 5070 实测结果待补充。
+- Quick benchmark 已显示小 batch 有效带宽较低，而 batch/context 增大后有效带宽明显上升。
+- 完整 context sweep 待补充，重点观察 `context=8192` 是否继续接近 memory-bound。
 
 ## E3：profiling 准备
 
