@@ -62,10 +62,14 @@ profiling 与对比。
   - `tests/test_paged_decode.py tests/test_perf_metrics.py tests/test_benchmark_helpers.py`：`20 passed in 5.16s`
 - RTX 5070 上完成 small profiling smoke。
 - RTX 5070 上完成 small / medium / large 三场景 PyTorch profiler。
+- RTX 5070 上完成 medium / large Chrome trace 和 CUDA event latency 记录。
+- 当前 RTX 5070 WSL 环境缺少 `ncu` / `nsys`，Nsight 硬件计数暂未补充。
 
 ## 当前环境限制
 
 当前 Codex macOS 环境没有 PyTorch / pytest / CUDA / Triton，因此不能在本机直接运行 CUDA profiler。
+
+RTX 5070 WSL 环境当前未安装 `ncu` / `nsys`，因此暂时不能补 Nsight Compute / Nsight Systems 的硬件计数。现阶段使用 PyTorch profiler、CUDA event latency 和逻辑有效带宽估算作为 Week 9 profiling 证据。
 
 本机可完成：
 
@@ -164,6 +168,24 @@ python benchmarks/profile_paged_decode.py --case all --repeat 10 --output-dir be
 - large case 的 kernel avg 约 1.25 ms/call，和 Week 8 中长 context 有效带宽估算相互印证：context 变长后主要矛盾转向 K/V 读取。
 - 日志中 PyTorch profiler 提示可设置 `acc_events=True`，脚本已更新以保留跨 cycle 事件，后续输出会更干净。
 
+Chrome trace / CUDA event latency：
+
+| case | command | mean_ms | p50_ms | p90_ms | effective_total_gbps_p50 | output |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| medium_b16_ctx1024 | `python benchmarks/profile_paged_decode.py --case medium --repeat 10 --export-trace --output-dir benchmarks/profiles/week9_paged_decode_trace` | 0.203555 | 0.202880 | 0.208352 | 1059.3716 | `benchmarks/profiles/week9_paged_decode_trace/medium_b16_ctx1024_float16_triton_w2.txt` |
+| large_b16_ctx8192 | `python benchmarks/profile_paged_decode.py --case large --repeat 10 --export-trace --output-dir benchmarks/profiles/week9_paged_decode_trace_large` | 1.314675 | 1.309984 | 1.328576 | 1236.1614 | `benchmarks/profiles/week9_paged_decode_trace_large/large_b16_ctx8192_float16_triton_w2.txt` |
+
+large trace 关键流量估算：
+
+| metric | value |
+| --- | ---: |
+| `estimated_kv_read_bytes` | 1,618,067,456 |
+| `estimated_total_bytes` | 1,619,351,552 |
+| `profiler CUDA avg/call` | 1.230 ms |
+| `cuLaunchKernelEx avg/call` | 8.602 us |
+
+这说明 large 场景下总流量几乎全部来自 K/V cache 读取；kernel 时间随 context 增长接近线性增长，继续支持 memory-bound 判断。`cuLaunchKernelEx` 约 8.6 us/call，相比 1.23 ms/call 的 kernel 本体不是 large 场景的主要矛盾。
+
 ## 上板后要记录
 
 - small / medium / large 的 p50、p90、mean latency。
@@ -177,4 +199,5 @@ python benchmarks/profile_paged_decode.py --case all --repeat 10 --output-dir be
 - profiling 脚本已实现。
 - profiling 文档入口已建立。
 - RTX 5070 PyTorch profiler smoke 和三场景结果已补充。
-- Nsight Compute / Nsight Systems 结果待补充。
+- medium / large Chrome trace 与 CUDA event latency 已补充。
+- Nsight Compute / Nsight Systems 因当前 RTX 5070 WSL 环境缺少 `ncu` / `nsys` 暂缺，后续环境具备时再补硬件计数。

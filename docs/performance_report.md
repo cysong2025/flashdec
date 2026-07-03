@@ -8,6 +8,8 @@
 - Week 8 完整 `num_warps=2/4/8` sweep 显示：`num_warps=2` 在 28 个 dtype/case 组合中全部 p50 最优。
 - 当前 paged decode 默认配置已调整为 `num_warps=2`。
 - Week 8 有效带宽估算显示：长 context 下 kernel 更接近 K/V 访存主导。
+- Week 9 PyTorch profiler 和 Chrome trace 进一步显示：large context 下总估算流量几乎全部来自 K/V 读取，kernel 时间随 context 近似线性增长。
+- 当前 RTX 5070 WSL 环境缺少 `ncu` / `nsys`，Nsight 硬件计数暂未补充。
 
 ## Profiling 计划
 
@@ -49,7 +51,31 @@ python benchmarks/profile_paged_decode.py --case all --repeat 10 --output-dir be
 
 - 这里记录的是 PyTorch profiler 表中的 CUDA kernel time。
 - CUDA event 的 p50/p90 已由脚本写入 `benchmarks/profiles/...txt` 和 `benchmarks/results/week9_summary.md`，本次粘贴日志未展开这些文件内容。
-- 下一步需要用 Nsight Compute / Nsight Systems 补硬件计数，例如 memory throughput、achieved occupancy、register 使用。
+- 当前环境缺少 `ncu` / `nsys`，暂时无法补 Nsight Compute / Nsight Systems 的硬件计数，例如 memory throughput、achieved occupancy、register 使用。
+
+## Chrome Trace 与 CUDA Event 结果
+
+RTX 5070 上已补充 medium / large Chrome trace：
+
+| 场景 | event mean | event p50 | event p90 | effective_total_gbps_p50 | 观察 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| medium_b16_ctx1024 | 0.203555 ms | 0.202880 ms | 0.208352 ms | 1059.3716 | 常规 decode workload，适合作为 Week 10 baseline |
+| large_b16_ctx8192 | 1.314675 ms | 1.309984 ms | 1.328576 ms | 1236.1614 | 长 context 下 K/V 读取占主导 |
+
+large trace 关键估算：
+
+| metric | value |
+| --- | ---: |
+| `estimated_kv_read_bytes` | 1,618,067,456 |
+| `estimated_total_bytes` | 1,619,351,552 |
+| `profiler CUDA avg/call` | 1.230 ms |
+| `cuLaunchKernelEx avg/call` | 8.602 us |
+
+解释：
+
+- large 场景中 `estimated_kv_read_bytes` 与 `estimated_total_bytes` 几乎相同，说明总数据量主要来自 K/V cache 读取。
+- context 从 `1024` 增到 `8192` 后，kernel 时间也接近按比例增长，支持 memory-bound 判断。
+- large 场景下 launch overhead 相比 kernel 本体很小，优先优化方向应放在 KV layout、block size 和索引/访存路径，而不是 Python wrapper。
 
 ## 已验证有效优化
 
@@ -80,6 +106,7 @@ python benchmarks/profile_paged_decode.py --case all --repeat 10 --output-dir be
 - medium shape：kernel 本体约 158 us/call，可作为后续 Nsight 分析的主力代表场景。
 - large shape：kernel 本体约 1.25 ms/call，随 context 变长明显增长，继续支持 memory-bound 判断。
 - PyTorch profiler 已经能确认主要 CUDA 时间集中在 `_paged_decode_attention_kernel`；但它还不能替代 Nsight 的硬件计数。
+- 因当前环境没有 `ncu` / `nsys`，Week 10 先使用 CUDA event、PyTorch profiler 和逻辑带宽估算推进优化实验；后续环境具备时再补硬件计数。
 
 ## 下一步优化候选
 

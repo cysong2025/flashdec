@@ -234,13 +234,19 @@ def _profile_one_impl(torch, args, case_name, shape, dtype_name, tensors, cache,
     )
     metric_metadata = paged_decode_metric_metadata(estimate, mean_ms=latency.mean_ms, p50_ms=latency.p50_ms)
     label = f"paged_decode/{impl}/{case_name}/{dtype_name}"
-    prof = _profile_callable(torch, args, label, fn)
-    table = prof.key_averages().table(sort_by="cuda_time_total", row_limit=args.row_limit)
+    prof = None
+    if args.skip_torch_profiler:
+        table = "Skipped by --skip-torch-profiler. Use external profilers such as ncu/nsys for this run."
+    else:
+        prof = _profile_callable(torch, args, label, fn)
+        table = prof.key_averages().table(sort_by="cuda_time_total", row_limit=args.row_limit)
 
     slug = f"{case_name}_{dtype_name}_{impl}_w{args.num_warps}"
     output_path = Path(args.output_dir) / f"{slug}.txt"
     trace_path = None
     if args.export_trace:
+        if prof is None:
+            raise ValueError("--export-trace requires PyTorch profiler; remove --skip-torch-profiler")
         trace_path = Path(args.output_dir) / f"{slug}.json"
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         prof.export_chrome_trace(str(trace_path))
@@ -304,6 +310,7 @@ def parse_args():
     parser.add_argument("--row-limit", type=int, default=30)
     parser.add_argument("--seed", type=int, default=109)
     parser.add_argument("--skip-validate", action="store_true")
+    parser.add_argument("--skip-torch-profiler", action="store_true")
     parser.add_argument("--profile-memory", action="store_true")
     parser.add_argument("--export-trace", action="store_true")
     parser.add_argument("--output-dir", default="benchmarks/profiles/week9_paged_decode")
