@@ -181,10 +181,31 @@ PagedKVCache append tokens
 
 - 当前只实现 append，不实现 free/reuse request。
 - 当前 Week 5 tests 验证单 layer 路径。
-- Week 7 已将 paged Triton kernel 扩展到 `head_dim=64/128`、FP16/BF16；后续工程迭代已补充 `block_size=8/16/32` 代码与测试路径，其中 8/32 待 RTX 5070 上板确认。
+- paged Triton kernel 已在 RTX 5070 验证 `head_dim=64/128`、FP16/BF16 和 `block_size=8/16/32`；当前通用配置为 block32。
 - 当前 reference 会显式 gather logical K/V，适合作 correctness，不适合当性能实现。
 
-## 8. Week 6 接口衔接
+## 8. Runtime v2 方向
+
+PagedKVCache v1 只验证了 append 和 block table 语义。为了支撑单 GPU decode runtime，v2 必须增加：
+
+- `finish_request(request_id)`：释放请求持有的全部 physical blocks。
+- `cancel_request(request_id)`：与 finish 使用相同回收语义，但单独记录取消原因/计数。
+- free-list reuse：新请求优先复用已释放 block，并验证旧数据不会影响有效 token。
+- request state query：查询 seq_len、block ids 和状态。
+- cache metrics：used/free blocks、利用率、内部碎片、allocation/free/reuse 计数。
+- transactional append：批量 append 容量不足时不得只更新部分 request。
+- 单 layer runtime state：`v0.1.0` 先完整验证单 layer request 生命周期；storage 保留 layer 维度，多 layer execution 后续再扩展。
+
+v2 correctness 不只比较 attention 输出，还要覆盖请求状态机：
+
+```text
+add -> append -> finish -> block reuse
+add -> append -> cancel -> block reuse
+capacity exhausted -> append fails without partial mutation
+mixed active/finished requests -> block table and seq_lens remain correct
+```
+
+## 9. Week 6 接口衔接
 
 Week 6 paged decode kernel 应接收：
 

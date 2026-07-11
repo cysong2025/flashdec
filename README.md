@@ -1,14 +1,15 @@
 # FlashDec
 
-FlashDec 是一个 12 周 AI Infra 工程项目，主题是 **LLM decode 阶段的 PagedAttention 与 Paged KV Cache 高性能算子**。
+FlashDec 是一个 12 周 AI Infra 工程项目，主题是 **单 GPU LLM decode 执行、PagedAttention 与 Paged KV Cache 管理**。
 
-这个项目的目标不是做一个完整推理服务框架，而是完成一个小而深、公开可复现的 GPU 算子工程：
+这个项目的目标不是做一个完整推理服务框架，也不是只优化一个 GPU 算子，而是完成一个小而深、公开可复现的 decode runtime 原型：
 
 - 用 PyTorch 写清楚、可靠的 reference 实现。
 - 用 Triton 实现 dense decode attention 和 paged decode attention。
-- 实现一个简单的 Paged KV Cache 运行时，支持 block table。
-- 建立 correctness、benchmark、profiling 三件套。
-- 补一个小型 CUDA extension，展示底层算子经验。
+- 实现支持 block allocation、free/reuse 和请求生命周期的 Paged KV Cache runtime。
+- 建立动态 batch 的 decode execution path，贯通 KV append、block table 和 paged attention。
+- 用 CUDA extension 实现 RoPE/KV append 数据路径。
+- 建立 kernel 与端到端两层 correctness、benchmark、profiling 和内存效率指标。
 
 ## 当前状态
 
@@ -17,6 +18,7 @@ Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 den
 主要文档：
 
 - [12 周详细执行计划](docs/PROJECT_PLAN.md)
+- [AI Infra 项目定位](docs/AI_INFRA_SCOPE.md)
 - [接下来工作计划](docs/NEXT_STEPS.md)
 - [准备清单](docs/PREP_CHECKLIST.md)
 - [中文学习资料导航](docs/CHINESE_RESOURCES.md)
@@ -60,7 +62,7 @@ out = flashdec.decode(
     block_tables,
     seq_lens,
     sm_scale=1.0 / head_dim**0.5,
-    block_size=16,
+    block_size=32,
 )
 ```
 
@@ -70,8 +72,9 @@ out = flashdec.decode(
 - Week 3-4：PyTorch reference 与 dense decode Triton kernel。
 - Week 5-7：Paged KV Cache 与 paged decode Triton kernel。
 - Week 8-9：性能优化、profiling、对比实验。
-- Week 10：小型 CUDA extension。
-- Week 11-12：README、设计文档、benchmark 报告、发布与复现验证。
+- Week 10：冻结 kernel 配置并完成 Paged KV runtime 生命周期。
+- Week 11：CUDA RoPE/KV append 与 decode execution engine。
+- Week 12：动态 workload、端到端评测、发布与复现验证。
 
 ## 中文资料入口
 

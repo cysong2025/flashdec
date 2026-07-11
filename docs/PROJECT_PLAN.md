@@ -6,27 +6,31 @@
 >
 > 每周投入：12-18 小时
 >
-> 项目定位：公开、可复现的 AI Infra / 高性能算子工程项目。
+> 项目定位：公开、可复现的单 GPU LLM decode 执行与 KV Cache 管理项目。
 
 ## 1. 项目目标
 
-FlashDec 的目标是围绕 **LLM decode 阶段的 PagedAttention 与 Paged KV Cache** 做一个小而深的 AI Infra 项目。
+FlashDec 的目标是围绕 **LLM decode 阶段的执行路径、PagedAttention 与 Paged KV Cache** 做一个小而深的 AI Infra 项目。高性能算子是底层核心，但最终交付必须覆盖内存管理、请求生命周期、动态 batch 执行和端到端评测。
 
-它要证明四件事：
+它要证明五件事：
 
-1. 你理解 LLM 推理中的真实瓶颈，而不是只会写零散 demo。
-2. 你能用 PyTorch + Triton + 少量 CUDA 实现和验证 GPU 算子。
-3. 你能把 correctness、benchmark、profiling 做成工程闭环。
-4. 你能从内存布局、访存合并、带宽、occupancy、kernel launch overhead 等角度解释性能。
+1. 理解 LLM decode 的计算、显存和动态请求瓶颈，而不是只实现零散 kernel。
+2. 用 PyTorch + Triton + CUDA 实现并验证核心数据路径。
+3. 实现 Paged KV block 的分配、释放、复用、容量管理和请求生命周期。
+4. 用轻量 DecodeEngine 组织动态 active batch 与单步执行。
+5. 把 kernel 指标、端到端 step latency、吞吐和内存效率做成工程闭环。
 
 项目不追求完整 serving engine。核心范围是：
 
 - 单 token decode attention。
 - Paged KV Cache 的 block table 索引。
+- physical block pool 的 allocate/free/reuse。
+- request add/finish/cancel 生命周期。
 - 变长 batch。
+- 动态 active batch 的 decode-step orchestration。
 - GQA / MQA。
 - FP16 / BF16。
-- 在 RTX 5070 上可复现 benchmark。
+- kernel 与端到端 workload 在 RTX 5070 上的可复现 benchmark。
 
 ## 2. 最终成果
 
@@ -36,9 +40,10 @@ FlashDec 的目标是围绕 **LLM decode 阶段的 PagedAttention 与 Paged KV C
 - PyTorch reference 实现。
 - Triton dense decode attention kernel。
 - Triton paged decode attention kernel。
-- `PagedKVCache` 运行时：分配 block、append KV、生成 block table。
+- `PagedKVCache` 运行时：分配/释放/复用 block、append KV、生成 block table、统计内存状态。
+- `DecodeEngine`：管理 request 状态、构建 active batch、执行 append -> paged decode。
 - 单元测试：覆盖主要 shape 和边界条件。
-- benchmark 脚本：输出 CSV / Markdown 表格。
+- benchmark 脚本：输出 kernel 与端到端 workload 的 CSV / Markdown 表格。
 - profiling 报告：解释主要瓶颈和优化效果。
 - 一个小型 CUDA extension，优先做 fused RoPE + KV append。
 - 中文 README、中文设计文档、中文性能报告和兼容性说明。
@@ -58,10 +63,13 @@ FlashDec 的目标是围绕 **LLM decode 阶段的 PagedAttention 与 Paged KV C
 完整工程版本：
 
 - 支持 GQA/MQA。
+- 支持 request finish/cancel、block free/reuse 和容量耗尽错误路径。
+- 支持动态 active batch 的多步 decode execution。
 - 性能报告包含 latency/token、有效内存带宽、shape sweep。
+- 系统报告包含 step latency、tokens/s、block utilization、fragmentation 和 reuse。
 - profiling 能解释至少 3 个有效优化和 1 个无效优化。
 - 有一个能构建、能测试、能 benchmark 的 CUDA extension。
-- 文档能从算法、kernel、内存布局和工程验证四层解释实现。
+- 文档能从算法、kernel、内存管理、执行引擎和工程验证五层解释实现。
 
 进阶版本：
 
@@ -93,7 +101,7 @@ out = flashdec.decode(
     block_tables,
     seq_lens,
     sm_scale=1.0 / head_dim**0.5,
-    block_size=16,
+    block_size=32,
 )
 ```
 
@@ -104,7 +112,7 @@ cache = flashdec.PagedKVCache(
     num_layers=1,
     num_kv_heads=8,
     head_dim=128,
-    block_size=16,
+    block_size=32,
     max_blocks=4096,
     dtype=torch.float16,
     device="cuda",
@@ -164,6 +172,9 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 
 成果：
 
+- Paged KV Runtime v2 支持 request lifecycle 和 block free/reuse。
+- DecodeEngine 能运行单 layer 动态 active batch。
+- synthetic workload 能报告 step latency、吞吐和内存效率。
 - 中文 README、中文设计文档、中文性能报告完整。
 - benchmark 可复现。
 - 安装、测试、benchmark 和已知限制可以由新环境复现。
@@ -574,30 +585,51 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 
 ### Week 10：2026-08-24 至 2026-08-30
 
-主题：CUDA extension。
+主题：冻结 kernel 配置与 Paged KV Runtime v2。
 
 目标：
 
-- 加一个小而清楚的原生 CUDA 部分。
+- 结束无边界参数调优，把项目重心转向请求生命周期和显存管理。
 
-首选范围：
+编码任务：
 
-- fused RoPE + KV append：
-  - 输入新 K/V。
-  - 对 K 做 RoPE。
-  - 写入 paged KV cache 的 physical block layout。
+- 完成 `num_stages` 的 baseline/1/2/3/4 受控实验并冻结 kernel config。
+- 实现 `finish_request()`、`cancel_request()`。
+- 实现 physical block free/reuse。
+- 增加 request state query 和 cache metrics。
+- 保证批量 append 容量不足时不发生 partial mutation。
+- 增加 request churn 与 block leak 测试。
 
-备选范围：
+交付物：
 
-- 如果 fused RoPE 过大，就做一个单独 KV append CUDA kernel。
+- `PagedKVCache` runtime v2。
+- runtime state-machine tests。
+- `num_stages` 实验摘要。
+- 更新 `docs/design_paged_kv.md`。
+
+验收标准：
+
+- add/append/finish/cancel/reuse 状态机正确。
+- request churn 后不存在 block leak。
+- kernel 默认配置被代码、测试和文档共同固定。
+
+### Week 11：2026-08-31 至 2026-09-06
+
+主题：CUDA 数据路径与 DecodeEngine。
+
+目标：
+
+- 贯通新 token K/V 写入、Paged KV metadata 和 paged attention execution。
 
 编码任务：
 
 - 建立 PyTorch C++/CUDA extension。
-- 注册 Python 可调用 op。
-- 写 PyTorch reference。
-- 写 correctness test。
-- benchmark append overhead。
+- 先实现 CUDA KV append，再按进度融合 RoPE。
+- 注册 Python op并保留 PyTorch fallback。
+- 定义 request waiting/active/finished/cancelled 状态。
+- 实现 active batch builder。
+- 实现 append -> block table/seq_len -> paged decode 的单步执行。
+- 覆盖请求在不同 step 加入、完成和取消。
 
 文档任务：
 
@@ -606,86 +638,56 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
   - 为什么 append kernel 用 CUDA。
   - build 流程。
   - 主要瓶颈。
+- 写 `docs/decode_engine.md`，记录 request、batch 和 cache 的所有权边界。
 
 交付物：
 
 - `flashdec/csrc/`
 - `flashdec/cuda_ops.py`
 - `tests/test_cuda_extension.py`
+- `flashdec/engine.py`
+- `tests/test_decode_engine.py`
 - `docs/cuda_extension.md`
+- `docs/decode_engine.md`
 
 验收标准：
 
-- extension 能本地 build 和运行。
-- 代码小到可以逐行讲清楚。
-
-### Week 11：2026-08-31 至 2026-09-06
-
-主题：整理成可公开项目。
-
-目标：
-
-- 让新读者能快速运行、理解并复现实验。
-
-任务：
-
-- 清理 package API。
-- 完善安装说明。
-- 完善环境检查脚本。
-- 增加一键测试和 benchmark 命令。
-- 生成最终 benchmark 表。
-- 画图：
-  - dense KV vs paged KV。
-  - logical block 到 physical block。
-  - decode kernel 数据流。
-- 完善 README：
-  - 项目动机。
-  - quick start。
-  - API 示例。
-  - benchmark 表。
-  - 设计说明。
-  - 限制。
-  - roadmap。
-
-交付物：
-
-- 完整中文 `README.md`
-- `docs/design.md`
-- `docs/performance_report.md`
-- `scripts/check_env.py`
-- 一键测试脚本，可选。
-
-验收标准：
-
-- 新读者 5 分钟内能理解项目价值。
-- 兼容 GPU 环境下能按 README 跑至少一个 test 和一个 benchmark。
+- extension 能构建和运行，CUDA 写入结果与 reference 对齐。
+- DecodeEngine 多步动态 batch 输出与逐请求 reference 对齐。
+- request finish/cancel 后 block 能被新请求复用。
 
 ### Week 12：2026-09-07 至 2026-09-13
 
-主题：发布与复现验证。
+主题：端到端 workload、发布与复现验证。
 
 目标：
 
-- 将当前工程固化为可安装、可测试、可 benchmark 的 `v0.1.0`。
+- 用动态 workload 验证系统行为，并固化为可安装、可测试、可 benchmark 的 `v0.1.0`。
 
 任务：
 
-- 打 `v0.1.0` release tag。
-- 固化最终结果表和已知限制。
+- 实现 short/high-churn、mixed/steady、long/memory-pressure 三种 synthetic workload。
+- 记录完整 decode-step p50/p90/p99、tokens/s、block utilization、fragmentation 和 reuse。
+- 区分 kernel latency、runtime overhead 与 execution overhead。
+- 清理 package API，完善安装说明和环境检查脚本。
+- 完善 README 架构、quick start、benchmark 表、限制和 roadmap。
 - 在干净环境复跑安装、correctness、quick benchmark。
-- 检查公共 API、类型与错误输入行为。
-- 整理从 reference、Triton kernel、Paged KV Cache 到 CUDA extension 的技术文档。
+- 固化最终结果表和已知限制，打 `v0.1.0` release tag。
 
 交付物：
 
+- `benchmarks/run_decode_workload.py`
+- `docs/system_performance.md`
+- 完整中文 `README.md`
 - `CHANGELOG.md`
 - `docs/reproducibility.md`
 - GitHub release `v0.1.0`
 
 验收标准：
 
-- 新环境能按 README 跑通至少一个 correctness test 和 quick benchmark。
-- 系统、算法、kernel 与性能实验的结论都能追溯到代码和数据。
+- 新环境能按 README 跑通 correctness、动态 workload quick benchmark。
+- kernel、runtime、engine 和 workload 四层边界清楚。
+- 系统、算法、内存管理和性能结论都能追溯到代码和数据。
 
 ## 7. 每周时间分配
 
@@ -759,6 +761,15 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 - FlashInfer/vLLM 用作设计参考和可选对比。
 - 报告如实记录从零实现、正确性、benchmark、profiling 和优化过程，不夸张宣称超过工业库。
 
+### 风险：系统范围膨胀
+
+应对：
+
+- `v0.1.0` 固定为单 GPU、单 layer、单 token decode execution。
+- 优先做深 request lifecycle、block allocator、dynamic batch 和 workload 指标。
+- 不实现网络服务、完整模型、多机并行和生产级 scheduler。
+- 新功能必须对应 correctness、系统指标或端到端路径，否则不进入主线。
+
 ### 风险：公司保密边界
 
 应对：
@@ -775,10 +786,10 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 4. Triton matmul、autotune。
 5. dense attention 与 online softmax。
 6. KV cache、GQA、MQA。
-7. Paged KV Cache、block table。
-8. profiling 与 memory bandwidth。
-9. PyTorch C++/CUDA custom operators。
-10. README、性能报告与复现说明。
+7. Paged KV Cache、block table、allocator 与 request lifecycle。
+8. dynamic batch、decode execution 和 backpressure。
+9. profiling、memory bandwidth 与端到端 workload 指标。
+10. PyTorch C++/CUDA custom operators、README 与复现说明。
 
 具体链接见 `docs/CHINESE_RESOURCES.md`。
 
@@ -787,5 +798,8 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 - 公共 API、reference、Triton kernel 和 Paged KV Cache 语义保持一致。
 - FP16/BF16、MHA/GQA/MQA、变长 batch 与主要错误路径有 correctness 覆盖。
 - 默认配置由完整 shape sweep 决定，并在文档中保留原始命令和结果摘要。
+- Paged KV Runtime 支持 request finish/cancel、block free/reuse、容量与碎片指标。
+- 单 layer DecodeEngine 支持动态 active batch，并通过逐请求 reference 对齐。
 - CUDA extension 能构建、测试并与 PyTorch reference 对齐。
+- synthetic workload 能报告完整 step latency、tokens/s 和内存效率。
 - README、设计、性能、兼容性和复现文档互相一致。
