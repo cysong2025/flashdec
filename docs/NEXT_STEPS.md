@@ -2,12 +2,12 @@
 
 ## 当前基线
 
-- RTX 5070 correctness：Paged KV layout 扩展回归为 `73 passed in 9.40s`。
+- RTX 5070 最终配置 correctness：`76 passed in 4.49s`。
 - 支持 FP16/BF16、head_dim 64/128、MHA/GQA/MQA、变长 batch、block size 8/16/32。
 - 当前通用配置：token-major、`block_size=32`、`num_warps=2`。
 - block32 相对 block16 的 full-sweep p50 几何平均加速约 1.31x。
 - token-major 在 layout full sweep 中赢得 25/28 个 p50；dim-major p50 几何平均约慢 31.4%。
-- PyTorch profiler 与 Chrome trace 已建立，但现有主要结果来自 block16 阶段，需要用最终配置更新。
+- 最终默认配置的 FP16/BF16 四场景 profiler 已完成；FP16 medium/large p50 为 `0.155520/0.884576 ms`。
 
 ## 总目标
 
@@ -15,11 +15,13 @@
 
 ## 阶段 1：重建最终性能基线
 
+状态：已完成。
+
 目标：保证性能报告测量的是当前真实默认配置，而不是早期 block16 配置。
 
 任务：
 
-1. 在 profiler 输出中显式记录 `kv_layout=token_major`。（代码已完成，待 RTX 5070 验证。）
+1. 在 profiler 输出中显式记录 `kv_layout=token_major`。（已完成。）
 2. 用 `block_size=32, num_warps=2` 重跑 FP16/BF16：
    - small：batch=1, context=128。
    - medium：batch=16, context=1024。
@@ -88,40 +90,4 @@
 
 ## 当前立即执行
 
-`profile_paged_decode.py` 已完成以下扩展：
-
-- `--dtype both` 一次运行 FP16/BF16。
-- `--kv-layout token_major|dim_major` 显式控制并记录 layout。
-- `--case all` 覆盖 small、medium、large、large-batch。
-- summary 每行记录 shape、dtype、layout、block size、num warps、GPU、PyTorch、CUDA 和 profile 路径。
-- 输出文件名包含 layout、block size 和 num warps，避免不同配置互相覆盖。
-
-下一步在 RTX 5070 完成 correctness、smoke 和 full profiling。阶段 1 验证完成前不开始新的 kernel 优化，避免在过期基线上做判断。
-
-```bash
-python -m pytest -vv \
-  tests/test_profile_paged_decode.py \
-  tests/test_paged_cache.py \
-  tests/test_paged_decode.py \
-  tests/test_public_api.py
-
-python benchmarks/profile_paged_decode.py \
-  --case small \
-  --dtype both \
-  --kv-layout token_major \
-  --block-size 32 \
-  --num-warps 2 \
-  --repeat 3 \
-  --output-dir benchmarks/profiles/week9_final_default_smoke \
-  --summary-output benchmarks/results/week9_final_default_smoke.md
-
-python benchmarks/profile_paged_decode.py \
-  --case all \
-  --dtype both \
-  --kv-layout token_major \
-  --block-size 32 \
-  --num-warps 2 \
-  --repeat 10 \
-  --output-dir benchmarks/profiles/week9_final_default \
-  --summary-output benchmarks/results/week9_final_default_summary.md
-```
+阶段 1 已闭环：代码、correctness、8 组最终 profiling 和性能报告均已完成。下一步进入阶段 2，先实现独立的 `num_stages=1/2/3/4` sweep，固定 `token-major + block_size=32 + num_warps=2`，优先比较 medium、large、large-batch，只有跨主要 shape 稳定超过 5% 的方案才调整默认值。

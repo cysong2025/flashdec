@@ -66,6 +66,8 @@ profiling 与对比。
 - 当前 RTX 5070 WSL 环境缺少 `ncu` / `nsys`，Nsight 硬件计数暂未补充。
 - `profile_paged_decode.py` 已扩展为显式记录 KV layout、支持 FP16/BF16 联合运行，并让 `--case all` 覆盖 small / medium / large / large-batch。
 - 新增 CPU 可运行的 profiler 参数选择与 summary 格式测试：`tests/test_profile_paged_decode.py`。
+- 最终默认配置 correctness 已通过：`76 passed in 4.49s`。
+- 最终默认配置 8 组 profiling 已完成，覆盖 4 个场景 × FP16/BF16。
 
 ## 当前环境限制
 
@@ -121,7 +123,18 @@ python benchmarks/profile_paged_decode.py \
   --summary-output benchmarks/results/week9_final_default_summary.md
 ```
 
-上述三项当前均待 RTX 5070 执行；下方记录是早期 baseline，保留用于 before/after 对比。
+上述三项均已在 RTX 5070 执行完成。最终摘要见 `benchmarks/results/week9_final_default_summary.md`；下方记录是早期 block16 baseline，保留用于 before/after 对比。
+
+最终配置结果：
+
+| case | FP16 p50 | BF16 p50 | FP16 effective GB/s | BF16 effective GB/s |
+| --- | ---: | ---: | ---: | ---: |
+| small_b1_ctx128 | 0.015328 ms | 0.038176 ms | 90.8894 | 36.4929 |
+| medium_b16_ctx1024 | 0.155520 ms | 0.160864 ms | 1325.1028 | 1281.0822 |
+| large_b16_ctx8192 | 0.884576 ms | 0.928064 ms | 1745.7439 | 1663.9404 |
+| large_batch_b64_ctx4096 | 1.934560 ms | 1.961216 ms | 1605.6542 | 1583.8309 |
+
+最终结论：block32 FP16 medium/large p50 相对早期 block16 baseline 分别加速 1.305x/1.481x；medium、large、large-batch 的 FP16/BF16 差异较小，支持访存主导判断。small 低于 0.1 ms 且抖动明显，不用于默认配置决策。
 
 正确性回归：
 
@@ -244,4 +257,5 @@ large trace 关键流量估算：
 - profiling 文档入口已建立。
 - RTX 5070 PyTorch profiler smoke 和三场景结果已补充。
 - medium / large Chrome trace 与 CUDA event latency 已补充。
+- 最终 `token-major + block_size=32 + num_warps=2` 的 FP16/BF16 四场景 profiling 已完成。
 - Nsight Compute / Nsight Systems 因当前 RTX 5070 WSL 环境缺少 `ncu` / `nsys` 暂缺，后续环境具备时再补硬件计数。

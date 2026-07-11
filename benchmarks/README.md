@@ -54,3 +54,4 @@ python benchmarks/profile_paged_decode.py \
 
 - `results/week8_block_size_summary.md`：RTX 5070 block-size correctness、quick sweep 和 block-size/warp 交叉实验结论。
 - `results/week9_summary.md`：paged decode profiler 与 CUDA event 摘要。
+- `results/week9_final_default_summary.md`：token-major、block32、2 warps 的 FP16/BF16 四场景最终 profiling 摘要。

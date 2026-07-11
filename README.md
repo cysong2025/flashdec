@@ -12,7 +12,7 @@ FlashDec 是一个 12 周 AI Infra 工程项目，主题是 **LLM decode 阶段�
 
 ## 当前状态
 
-Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验，当前通用配置为 `token-major + block_size=32 + num_warps=2`。Week 9 已完成 PyTorch profiler 与 Chrome trace 基线记录，Nsight 硬件计数因当前环境缺少 `ncu`/`nsys` 暂未补充。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验，当前通用配置为 `token-major + block_size=32 + num_warps=2`。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling，correctness 为 `76 passed in 4.49s`；Nsight 硬件计数因当前环境缺少 `ncu`/`nsys` 暂未补充。
 
 主要文档：
 

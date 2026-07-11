@@ -11,6 +11,8 @@
 - 当前 paged decode 通用配置为 `token-major + block_size=32 + num_warps=2`。
 - Week 8 有效带宽估算显示：长 context 下 kernel 更接近 K/V 访存主导。
 - Week 9 PyTorch profiler 和 Chrome trace 进一步显示：large context 下总估算流量几乎全部来自 K/V 读取，kernel 时间随 context 近似线性增长。
+- 最终默认配置已完成 FP16/BF16 的 small、medium、large、large-batch profiling；correctness 为 `76 passed in 4.49s`。
+- 最终 FP16 medium/large p50 分别为 `0.155520/0.884576 ms`，相对早期 block16 event baseline 加速 `1.305x/1.481x`。
 - 当前 RTX 5070 WSL 环境缺少 `ncu` / `nsys`，Nsight 硬件计数暂未补充。
 
 ## Profiling 计划
@@ -35,7 +37,7 @@ Chrome trace 命令：
 python benchmarks/profile_paged_decode.py --case medium --repeat 10 --export-trace --output-dir benchmarks/profiles/week9_paged_decode_trace
 ```
 
-## PyTorch Profiler 结果
+## 早期 Block16 PyTorch Profiler 结果
 
 RTX 5070 上已完成 PyTorch profiler 三场景 profiling：
 
@@ -55,7 +57,7 @@ python benchmarks/profile_paged_decode.py --case all --repeat 10 --output-dir be
 - CUDA event 的 p50/p90 已由脚本写入 `benchmarks/profiles/...txt` 和 `benchmarks/results/week9_summary.md`，本次粘贴日志未展开这些文件内容。
 - 当前环境缺少 `ncu` / `nsys`，暂时无法补 Nsight Compute / Nsight Systems 的硬件计数，例如 memory throughput、achieved occupancy、register 使用。
 
-## Chrome Trace 与 CUDA Event 结果
+## 早期 Block16 Chrome Trace 与 CUDA Event 结果
 
 RTX 5070 上已补充 medium / large Chrome trace：
 
@@ -78,6 +80,48 @@ large trace 关键估算：
 - large 场景中 `estimated_kv_read_bytes` 与 `estimated_total_bytes` 几乎相同，说明总数据量主要来自 K/V cache 读取。
 - context 从 `1024` 增到 `8192` 后，kernel 时间也接近按比例增长，支持 memory-bound 判断。
 - large 场景下 launch overhead 相比 kernel 本体很小，优先优化方向应放在 KV layout、block size 和索引/访存路径，而不是 Python wrapper。
+
+## 最终默认配置 Profiling（2026-07-12）
+
+固定配置：
+
+- `kv_layout=token_major`
+- `block_size=32`
+- `num_warps=2`
+- FP16/BF16
+- warmup 5，repeat 10
+
+correctness：
+
+```text
+76 passed in 4.49s
+```
+
+CUDA event 结果：
+
+| case | FP16 p50 | BF16 p50 | FP16 effective GB/s | BF16 effective GB/s |
+| --- | ---: | ---: | ---: | ---: |
+| small_b1_ctx128 | 0.015328 ms | 0.038176 ms | 90.8894 | 36.4929 |
+| medium_b16_ctx1024 | 0.155520 ms | 0.160864 ms | 1325.1028 | 1281.0822 |
+| large_b16_ctx8192 | 0.884576 ms | 0.928064 ms | 1745.7439 | 1663.9404 |
+| large_batch_b64_ctx4096 | 1.934560 ms | 1.961216 ms | 1605.6542 | 1583.8309 |
+
+与早期 block16 event baseline 对比：
+
+| case | block16 FP16 p50 | block32 FP16 p50 | speedup |
+| --- | ---: | ---: | ---: |
+| medium_b16_ctx1024 | 0.202880 ms | 0.155520 ms | 1.305x |
+| large_b16_ctx8192 | 1.309984 ms | 0.884576 ms | 1.481x |
+
+观察：
+
+- medium、large、large-batch 中，BF16 相对 FP16 的 p50 差异仅约 3.4%、4.9%、1.4%，继续支持瓶颈主要来自访存而非低精度算力的判断。
+- large 和 large-batch 的估算有效带宽达到约 1.58-1.75 TB/s，GPU 工作量增大后带宽利用率明显高于 small。
+- small 的 p50/p90 差异明显且延迟低于 0.1 ms，固定开销和环境抖动占比高，不用于 dtype 或默认配置决策。
+- FP16 medium/large 的 profiler kernel avg 分别约为 `98.834 us/828.547 us`，与 CUDA event 的优化方向一致。
+- 部分 BF16/large-batch profiler 表只捕获 7-9 次 kernel event，而请求 repeat 为 10。延迟结论以完整的 CUDA-event p50/p90 为准，profiler 表只用于 kernel 归因和趋势判断。
+
+原始精简结果见 `benchmarks/results/week9_final_default_summary.md`；详细 profiler 文本保存在本地 `benchmarks/profiles/week9_final_default/`。
 
 ## 已验证有效优化
 
@@ -102,21 +146,20 @@ large trace 关键估算：
 - `seq_len`、mask 和 logical block loop 的控制开销是否影响短 context。
 - 当前 register 使用是否限制 occupancy。
 
-## Profiling 初步判断
+## Profiling 最终判断
 
-- small shape：kernel 本体只有约 7.4 us/call，固定开销可能比算子本体更值得关注。
-- medium shape：kernel 本体约 158 us/call，可作为后续 Nsight 分析的主力代表场景。
-- large shape：kernel 本体约 1.25 ms/call，随 context 变长明显增长，继续支持 memory-bound 判断。
+- small shape：最终 FP16 profiler kernel avg 约 4.8 us/call，固定开销与测量抖动更值得关注。
+- medium shape：最终 FP16 profiler kernel avg 约 98.8 us/call，可作为后续参数实验的主力代表场景。
+- large shape：最终 FP16 profiler kernel avg 约 828.5 us/call，随 context 变长明显增长，继续支持 memory-bound 判断。
 - PyTorch profiler 已经能确认主要 CUDA 时间集中在 `_paged_decode_attention_kernel`；但它还不能替代 Nsight 的硬件计数。
 - 因当前环境没有 `ncu` / `nsys`，Week 10 先使用 CUDA event、PyTorch profiler 和逻辑带宽估算推进优化实验；后续环境具备时再补硬件计数。
 
 ## 下一步优化候选
 
-1. 用最终默认配置重跑 small / medium / large / large-batch profiler，替换早期 block16 基线。
-2. 做 `num_stages` 的受控 sweep，并对低于 5% 的差异视为噪声而非默认策略。
-3. profiler 指导下的 indexing 优化：
+1. 做 `num_stages` 的受控 sweep，并对低于 5% 的差异视为噪声而非默认策略。
+2. profiler 指导下的 indexing 优化：
    - 减少 block table load。
    - 减少 mask 和 offset 计算。
-4. 与 dense Triton baseline 做部分 shape 对比。
-5. 实现 fused RoPE + paged KV append CUDA extension，并与 PyTorch reference 对齐。
-6. 条件允许时，与 FlashInfer 或 vLLM 公开实现做有限对比。
+3. 与 dense Triton baseline 做部分 shape 对比。
+4. 实现 fused RoPE + paged KV append CUDA extension，并与 PyTorch reference 对齐。
+5. 条件允许时，与 FlashInfer 或 vLLM 公开实现做有限对比。
