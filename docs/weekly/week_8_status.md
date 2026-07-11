@@ -134,11 +134,19 @@ python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_page
 
 决定：benchmark/profile 默认改为 `block_size=32, num_warps=2`。FP16 的少数小 shape 保留 block16 作为可选对照，不单独增加自动 dispatch。
 
-默认值调整后新增的 API 推断 regression test 仍需在 RTX 5070 复跑：
+默认值调整后，API 推断 regression test 已在 RTX 5070 复跑：
 
 ```bash
 python -m pytest -vv tests/test_paged_decode.py tests/test_public_api.py
 ```
+
+结果：
+
+```text
+38 passed in 4.29s
+```
+
+新增测试确认：调用方省略 `block_size` 时，paged decode 可分别从 block16 与 block32 cache 正确推断 block size。
 
 ## RTX 5070 Block Size Quick 验证记录（2026-07-11）
 
