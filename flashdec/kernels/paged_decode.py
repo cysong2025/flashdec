@@ -174,7 +174,7 @@ def paged_decode_attention(
     block_tables,
     seq_lens,
     sm_scale=None,
-    block_size=16,
+    block_size=None,
     num_warps=2,
 ):
     """Return paged single-token decode attention using Triton.
@@ -186,10 +186,18 @@ def paged_decode_attention(
     - seq_lens: [num_seqs]
     - return: [num_seqs, num_q_heads, head_dim]
 
-    Supported block sizes are 8, 16, and 32. Week 8 default config:
-    block_size=16 and num_warps=2 based on the current RTX 5070 sweep.
+    Supported block sizes are 8, 16, and 32. When block_size is omitted, it
+    is inferred from k_cache/v_cache. The current benchmark default is
+    block_size=32 and num_warps=2 based on the RTX 5070 full sweep.
     """
-    block_size = int(block_size)
+    if block_size is None:
+        if k_cache.dim() != 4:
+            raise ValueError(
+                "k_cache must have shape [num_blocks, num_kv_heads, block_size, head_dim]"
+            )
+        block_size = k_cache.shape[2]
+    else:
+        block_size = int(block_size)
     _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size, num_warps)
 
     q_contig = q.contiguous()

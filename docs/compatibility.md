@@ -33,6 +33,7 @@
 | MHA | 支持 |
 | GQA | 支持 |
 | MQA | 支持 |
+| benchmark 默认 block size | `32` |
 | 默认 `num_warps` | `2` |
 | variable seq lens | 支持 |
 | non-contiguous physical blocks | 支持 |
@@ -40,7 +41,7 @@
 
 当前限制：
 
-- `block_size=8/32` 已通过 RTX 5070 correctness；quick sweep 中 32 为 p50 最优候选，full sweep 完成前默认值仍为 16。
+- `block_size=8/32` 已通过 RTX 5070 correctness；full sweep 后 32 是通用 benchmark 默认值。FP16 的极小 batch/短 context 可单独测试 16。
 - 暂不支持 `head_dim` 之外的 64/128。
 - 暂不支持 FP32 Triton paged decode kernel。
 - 已完成 `num_warps=2/4/8` 手动 sweep，但暂未做自动 autotune。
@@ -139,5 +140,5 @@ python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_page
 
 ## 后续计划
 
-- Week 8：`num_warps` 参数实验已完成，默认配置为 2；block size correctness 与 quick sweep 已完成，待 full sweep 后决定是否将默认 block size 从 16 调整为 32。
+- Week 8：`num_warps=2` 与 `block_size=32` 是当前通用 benchmark 默认配置；FP16 的少数小 shape 仍可单独测试 block16，后续推进 layout / `num_stages` 对比。
 - Week 9：补 profiling 报告和性能瓶颈分析。

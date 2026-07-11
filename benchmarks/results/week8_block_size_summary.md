@@ -1,4 +1,4 @@
-# Week 8 Block Size Quick Summary
+# Week 8 Block Size Summary
 
 RTX 5070 quick validation for commit `419e903`.
 
@@ -36,4 +36,36 @@ Summary:
 - Its p50 geometric-mean speedup was about 1.31x over block16 and 1.99x over block8.
 - In the separate block-size/warp cross sweep, block32 with 2 warps won all 10 combinations.
 - The repeated quick runs contained two unstable measurements, including one FP16 batch=1 block16/w2 outlier. Do not use that outlier to select 4 warps.
-- Keep the checked-in default at block16 until the full block-size sweep confirms the quick trend.
+
+## Full Sweep
+
+Configuration:
+
+- batch sweep: 1/2/4/8/16/32/64/128 at maximum context 1024
+- context sweep: 128/256/512/1024/2048/4096/8192 at batch 16
+- dtype: FP16 / BF16
+- `head_dim=128`, `num_q_heads=32`, `num_kv_heads=8`
+- `num_warps=2`, repeat: 30
+
+The full sweep produced 84 records and all were `validated=True`.
+
+| metric | block16 wins | block32 wins | block32 geometric-mean speedup vs block16 |
+| --- | ---: | ---: | ---: |
+| p50 | 4 / 28 | 24 / 28 | 1.31x |
+| p90 | 3 / 28 | 25 / 28 | 1.30x |
+| mean | 2 / 28 | 26 / 28 | 1.29x |
+
+The 4 p50 cases where block16 tied or won are all FP16 small-workload cases:
+
+| case | p50 block16 | p50 block32 | observation |
+| --- | ---: | ---: | --- |
+| batch=1, context=1024 | 0.059424 ms | 0.063296 ms | block16 faster |
+| batch=4, context=1024 | 0.059392 ms | 0.063264 ms | block16 faster |
+| batch=16, context=256 | 0.048288 ms | 0.062560 ms | block16 faster |
+| batch=16, context=512 | 0.087936 ms | 0.087936 ms | tie |
+
+Decision:
+
+- Use `block_size=32` and `num_warps=2` as the general benchmark/profile configuration.
+- Keep block16 as a supported option for FP16 latency-critical small shapes; it is not the general default.
+- `paged_decode_attention(..., block_size=None)` now infers block size from the cache shape, so existing block16 caches remain valid when callers omit the argument. The new inference regression test is pending RTX 5070 validation after this code update.

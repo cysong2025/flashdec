@@ -303,7 +303,7 @@ def parse_args():
     parser.add_argument("--case", choices=[*CASES.keys(), "all"], default="all")
     parser.add_argument("--impl", choices=["triton", "ref", "both"], default="triton")
     parser.add_argument("--dtype", choices=["float16", "bfloat16"], default="float16")
-    parser.add_argument("--block-size", type=int, choices=[16], default=16)
+    parser.add_argument("--block-size", type=int, choices=[8, 16, 32], default=32)
     parser.add_argument("--num-warps", type=int, default=2)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeat", type=int, default=10)

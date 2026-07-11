@@ -232,7 +232,7 @@ Week 8 后半段或 Week 9 需要对三类场景做 profiling：
 
 ### 背景
 
-当前实测默认值为 `block_size=16`。block size 会同时影响 block table 项数、最后一个 block 的无效 token、单次循环的 K/V 读取工作量和编译期张量形状，因此不能只凭直觉选择。
+block size 会同时影响 block table 项数、最后一个 block 的无效 token、单次循环的 K/V 读取工作量和编译期张量形状，因此不能只凭直觉选择。full sweep 前的默认值为 16；本节记录 8/16/32 的统一比较。
 
 ### 实验命令
 
@@ -276,15 +276,22 @@ python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_page
 - 重复 quick run 的 30 个 w2 对照中，28 个相对差异不超过 10%；两个异常点分别是 FP16 batch=1/block16 和 BF16 short-context/block8。
 - 因此没有证据推翻当前 `num_warps=2` 结论，也不需要对 4/8 warps 做完整 sweep。
 
+### Full 结果与决策
+
+- full sweep 生成 84 条记录，全部 `validated=True`。
+- block32 在 24/28 个 p50、25/28 个 p90、26/28 个 mean 组合中最优。
+- block32 相对 block16 的 p50 加速范围为 0.77x-2.93x，几何平均约 1.31x；相对 block8 的 p50 几何平均约 1.95x。
+- BF16 下 block32 在 14/14 个 p50 组合中获胜，几何平均约快 1.41x；FP16 下 block32 在 10 个组合中获胜、1 个持平、3 个小 shape 落后，几何平均约快 1.21x。
+- block16 的例外只出现在 FP16 小工作量 case：batch=1/4、context=1024，或 batch=16、context=256/512。
+- 决定：benchmark/profile 默认配置改为 `block_size=32, num_warps=2`；FP16 latency-critical small shape 仍可显式选择 block16。
+
 ### 上板后要记录
 
-- 每个 dtype/case 的 p50、p90、mean latency。
-- 每个 block size 的有效带宽与最优次数。
-- 短 context 是否更偏好较小 block，长 context 是否更偏好较大 block。
-- `block_size=8/32` correctness 是否覆盖 FP16/BF16、head_dim 64/128 和 GQA/MQA。
+- 后续 KV layout 实验的 p50、p90、mean latency 和有效带宽。
+- KV layout 与 block32 的访存/寄存器取舍。
+- FP16 小 shape 是否值得单独引入 block16 dispatch。
 
 ### 下一步
 
-- 完整 sweep 固定 `num_warps=2`，只比较 `block_size=8/16/32`。
-- full 结果确认后再决定是否将默认 block size 从 16 调整为 32。
-- block size 实验闭环后推进 KV layout 对比，形成第三个独立优化实验。
+- block size 实验已闭环，推进 KV layout 对比，形成第三个独立优化实验。
+- 若 KV layout 对比不能稳定提升，优先用 Nsight/Profiler 验证 block table indexing、mask 与 register pressure。

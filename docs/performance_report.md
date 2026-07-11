@@ -115,8 +115,8 @@ large trace 关键估算：
    - 候选：`[num_blocks, num_kv_heads, head_dim, block_size]`
 2. block size 对比：
    - `8/16/32` 已通过 RTX 5070 correctness：`36 passed in 6.17s`。
-   - quick sweep 中 block32 在 10/10 个 dtype/case 组合中 p50 最优，相对 block16 p50 几何平均加速约 1.31x。
-   - full sweep 尚未完成，当前仓库默认值仍为 16。
+   - full sweep 中 block32 在 24/28 个 p50、25/28 个 p90、26/28 个 mean 组合中最优。
+   - block32 相对 block16 的 p50 几何平均加速约 1.31x，因此当前 benchmark/profile 默认值调整为 32；FP16 的少数极小 shape 可单独保留 block16 对照。
 3. profiler 指导下的 indexing 优化：
    - 减少 block table load。
    - 减少 mask 和 offset 计算。

@@ -197,7 +197,7 @@ seq_lens
 
 Week 6 v1 当前限制：
 
-- `block_size = 8/16/32`，当前实测默认值为 16
+- `block_size = 8/16/32`，当前通用 benchmark 默认值为 32
 - `head_dim = 64/128`
 - FP16/BF16
 - 保留 GQA/MQA head 映射。

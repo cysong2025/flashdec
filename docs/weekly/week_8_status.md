@@ -85,7 +85,6 @@
 
 暂不支持：
 
-- `block_size=8/16/32` 的 RTX 5070 full benchmark 结果。
 - KV cache physical layout 对比。
 - Nsight / PyTorch profiler 自动摘要。
 - 根据 shape 自动选择 kernel config。
@@ -125,13 +124,21 @@ python benchmarks/run_block_size_sweep.py --quick --output benchmarks/results/we
 36 passed in 6.17s
 ```
 
-待完成 full sweep：
+full sweep：
 
 ```bash
 python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_paged_decode_block_size.csv
 ```
 
-quick 结果支持 block32/w2 作为候选，但在 full 结果完成前继续保留 `block_size=16` 作为仓库默认值。
+结果：84 条记录全部 `validated=True`。block32/w2 在 24/28 个 p50、25/28 个 p90、26/28 个 mean 组合中最优；p50 相对 block16 几何平均加速约 1.31x。
+
+决定：benchmark/profile 默认改为 `block_size=32, num_warps=2`。FP16 的少数小 shape 保留 block16 作为可选对照，不单独增加自动 dispatch。
+
+默认值调整后新增的 API 推断 regression test 仍需在 RTX 5070 复跑：
+
+```bash
+python -m pytest -vv tests/test_paged_decode.py tests/test_public_api.py
+```
 
 ## RTX 5070 Block Size Quick 验证记录（2026-07-11）
 
@@ -167,6 +174,8 @@ python benchmarks/run_week8_paged_decode.py --quick --block-size 32 --num-warps 
 ```
 
 四份 CSV 共 120 条记录，全部 `validated=True`。精简结果见 `benchmarks/results/week8_block_size_summary.md`，原始 CSV 和日志保留在本地结果目录。
+
+full block-size CSV 额外包含 84 条 validated 记录，结论已合并到同一摘要。
 
 ## RTX 5070 验证记录（2026-06-28）
 

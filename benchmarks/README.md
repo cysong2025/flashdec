@@ -31,6 +31,8 @@ benchmark 记录至少包含：
 - `run_block_size_sweep.py`：固定当前 `num_warps` 默认值，对比 paged decode 的 `block_size=8/16/32`。
 - `profile_paged_decode.py`：Week 9 paged decode PyTorch profiler 文本摘要，可选导出 Chrome trace。
 
+当前通用 benchmark/profile 默认配置为 `block_size=32, num_warps=2`。FP16 的少数小 shape 可显式使用 `block_size=16` 对照。
+
 已提交的精简结果摘要：
 
 - `results/week8_block_size_summary.md`：RTX 5070 block-size correctness、quick sweep 和 block-size/warp 交叉实验结论。
