@@ -30,3 +30,8 @@ benchmark 记录至少包含：
 - `run_week8_paged_decode.py`：Week 8 paged decode `num_warps` sweep，并输出 tokens/s、估算字节数和有效 GB/s。
 - `run_block_size_sweep.py`：固定当前 `num_warps` 默认值，对比 paged decode 的 `block_size=8/16/32`。
 - `profile_paged_decode.py`：Week 9 paged decode PyTorch profiler 文本摘要，可选导出 Chrome trace。
+
+已提交的精简结果摘要：
+
+- `results/week8_block_size_summary.md`：RTX 5070 block-size correctness、quick sweep 和 block-size/warp 交叉实验结论。
+- `results/week9_summary.md`：paged decode profiler 与 CUDA event 摘要。

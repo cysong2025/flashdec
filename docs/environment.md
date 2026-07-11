@@ -191,7 +191,20 @@ python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_page
 - benchmark 的完整命令、CSV 路径、p50/p90/mean、shape、dtype 和日期。
 - 失败时的完整 traceback，不只保留最后一行。
 
-`benchmarks/results/*.csv` 默认被 Git 忽略。CSV 可通过 SSH/`rsync` 回传 Mac，公开仓库提交精简后的 Markdown 摘要；不要把大体积 Chrome trace 直接提交到 Git。
+`benchmarks/results/*.csv` 和 `*.log` 默认被 Git 忽略。公开仓库只提交精简后的 Markdown 摘要；不要把大体积 Chrome trace 直接提交到 Git。
+
+当前 SSH 入口是 Windows OpenSSH，因此 Mac 不能直接调用 WSL 内的 `rsync`。结果回传使用 Windows 目录中转：
+
+```bash
+# WSL：复制结果到 Windows 用户目录
+mkdir -p /mnt/c/Users/<windows-user>/flashdec_results
+cp benchmarks/results/<result-files> /mnt/c/Users/<windows-user>/flashdec_results/
+
+# Mac：通过 Windows OpenSSH 拉取
+scp -r <windows-user>@<windows-host>:flashdec_results/. benchmarks/results/
+```
+
+如果后续配置了 WSL 自己的 SSH 端口，才直接使用 `rsync` 从 WSL 路径拉取。
 
 ### 工作流注意事项
 

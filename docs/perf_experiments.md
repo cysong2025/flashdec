@@ -259,8 +259,22 @@ python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_page
 
 ### 结果
 
-- 代码、correctness 参数矩阵和 benchmark 入口已完成。
-- RTX 5070 quick/full sweep 尚未运行，不能据此修改当前 `block_size=16` 默认值。
+- RTX 5070 correctness 已完成：`36 passed in 6.17s`。
+- 覆盖 `block_size=8/16/32`、`head_dim=64/128`、FP16/BF16、MHA/GQA/MQA、zero seq len、自定义 scale、错误输入和公共 `flashdec.decode()` API。
+- quick block-size sweep 已完成，30 条记录全部 `validated=True`。
+- 固定 `num_warps=2` 时，block32 在 10 个 dtype/case 组合中 p50 全部最优。
+- block32 相对 block16 的 p50 加速范围为 1.16x-1.49x，几何平均约 1.31x。
+- block32 相对 block8 的 p50 加速范围为 1.68x-2.92x，几何平均约 1.99x。
+- p90 中 block32 在 9/10 个组合最优；唯一例外是 FP16 `batch=16, context=128`，三个 block size 的 p90 接近且 quick run 抖动明显。
+- 完整结果摘要见 `benchmarks/results/week8_block_size_summary.md`。
+
+### Block Size × Num Warps Quick 结果
+
+- block8：2 warps 在 10/10 个组合中 p50 最优。
+- block32：2 warps 在 10/10 个组合中 p50 最优。
+- block16：2 warps 在 8/10 个组合中最优；另外两个 batch=1 case 中 4 warps 表面最优，但其中 BF16 只领先约 1.7%，FP16 的 w2 出现单次 `0.172608 ms` 异常值，而独立重复运行约为 `0.060640 ms`。
+- 重复 quick run 的 30 个 w2 对照中，28 个相对差异不超过 10%；两个异常点分别是 FP16 batch=1/block16 和 BF16 short-context/block8。
+- 因此没有证据推翻当前 `num_warps=2` 结论，也不需要对 4/8 warps 做完整 sweep。
 
 ### 上板后要记录
 
@@ -271,5 +285,6 @@ python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_page
 
 ### 下一步
 
-- 根据实测决定保留固定默认值，还是按 context/shape 选择 block size。
-- block size 实验完成后推进 KV layout 对比，形成第三个独立优化实验。
+- 完整 sweep 固定 `num_warps=2`，只比较 `block_size=8/16/32`。
+- full 结果确认后再决定是否将默认 block size 从 16 调整为 32。
+- block size 实验闭环后推进 KV layout 对比，形成第三个独立优化实验。

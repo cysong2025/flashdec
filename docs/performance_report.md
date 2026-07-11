@@ -114,8 +114,9 @@ large trace 关键估算：
    - 当前：`[num_blocks, num_kv_heads, block_size, head_dim]`
    - 候选：`[num_blocks, num_kv_heads, head_dim, block_size]`
 2. block size 对比：
-   - kernel、correctness 参数矩阵和 benchmark 入口已支持 `8/16/32`。
-   - RTX 5070 sweep 尚未完成，当前实测默认值仍为 `16`。
+   - `8/16/32` 已通过 RTX 5070 correctness：`36 passed in 6.17s`。
+   - quick sweep 中 block32 在 10/10 个 dtype/case 组合中 p50 最优，相对 block16 p50 几何平均加速约 1.31x。
+   - full sweep 尚未完成，当前仓库默认值仍为 16。
 3. profiler 指导下的 indexing 优化：
    - 减少 block table load。
    - 减少 mask 和 offset 计算。

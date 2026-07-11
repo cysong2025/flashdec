@@ -27,7 +27,7 @@
 | --- | --- |
 | KV cache layout | `[num_blocks, num_kv_heads, block_size, head_dim]` |
 | block table layout | `[num_seqs, max_blocks_per_seq]` |
-| block size | `8`, `16`, `32`（8/32 待 RTX 5070 correctness 与性能确认） |
+| block size | `8`, `16`, `32`（均已通过 RTX 5070 correctness） |
 | head dim | `64`, `128` |
 | dtype | `float16`, `bfloat16` |
 | MHA | 支持 |
@@ -40,11 +40,11 @@
 
 当前限制：
 
-- `block_size=8/32` 已完成代码与测试路径，尚待 RTX 5070 上板确认；当前实测默认值仍为 `16`。
+- `block_size=8/32` 已通过 RTX 5070 correctness；quick sweep 中 32 为 p50 最优候选，full sweep 完成前默认值仍为 16。
 - 暂不支持 `head_dim` 之外的 64/128。
 - 暂不支持 FP32 Triton paged decode kernel。
 - 已完成 `num_warps=2/4/8` 手动 sweep，但暂未做自动 autotune。
-- block size 手动 sweep 脚本已完成，结果待上板；暂未做 layout / block size autotune。
+- block size quick sweep 已完成，full sweep 待完成；暂未做 layout / block size autotune。
 - 暂未和 FlashInfer / vLLM / TensorRT-LLM 做成熟库性能对比。
 
 ## 已验证 Correctness
@@ -98,6 +98,16 @@
 - `num_q_heads=16, num_kv_heads=1` 的 MQA。
 - `seq_len == 0`、自定义 `sm_scale` 和不支持 shape 的报错路径。
 
+### Block Size 扩展
+
+`tests/test_paged_decode.py tests/test_public_api.py` 在 RTX 5070 上通过：
+
+```text
+36 passed in 6.17s
+```
+
+覆盖 block size 8/16/32、head dim 64/128、FP16/BF16、MHA/GQA/MQA、错误输入和公共 decode API。
+
 ## Benchmark 路径
 
 Week 6 默认 benchmark：
@@ -129,5 +139,5 @@ python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_page
 
 ## 后续计划
 
-- Week 8：`num_warps` 参数实验和有效带宽估算已完成，默认配置调整为 `num_warps=2`；block size 代码与实验入口已完成，待 RTX 5070 结果后再决定默认值，后续推进 layout / `num_stages` 对比。
+- Week 8：`num_warps` 参数实验已完成，默认配置为 2；block size correctness 与 quick sweep 已完成，待 full sweep 后决定是否将默认 block size 从 16 调整为 32。
 - Week 9：补 profiling 报告和性能瓶颈分析。

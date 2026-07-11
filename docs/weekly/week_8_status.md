@@ -67,6 +67,9 @@
 - paged decode 默认 `num_warps` 已从 4 调整为 2。
 - paged decode kernel、wrapper 和 correctness 参数矩阵已扩展到 `block_size=8/16/32`。
 - 新增 `benchmarks/run_block_size_sweep.py`，用于固定 `num_warps=2` 对比三种 block size。
+- RTX 5070 block-size correctness 已通过：`36 passed in 6.17s`。
+- RTX 5070 block-size quick sweep 与 block-size/warp 交叉 quick sweep 已完成。
+- quick 结果中 block32/w2 在 10/10 个 dtype/case 组合中 p50 最优，相对 block16 p50 几何平均加速约 1.31x。
 
 ## 当前实现范围
 
@@ -82,7 +85,7 @@
 
 暂不支持：
 
-- `block_size=8/32` 的 RTX 5070 correctness 与实际 benchmark 结果。
+- `block_size=8/16/32` 的 RTX 5070 full benchmark 结果。
 - KV cache physical layout 对比。
 - Nsight / PyTorch profiler 自动摘要。
 - 根据 shape 自动选择 kernel config。
@@ -107,17 +110,63 @@ python3 -m pytest -q tests/test_perf_metrics.py tests/test_benchmark_helpers.py
 
 原因：当前 macOS Python 环境没有安装 `pytest`。
 
-## Block Size 实验待上板
+## Block Size 实验进展
 
-代码与实验入口已完成，但以下结果尚未在 RTX 5070 上验证：
+correctness 与 quick benchmark 已完成：
 
 ```bash
 pytest -vv tests/test_paged_decode.py tests/test_public_api.py
 python benchmarks/run_block_size_sweep.py --quick --output benchmarks/results/week8_paged_decode_block_size_quick.csv
+```
+
+结果：
+
+```text
+36 passed in 6.17s
+```
+
+待完成 full sweep：
+
+```bash
 python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_paged_decode_block_size.csv
 ```
 
-上板后需要记录三种 block size 的 correctness、p50/p90/mean latency、有效带宽和各 shape 最优次数。在结果完成前继续保留 `block_size=16` 作为实测默认值。
+quick 结果支持 block32/w2 作为候选，但在 full 结果完成前继续保留 `block_size=16` 作为仓库默认值。
+
+## RTX 5070 Block Size Quick 验证记录（2026-07-11）
+
+验证提交：`419e903`。
+
+环境：
+
+- Python：3.12.3。
+- pytest：9.1.1。
+- GPU：NVIDIA GeForce RTX 5070。
+- PyTorch：2.11.0+cu128。
+- CUDA：12.8。
+
+correctness：
+
+```bash
+python -m pytest -vv tests/test_paged_decode.py tests/test_public_api.py
+```
+
+结果：
+
+```text
+36 passed in 6.17s
+```
+
+quick benchmark：
+
+```bash
+python benchmarks/run_block_size_sweep.py --quick --output benchmarks/results/week8_paged_decode_block_size_quick.csv
+python benchmarks/run_week8_paged_decode.py --quick --block-size 8 --num-warps 2 4 8 --output benchmarks/results/week8_block8_warps_quick.csv
+python benchmarks/run_week8_paged_decode.py --quick --block-size 16 --num-warps 2 4 8 --output benchmarks/results/week8_block16_warps_quick.csv
+python benchmarks/run_week8_paged_decode.py --quick --block-size 32 --num-warps 2 4 8 --output benchmarks/results/week8_block32_warps_quick.csv
+```
+
+四份 CSV 共 120 条记录，全部 `validated=True`。精简结果见 `benchmarks/results/week8_block_size_summary.md`，原始 CSV 和日志保留在本地结果目录。
 
 ## RTX 5070 验证记录（2026-06-28）
 

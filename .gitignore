@@ -9,5 +9,6 @@ build/
 dist/
 *.egg-info/
 benchmarks/results/*.csv
+benchmarks/results/*.log
 benchmarks/profiles/
 .DS_Store
