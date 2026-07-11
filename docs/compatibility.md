@@ -57,6 +57,25 @@
 - `num_stages=default/1/2/3/4` full sweep 已完成，最佳候选仅约快 0.39%，因此不修改默认 staging。
 - 暂未和 FlashInfer / vLLM / TensorRT-LLM 做成熟库性能对比。
 
+## RoPE + Paged KV Append Reference
+
+当前代码支持：
+
+- split-half RoPE。
+- `rotary_dim` 为偶数前缀，允许小于 head_dim。
+- position 使用 append 前的 request seq_len。
+- FP16/BF16/FP32 输入，FP32 计算 cos/sin 和旋转。
+- Q 和 K 旋转，V 保持不变。
+- rotated K 写入 token-major paged cache，并返回 block tables/seq_lens。
+- block 边界分配、capacity failure 原子性和 terminal request 检查。
+
+当前限制：
+
+- 目前只有 PyTorch reference，尚无 CUDA extension，也没有性能结论。
+- 只支持当前 PagedKVCache v2 的单 layer runtime。
+- 不包含 RoPE scaling、YaRN、NTK-aware scaling 或 interleaved-pair convention。
+- 代码待 RTX 5070 focused/full correctness 验证。
+
 ## 已验证 Correctness
 
 ### Week 5

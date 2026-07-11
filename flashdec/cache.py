@@ -196,6 +196,30 @@ class PagedKVCache:
             "block_ids": tuple(state.block_ids),
         }
 
+    def next_positions(self, request_ids, device=None):
+        """Return each request's pre-append token position without mutation."""
+        torch = _torch()
+        ids = self._normalize_request_ids(request_ids)
+        if not ids:
+            raise ValueError("request_ids must be non-empty")
+        if len(set(ids)) != len(ids):
+            raise ValueError("request_ids must be unique")
+
+        positions = []
+        for request_id in ids:
+            state = self._requests.get(request_id)
+            if state is None:
+                positions.append(0)
+            elif state.status != self.ACTIVE:
+                raise RuntimeError(
+                    f"request_id {request_id!r} is {state.status} and cannot accept append"
+                )
+            else:
+                positions.append(state.seq_len)
+        if device is None:
+            device = self.device
+        return torch.tensor(positions, device=device, dtype=torch.int64)
+
     def metrics(self):
         """Return block-pool, fragmentation, lifecycle, and reuse counters."""
         states = list(self._requests.values())

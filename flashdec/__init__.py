@@ -2,11 +2,14 @@
 
 __all__ = [
     "PagedKVCache",
+    "RopeAppendResult",
     "__version__",
+    "apply_rope",
     "decode",
     "dense_decode_attention_ref",
     "paged_decode_attention",
     "paged_decode_attention_ref",
+    "rope_paged_kv_append_ref",
 ]
 
 __version__ = "0.0.0"
@@ -17,6 +20,14 @@ def __getattr__(name):
         from .cache import PagedKVCache
 
         return PagedKVCache
+    if name in ("RopeAppendResult", "apply_rope", "rope_paged_kv_append_ref"):
+        from .rope import RopeAppendResult, apply_rope, rope_paged_kv_append_ref
+
+        return {
+            "RopeAppendResult": RopeAppendResult,
+            "apply_rope": apply_rope,
+            "rope_paged_kv_append_ref": rope_paged_kv_append_ref,
+        }[name]
     if name == "dense_decode_attention_ref":
         from .reference import dense_decode_attention_ref
 
