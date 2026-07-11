@@ -70,6 +70,8 @@
 - RTX 5070 block-size correctness 已通过：`36 passed in 6.17s`。
 - RTX 5070 block-size quick sweep 与 block-size/warp 交叉 quick sweep 已完成。
 - quick 结果中 block32/w2 在 10/10 个 dtype/case 组合中 p50 最优，相对 block16 p50 几何平均加速约 1.31x。
+- KV layout 的 token-major/dim-major correctness 已在 RTX 5070 回归通过：`73 passed in 9.40s`。
+- KV layout quick sweep 已完成：20 条记录全部 `validated=True`；token-major 在 8/10 个 p50、8/10 个 p90 组合中更快。
 
 ## 当前实现范围
 
@@ -85,7 +87,7 @@
 
 暂不支持：
 
-- KV cache physical layout 对比。
+- 根据 shape 自动选择 KV cache physical layout。
 - Nsight / PyTorch profiler 自动摘要。
 - 根据 shape 自动选择 kernel config。
 
@@ -185,7 +187,7 @@ python benchmarks/run_week8_paged_decode.py --quick --block-size 32 --num-warps 
 
 full block-size CSV 额外包含 84 条 validated 记录，结论已合并到同一摘要。
 
-## KV Layout 实验待上板
+## KV Layout Quick 验证（2026-07-11）
 
 新增候选 dim-major layout：
 
@@ -194,14 +196,33 @@ token_major: [num_blocks, num_kv_heads, block_size, head_dim]
 dim_major:   [num_blocks, num_kv_heads, head_dim, block_size]
 ```
 
-两种 layout 共用同一 Triton kernel、PyTorch reference 和 block table；转换仅发生在 benchmark 计时前。待 RTX 5070 执行：
+两种 layout 共用同一 Triton kernel、PyTorch reference 和 block table；转换仅发生在 benchmark 计时前。
+
+RTX 5070 correctness：
 
 ```bash
 python -m pytest -vv tests/test_paged_cache.py tests/test_paged_decode.py tests/test_public_api.py
+```
+
+结果：
+
+```text
+73 passed in 9.40s
+```
+
+quick benchmark：
+
+```bash
 python benchmarks/run_layout_sweep.py --quick --output benchmarks/results/week8_paged_decode_layout_quick.csv
 ```
 
-quick 通过后再执行 full layout sweep。默认 runtime layout 在结果前仍保持 token-major。
+20 条记录均为 `validated=True`。固定 `block_size=32, num_warps=2` 时，token-major 在 10 个 dtype/case 组合中的 8 个 p50 与 8 个 p90 更快；`dim-major p50 / token-major p50` 的几何平均为 1.20x，即 dim-major 在该 quick 矩阵中约慢 20%。dim-major 仅在 FP16/BF16 的 batch=1, context=1024 中胜出，不能证明需要第二种 runtime layout 或自动 dispatch。
+
+决定：默认 runtime layout 保持 token-major。详细表格与异常值说明见 `benchmarks/results/week8_layout_summary.md`。下一步在 RTX 5070 跑 full layout sweep，确认结论是否能覆盖完整 batch/context 矩阵：
+
+```bash
+python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_decode_layout.csv
+```
 
 ## RTX 5070 验证记录（2026-06-28）
 
@@ -417,3 +438,4 @@ python benchmarks/run_week8_paged_decode.py --quick --mode all --output benchmar
 - RTX 5070 quick correctness 和 quick benchmark 已完成。
 - RTX 5070 完整 Week 8 benchmark 已完成。
 - paged decode 默认配置已根据实测结果调整为 `num_warps=2`。
+- KV layout correctness 与 quick 对比已完成；token-major 暂维持默认，等待 full sweep 复验。

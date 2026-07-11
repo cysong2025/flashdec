@@ -327,9 +327,32 @@ python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_de
 - `num_kv_heads=8`
 - dtype：FP16/BF16
 
-### 待上板确认
+### Quick 结果（2026-07-11）
 
-- token-major/dim-major 都与同一 PyTorch reference 对齐。
-- variable lengths、non-contiguous physical blocks、MHA/GQA/MQA 在两种 layout 下正确。
-- 各 dtype/shape 的 p50、p90、mean 与有效带宽。
-- 若 dim-major 无稳定收益，保留 token-major 作为唯一 runtime layout，避免增加 cache append 复杂度。
+RTX 5070 回归命令：
+
+```bash
+python -m pytest -vv tests/test_paged_cache.py tests/test_paged_decode.py tests/test_public_api.py
+```
+
+结果为 `73 passed in 9.40s`，覆盖 token-major/dim-major、variable lengths、non-contiguous physical blocks、MHA/GQA/MQA，以及公共 API 的 block-size 推断。
+
+quick sweep 产生 20 条记录，均为 `validated=True`。在 10 个 dtype/case 对比中：
+
+- token-major 在 8/10 个 p50 与 8/10 个 p90 组合中更快。
+- `dim-major p50 / token-major p50` 的几何平均为 1.20x；因此候选 dim-major 在该矩阵中约慢 20%。
+- dim-major 只在 FP16/BF16 的 batch=1, context=1024 获胜。其余 batch=16/64、短 context 与长 context 均由 token-major 获胜。
+- BF16 batch=64 的 dim-major 有一个 `9.645600 ms` maximum-latency outlier；该点使 mean 明显恶化，因此决策以 p50/p90 为主，而不是以 mean 单独判断。
+
+详细数值见 `benchmarks/results/week8_layout_summary.md`。
+
+### 决策与下一步
+
+- 保持 token-major `[num_blocks, num_kv_heads, block_size, head_dim]` 作为唯一默认 runtime layout；不引入 dim-major cache append、第二套缓存格式或 shape dispatch。
+- quick sweep 的结论仍需 full batch/context 矩阵复验。下一步执行：
+
+```bash
+python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_decode_layout.csv
+```
+
+- 若 full sweep 同样没有稳定收益，结束 layout 分支，转向 profiler 验证 block table 索引、mask 与 register pressure。
