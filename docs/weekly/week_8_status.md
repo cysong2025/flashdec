@@ -72,6 +72,7 @@
 - quick 结果中 block32/w2 在 10/10 个 dtype/case 组合中 p50 最优，相对 block16 p50 几何平均加速约 1.31x。
 - KV layout 的 token-major/dim-major correctness 已在 RTX 5070 回归通过：`73 passed in 9.40s`。
 - KV layout quick sweep 已完成：20 条记录全部 `validated=True`；token-major 在 8/10 个 p50、8/10 个 p90 组合中更快。
+- KV layout full sweep 已完成：56 条记录全部 `validated=True`；token-major 在 25/28 个 p50、25/28 个 p90 组合中更快。
 
 ## 当前实现范围
 
@@ -218,10 +219,12 @@ python benchmarks/run_layout_sweep.py --quick --output benchmarks/results/week8_
 
 20 条记录均为 `validated=True`。固定 `block_size=32, num_warps=2` 时，token-major 在 10 个 dtype/case 组合中的 8 个 p50 与 8 个 p90 更快；`dim-major p50 / token-major p50` 的几何平均为 1.20x，即 dim-major 在该 quick 矩阵中约慢 20%。dim-major 仅在 FP16/BF16 的 batch=1, context=1024 中胜出，不能证明需要第二种 runtime layout 或自动 dispatch。
 
-决定：默认 runtime layout 保持 token-major。详细表格与异常值说明见 `benchmarks/results/week8_layout_summary.md`。下一步在 RTX 5070 跑 full layout sweep，确认结论是否能覆盖完整 batch/context 矩阵：
+full sweep 已在 RTX 5070 完成：batch sweep 覆盖 1/2/4/8/16/32/64/128，context sweep 覆盖 128/256/512/1024/2048/4096/8192；去重后共有 28 个 dtype/case 对比、56 条记录，全部 `validated=True`。token-major 赢得 25/28 个 p50 与 25/28 个 p90；`dim-major p50 / token-major p50` 的几何平均为 1.314x，表示 dim-major 平均慢约 31%。所有 12 个 context-sweep p50 都由 token-major 获胜。
+
+决定：layout 分支已闭环，默认 runtime layout 保持 token-major，不增加 dim-major cache append 或自动 layout dispatch。详细表格、三个 dim-major 小 batch 例外和 BF16 batch=1 的重复测量注意项见 `benchmarks/results/week8_layout_summary.md`。下一步转向 token-major kernel 的 profiler 证据：
 
 ```bash
-python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_decode_layout.csv
+python benchmarks/profile_paged_decode.py --help
 ```
 
 ## RTX 5070 验证记录（2026-06-28）
@@ -438,4 +441,4 @@ python benchmarks/run_week8_paged_decode.py --quick --mode all --output benchmar
 - RTX 5070 quick correctness 和 quick benchmark 已完成。
 - RTX 5070 完整 Week 8 benchmark 已完成。
 - paged decode 默认配置已根据实测结果调整为 `num_warps=2`。
-- KV layout correctness 与 quick 对比已完成；token-major 暂维持默认，等待 full sweep 复验。
+- KV layout correctness、quick 与 full 对比已完成；token-major 经完整矩阵验证后维持默认，后续转向 profiler。

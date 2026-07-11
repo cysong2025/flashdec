@@ -346,13 +346,19 @@ quick sweep 产生 20 条记录，均为 `validated=True`。在 10 个 dtype/cas
 
 详细数值见 `benchmarks/results/week8_layout_summary.md`。
 
-### 决策与下一步
+### Full 结果与决策
 
-- 保持 token-major `[num_blocks, num_kv_heads, block_size, head_dim]` 作为唯一默认 runtime layout；不引入 dim-major cache append、第二套缓存格式或 shape dispatch。
-- quick sweep 的结论仍需 full batch/context 矩阵复验。下一步执行：
+完整 batch/context matrix 已在 RTX 5070 上完成。batch sweep 为 1/2/4/8/16/32/64/128，context sweep 为 128/256/512/1024/2048/4096/8192；由于 batch=16, context=1024 去重，FP16/BF16 与两种 layout 合计 56 条记录，均为 `validated=True`。
 
-```bash
-python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_decode_layout.csv
-```
+| metric | token-major wins | dim-major wins | dim-major / token-major geometric mean |
+| --- | ---: | ---: | ---: |
+| p50 | 25 / 28 | 3 / 28 | 1.314x |
+| p90 | 25 / 28 | 3 / 28 | 1.292x |
+| mean | 23 / 28 | 5 / 28 | 1.249x |
 
-- 若 full sweep 同样没有稳定收益，结束 layout 分支，转向 profiler 验证 block table 索引、mask 与 register pressure。
+- context sweep 的 12 个 p50 场景全部由 token-major 获胜；这是最接近长 context K/V 访存瓶颈的证据。
+- FP16 中 token-major 赢得 13/14 个 p50，BF16 中赢得 12/14 个 p50。
+- dim-major 的三个 p50 胜场都是 context=1024 的小 batch（FP16 batch=1、BF16 batch=2/4），不足以抵消其余 shape 的持续劣势。
+- BF16 batch=1 的 dim-major p50 在 quick/full 间从 0.028448 ms 变为 0.199648 ms。两个 run 均通过 correctness，但说明亚 0.1 ms 延迟容易受测量环境影响；若该 shape 变成目标 workload，应在 interleaved profiler run 中复测。
+
+决定：保留 token-major `[num_blocks, num_kv_heads, block_size, head_dim]` 作为唯一默认 runtime layout；不引入 dim-major cache append、第二套缓存格式或 shape dispatch。layout 实验到此闭环，后续用 profiler 验证 token-major kernel 的 block table indexing、mask 与 register pressure。详细表格见 `benchmarks/results/week8_layout_summary.md`。

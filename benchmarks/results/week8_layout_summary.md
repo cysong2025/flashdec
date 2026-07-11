@@ -49,8 +49,46 @@ Summary:
   use p50/p90 rather than mean alone because BF16 batch=64 dim-major contains
   a 9.645600 ms maximum-latency outlier.
 
-Next command:
+## Full Sweep
+
+Configuration:
+
+- batch sweep: 1/2/4/8/16/32/64/128 at maximum context 1024
+- context sweep: 128/256/512/1024/2048/4096/8192 at batch 16
+- dtype: FP16 / BF16
+- `block_size=32`, `num_warps=2`, repeat: 30
+
+The full sweep produced 56 records (28 token-major/dim-major comparisons), and
+all were `validated=True`.
+
+| metric | token-major wins | dim-major wins | dim-major / token-major geometric mean |
+| --- | ---: | ---: | ---: |
+| p50 | 25 / 28 | 3 / 28 | 1.314x |
+| p90 | 25 / 28 | 3 / 28 | 1.292x |
+| mean | 23 / 28 | 5 / 28 | 1.249x |
+
+Further breakdown:
+
+- All 12 context-sweep p50 comparisons were won by token-major; its advantage
+  is strongest where decode is dominated by K/V reads.
+- FP16: token-major won 13/14 p50 comparisons; BF16: 12/14.
+- The three dim-major p50 wins were FP16 batch=1, BF16 batch=2, and BF16
+  batch=4 at context 1024. They are all tiny batch cases and do not justify a
+  runtime dispatch path.
+
+Decision:
+
+- Keep token-major as the single default runtime layout. The full matrix
+  confirms the quick-sweep direction, so do not add dim-major cache append or
+  an automatic layout selector.
+- A BF16 batch=1 dim-major result changed from 0.028448 ms in quick to
+  0.199648 ms in full. Both runs passed reference validation, but this
+  discrepancy is a useful reminder that sub-0.1 ms cases are noisy. If this
+  case becomes important, repeat it in an interleaved profiling run rather
+  than selecting a layout from one short benchmark.
+
+The next optimization direction is profiling of the token-major kernel:
 
 ```bash
-python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_decode_layout.csv
+python benchmarks/profile_paged_decode.py --help
 ```
