@@ -118,7 +118,17 @@ def _paged_decode_attention_kernel(
     )
 
 
-def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size, num_warps, kv_layout):
+def _validate_inputs(
+    q,
+    k_cache,
+    v_cache,
+    block_tables,
+    seq_lens,
+    block_size,
+    num_warps,
+    num_stages,
+    kv_layout,
+):
     token_axis, dim_axis = _layout_axes(kv_layout)
     if q.device.type != "cuda" or k_cache.device.type != "cuda" or v_cache.device.type != "cuda":
         raise ValueError("q, k_cache, and v_cache must be CUDA tensors")
@@ -183,6 +193,12 @@ def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size, nu
         raise ValueError("num_q_heads must be divisible by num_kv_heads")
     if isinstance(num_warps, bool) or not isinstance(num_warps, int) or num_warps not in (1, 2, 4, 8):
         raise ValueError("num_warps must be one of 1, 2, 4, or 8")
+    if num_stages is not None and (
+        isinstance(num_stages, bool)
+        or not isinstance(num_stages, int)
+        or num_stages not in (1, 2, 3, 4)
+    ):
+        raise ValueError("num_stages must be None or one of 1, 2, 3, or 4")
 
 
 def paged_decode_attention(
@@ -195,6 +211,7 @@ def paged_decode_attention(
     block_size=None,
     num_warps=2,
     kv_layout="token_major",
+    num_stages=None,
 ):
     """Return paged single-token decode attention using Triton.
 
@@ -208,7 +225,8 @@ def paged_decode_attention(
 
     Supported block sizes are 8, 16, and 32. When block_size is omitted, it
     is inferred from k_cache/v_cache according to kv_layout. The current
-    benchmark default is block_size=32 and num_warps=2.
+    benchmark default is block_size=32 and num_warps=2. When num_stages is
+    omitted, Triton selects its implicit staging configuration.
     """
     token_axis, dim_axis = _layout_axes(kv_layout)
     if block_size is None:
@@ -225,6 +243,7 @@ def paged_decode_attention(
         seq_lens,
         block_size,
         num_warps,
+        num_stages,
         kv_layout,
     )
 
@@ -242,6 +261,9 @@ def paged_decode_attention(
 
     out = torch.empty_like(q_contig)
     grid = (num_seqs, num_q_heads)
+    launch_kwargs = {"num_warps": num_warps}
+    if num_stages is not None:
+        launch_kwargs["num_stages"] = num_stages
     _paged_decode_attention_kernel[grid](
         q_contig,
         k_contig,
@@ -270,6 +292,6 @@ def paged_decode_attention(
         GROUP_SIZE=group_size,
         BLOCK_SIZE=block_size,
         SM_SCALE=float(sm_scale),
-        num_warps=num_warps,
+        **launch_kwargs,
     )
     return out

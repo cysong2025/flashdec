@@ -40,6 +40,12 @@
 5. 只有 p50 几何平均稳定提升超过 5%，且主要 shape 无明显回退，才修改默认值。
 6. 对 block table/mask/offset 只允许一个 time-boxed 实验；无稳定收益就记录负结果并结束 kernel 调优。
 
+当前实现状态：
+
+- 已完成 wrapper 的可选 `num_stages`，`None` 继续表示 Triton implicit default。
+- 已完成 `default/1/2/3/4` 专项 sweep、Profiler 参数/元数据和测试代码。
+- 待 RTX 5070 完成 correctness、quick 和 full sweep；在结果分析前不修改默认值。
+
 完成标准：
 
 - 最终 kernel config 被代码、测试、benchmark 和文档共同固定。
@@ -165,4 +171,4 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 当前立即执行
 
-阶段 2 只作为短周期收尾：实现 `num_stages` baseline/sweep，完成后立即冻结 kernel 配置。随后优先进入 PagedKVCache v2 的 `finish/cancel/free/reuse`，而不是继续增加更多孤立算子或参数实验。
+阶段 2 只作为短周期收尾：在 RTX 5070 执行 `num_stages` correctness、quick 和 full sweep，依据 Week 10 决策规则冻结 kernel 配置。随后立即进入 PagedKVCache v2 的 `finish/cancel/free/reuse`，而不是继续增加更多孤立算子或参数实验。完整命令见 `docs/weekly/week_10_status.md`。

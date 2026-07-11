@@ -58,6 +58,22 @@ def _impls(name):
     return [name]
 
 
+def _parse_num_stages(value):
+    if value == "default":
+        return None
+    try:
+        num_stages = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("num_stages must be default or an integer from 1 to 4") from exc
+    if num_stages not in (1, 2, 3, 4):
+        raise argparse.ArgumentTypeError("num_stages must be default or an integer from 1 to 4")
+    return num_stages
+
+
+def _num_stages_label(num_stages):
+    return "default" if num_stages is None else str(num_stages)
+
+
 def _make_inputs(torch, args, shape, dtype, case_index):
     from flashdec.cache import PagedKVCache
 
@@ -127,6 +143,7 @@ def _validate(
     block_size,
     num_warps,
     kv_layout,
+    num_stages=None,
 ):
     from flashdec.kernels.paged_decode import paged_decode_attention
     from flashdec.paged_reference import paged_decode_attention_ref
@@ -139,6 +156,7 @@ def _validate(
         seq_lens,
         block_size=block_size,
         num_warps=num_warps,
+        num_stages=num_stages,
         kv_layout=kv_layout,
     )
     expected = paged_decode_attention_ref(
@@ -197,6 +215,7 @@ def _metadata(torch, args, case_name, shape, dtype_name, impl, seq_lens, block_t
         "max_blocks_per_seq": block_tables.shape[1],
         "used_blocks": cache.num_used_blocks,
         "num_warps": args.num_warps,
+        "num_stages": _num_stages_label(args.num_stages),
         "warmup": args.warmup,
         "repeat": args.repeat,
     }
@@ -247,6 +266,7 @@ def _profile_one_impl(torch, args, case_name, shape, dtype_name, tensors, cache,
             seq_lens,
             block_size=args.block_size,
             num_warps=args.num_warps,
+            num_stages=args.num_stages,
             kv_layout=args.kv_layout,
         )
     elif impl == "ref":
@@ -281,7 +301,7 @@ def _profile_one_impl(torch, args, case_name, shape, dtype_name, tensors, cache,
 
     slug = (
         f"{case_name}_{dtype_name}_{args.kv_layout}_{impl}"
-        f"_b{args.block_size}_w{args.num_warps}"
+        f"_b{args.block_size}_w{args.num_warps}_s{_num_stages_label(args.num_stages)}"
     )
     output_path = Path(args.output_dir) / f"{slug}.txt"
     trace_path = None
@@ -308,6 +328,7 @@ def _profile_one_impl(torch, args, case_name, shape, dtype_name, tensors, cache,
             "kv_layout": args.kv_layout,
             "block_size": args.block_size,
             "num_warps": args.num_warps,
+            "num_stages": _num_stages_label(args.num_stages),
             "p50_ms": latency_row["p50_ms"],
             "p90_ms": latency_row["p90_ms"],
             "mean_ms": latency_row["mean_ms"],
@@ -326,12 +347,12 @@ def _write_summary(path, rows):
         "",
         "Shape order: `num_seqs x num_q_heads x num_kv_heads x head_dim x max_seq_len`.",
         "",
-        "| case | shape | impl | dtype | kv_layout | block_size | num_warps | p50_ms | p90_ms | mean_ms | effective_total_gbps_p50 | device | torch | cuda | profile |",
-        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |",
+        "| case | shape | impl | dtype | kv_layout | block_size | num_warps | num_stages | p50_ms | p90_ms | mean_ms | effective_total_gbps_p50 | device | torch | cuda | profile |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- |",
     ]
     for row in rows:
         lines.append(
-            "| {case} | {shape} | {impl} | {dtype} | {kv_layout} | {block_size} | {num_warps} | {p50_ms} | {p90_ms} | {mean_ms} | {effective_total_gbps_p50} | {device} | {torch} | {cuda} | {profile} |".format(
+            "| {case} | {shape} | {impl} | {dtype} | {kv_layout} | {block_size} | {num_warps} | {num_stages} | {p50_ms} | {p90_ms} | {mean_ms} | {effective_total_gbps_p50} | {device} | {torch} | {cuda} | {profile} |".format(
                 **row
             )
         )
@@ -360,6 +381,13 @@ def parse_args():
     )
     parser.add_argument("--block-size", type=int, choices=[8, 16, 32], default=32)
     parser.add_argument("--num-warps", type=int, default=2)
+    parser.add_argument(
+        "--num-stages",
+        type=_parse_num_stages,
+        default=None,
+        metavar="STAGE",
+        help="Triton stages: default, 1, 2, 3, or 4.",
+    )
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeat", type=int, default=10)
     parser.add_argument("--row-limit", type=int, default=30)
@@ -411,6 +439,7 @@ def main():
                     args.block_size,
                     args.num_warps,
                     args.kv_layout,
+                    args.num_stages,
                 )
             tensors = (q, k_cache, v_cache, block_tables, seq_lens)
             for impl in _impls(args.impl):

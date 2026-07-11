@@ -31,6 +31,7 @@ benchmark 记录至少包含：
 - `run_block_size_sweep.py`：固定当前 `num_warps` 默认值，对比 paged decode 的 `block_size=8/16/32`。
 - `run_layout_sweep.py`：固定 `block_size=32, num_warps=2`，对比 token-major 与 dim-major KV cache layout。
 - `profile_paged_decode.py`：Week 9 paged decode PyTorch profiler；支持 FP16/BF16 联合运行、token-major/dim-major 元数据、四类代表场景和可选 Chrome trace。
+- `run_num_stages_sweep.py`：Week 10 有边界的 `default/1/2/3/4` staging sweep；固定 layout、block size 和 warps，只覆盖默认决策所需的代表场景。
 
 当前通用 benchmark/profile 默认配置为 `block_size=32, num_warps=2`。FP16 的少数小 shape 可显式使用 `block_size=16` 对照。
 
@@ -49,6 +50,23 @@ python benchmarks/profile_paged_decode.py \
 ```
 
 `--case all` 覆盖 small、medium、large、large-batch；summary 每行包含完整 shape、dtype、layout、block size、num warps、GPU、PyTorch 和 CUDA 版本。
+
+Week 10 `num_stages` 快速验证：
+
+```bash
+python benchmarks/run_num_stages_sweep.py \
+  --cases medium \
+  --dtype both \
+  --num-stages default 1 2 3 4 \
+  --kv-layout token_major \
+  --block-size 32 \
+  --num-warps 2 \
+  --warmup 3 \
+  --repeat 10 \
+  --output benchmarks/results/week10_num_stages_quick.csv
+```
+
+完整 sweep 使用 medium、large、large-batch，`warmup=5, repeat=30`。默认值只在候选相对 implicit default 的 p50 几何平均稳定提升超过 5%、主要 shape 无超过 5% 回退、FP16/BF16 方向一致时修改；否则保留 `num_stages=None`。
 
 已提交的精简结果摘要：
 

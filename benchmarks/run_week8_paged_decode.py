@@ -38,6 +38,10 @@ def _dtype_name(dtype):
     return str(dtype).replace("torch.", "")
 
 
+def _num_stages_label(num_stages):
+    return "default" if num_stages is None else str(num_stages)
+
+
 def _is_power_of_two(value):
     return value > 0 and value & (value - 1) == 0
 
@@ -72,7 +76,7 @@ def _common_metadata(torch, args, dtype_name, impl, case_name, sweep, shape, seq
         "device": torch.cuda.get_device_name(device),
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
-        "benchmark": "week8_paged_decode",
+        "benchmark": getattr(args, "benchmark", "week8_paged_decode"),
         "experiment": getattr(args, "experiment", "num_warps"),
         "case": case_name,
         "sweep": sweep,
@@ -88,6 +92,7 @@ def _common_metadata(torch, args, dtype_name, impl, case_name, sweep, shape, seq
         "max_actual_seq_len": int(seq_lens.max().item()),
         "block_size": args.block_size,
         "kv_layout": args.kv_layout,
+        "num_stages": _num_stages_label(getattr(args, "num_stages", None)),
         "max_blocks_per_seq": block_tables.shape[1],
         "used_blocks": cache.num_used_blocks,
         "validated": str(not args.skip_validate),
@@ -163,7 +168,18 @@ def _make_inputs(torch, args, shape, dtype, case_index):
     return q, k_cache, v_cache, block_tables, seq_lens, cache
 
 
-def _validate(torch, q, k_cache, v_cache, block_tables, seq_lens, block_size, num_warps, kv_layout):
+def _validate(
+    torch,
+    q,
+    k_cache,
+    v_cache,
+    block_tables,
+    seq_lens,
+    block_size,
+    num_warps,
+    kv_layout,
+    num_stages=None,
+):
     from flashdec.kernels.paged_decode import paged_decode_attention
     from flashdec.paged_reference import paged_decode_attention_ref
 
@@ -175,6 +191,7 @@ def _validate(torch, q, k_cache, v_cache, block_tables, seq_lens, block_size, nu
         seq_lens,
         block_size=block_size,
         num_warps=num_warps,
+        num_stages=num_stages,
         kv_layout=kv_layout,
     )
     expected = paged_decode_attention_ref(
@@ -210,6 +227,7 @@ def run_shape(torch, args, case_index, case_name, sweep, shape, dtype):
     dtype_name = _dtype_name(dtype)
     estimate = _make_estimate(shape, dtype_name, seq_lens, block_tables, args.block_size)
     results = []
+    num_stages_values = getattr(args, "num_stages_values", [getattr(args, "num_stages", None)])
 
     ref_mean_ms = None
     if args.mode == "all":
@@ -226,41 +244,45 @@ def run_shape(torch, args, case_index, case_name, sweep, shape, dtype):
         results.append(_with_speedup(_with_perf_metrics(ref_result, estimate), ref_result.mean_ms))
 
     for num_warps in args.num_warps:
-        if not args.skip_validate:
-            _validate(
-                torch,
-                q,
-                k_cache,
-                v_cache,
-                block_tables,
-                seq_lens,
-                args.block_size,
-                num_warps,
-                args.kv_layout,
+        for num_stages in num_stages_values:
+            if not args.skip_validate:
+                _validate(
+                    torch,
+                    q,
+                    k_cache,
+                    v_cache,
+                    block_tables,
+                    seq_lens,
+                    args.block_size,
+                    num_warps,
+                    args.kv_layout,
+                    num_stages,
+                )
+            triton_result = benchmark_case(
+                "triton_paged_decode_attention",
+                lambda num_warps=num_warps, num_stages=num_stages: paged_decode_attention(
+                    q,
+                    k_cache,
+                    v_cache,
+                    block_tables,
+                    seq_lens,
+                    block_size=args.block_size,
+                    num_warps=num_warps,
+                    num_stages=num_stages,
+                    kv_layout=args.kv_layout,
+                ),
+                warmup=args.warmup,
+                repeat=args.repeat,
+                metadata={
+                    **_common_metadata(torch, args, dtype_name, "triton", case_name, sweep, shape, seq_lens, block_tables, cache),
+                    "num_warps": num_warps,
+                    "num_stages": _num_stages_label(num_stages),
+                },
             )
-        triton_result = benchmark_case(
-            "triton_paged_decode_attention",
-            lambda num_warps=num_warps: paged_decode_attention(
-                q,
-                k_cache,
-                v_cache,
-                block_tables,
-                seq_lens,
-                block_size=args.block_size,
-                num_warps=num_warps,
-                kv_layout=args.kv_layout,
-            ),
-            warmup=args.warmup,
-            repeat=args.repeat,
-            metadata={
-                **_common_metadata(torch, args, dtype_name, "triton", case_name, sweep, shape, seq_lens, block_tables, cache),
-                "num_warps": num_warps,
-            },
-        )
-        triton_result = _with_perf_metrics(triton_result, estimate)
-        if ref_mean_ms is not None:
-            triton_result = _with_speedup(triton_result, ref_mean_ms)
-        results.append(triton_result)
+            triton_result = _with_perf_metrics(triton_result, estimate)
+            if ref_mean_ms is not None:
+                triton_result = _with_speedup(triton_result, ref_mean_ms)
+            results.append(triton_result)
 
     return results
 

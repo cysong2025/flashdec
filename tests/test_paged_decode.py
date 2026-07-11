@@ -253,3 +253,48 @@ def test_paged_decode_attention_rejects_invalid_num_warps(num_warps):
             seq_lens,
             num_warps=num_warps,
         )
+
+
+@pytest.mark.parametrize("num_stages", [0, 5, -1, True, 1.5])
+def test_paged_decode_attention_rejects_invalid_num_stages(num_stages):
+    q = torch.randn((1, 1, 64), device="cuda", dtype=torch.float16)
+    k_cache = torch.randn((1, 1, 16, 64), device="cuda", dtype=torch.float16)
+    v_cache = torch.randn_like(k_cache)
+    block_tables = torch.tensor([[0]], device="cuda", dtype=torch.int32)
+    seq_lens = torch.tensor([16], device="cuda", dtype=torch.int32)
+
+    with pytest.raises(ValueError, match="num_stages"):
+        paged_decode_attention(
+            q,
+            k_cache,
+            v_cache,
+            block_tables,
+            seq_lens,
+            num_stages=num_stages,
+        )
+
+
+@pytest.mark.parametrize("num_stages", [1, 2, 3, 4])
+def test_paged_decode_attention_supports_explicit_num_stages(num_stages):
+    q, k_cache, v_cache, block_tables, seq_lens, _ = _make_paged_inputs(
+        request_ids=[1, 2],
+        target_seq_lens=[33, 47],
+        num_q_heads=4,
+        num_kv_heads=2,
+        head_dim=128,
+        block_size=32,
+        dtype=torch.float16,
+    )
+
+    actual = paged_decode_attention(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+        block_size=32,
+        num_stages=num_stages,
+    )
+    expected = paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens)
+
+    _assert_close(actual, expected)

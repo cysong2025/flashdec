@@ -1,6 +1,8 @@
 from benchmarks.profile_paged_decode import (
     CASES,
     _dtype_names,
+    _num_stages_label,
+    _parse_num_stages,
     _selected_cases,
     _write_summary,
 )
@@ -17,6 +19,13 @@ def test_dtype_names_supports_combined_run():
     assert _dtype_names("both") == ["float16", "bfloat16"]
 
 
+def test_num_stages_preserves_implicit_default_label():
+    assert _parse_num_stages("default") is None
+    assert _parse_num_stages("3") == 3
+    assert _num_stages_label(None) == "default"
+    assert _num_stages_label(3) == "3"
+
+
 def test_write_summary_records_final_config_and_environment(tmp_path):
     output = tmp_path / "summary.md"
     row = {
@@ -27,6 +36,7 @@ def test_write_summary_records_final_config_and_environment(tmp_path):
         "kv_layout": "token_major",
         "block_size": 32,
         "num_warps": 2,
+        "num_stages": "default",
         "p50_ms": "0.100000",
         "p90_ms": "0.110000",
         "mean_ms": "0.105000",
@@ -42,7 +52,7 @@ def test_write_summary_records_final_config_and_environment(tmp_path):
     text = output.read_text()
     assert "16x32x8x128x1024" in text
     assert "token_major" in text
-    assert "| 32 | 2 |" in text
+    assert "| 32 | 2 | default |" in text
     assert "NVIDIA GeForce RTX 5070" in text
     assert "2.11.0+cu128" in text
     assert "12.8" in text
