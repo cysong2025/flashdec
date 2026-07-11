@@ -40,7 +40,7 @@ allocate/free/reuse      block_tables/seq_lens
 - online softmax、FP32 accumulation、block table 间接索引。
 - 参数实验、profiling 和负结果记录。
 
-这一层回答“单个 GPU kernel 如何正确并高效地计算”。当前主线已基本完成，后续只保留有边界的 `num_stages` 和索引路径实验。
+这一层回答“单个 GPU kernel 如何正确并高效地计算”。当前配置已经冻结；除 correctness 或明确性能回归外，不再重复参数 sweep。
 
 ### 2. KV 内存管理层
 
@@ -50,7 +50,7 @@ allocate/free/reuse      block_tables/seq_lens
 - request finish/cancel 后回收 block。
 - 使用率、剩余容量、内部碎片和回收次数统计。
 
-这一层回答“动态请求到达和结束时，KV Cache 如何管理显存”。当前只完成 append 与容量检查，free/reuse 和生命周期仍待实现。
+这一层回答“动态请求到达和结束时，KV Cache 如何管理显存”。PagedKVCache v2 已完成 free/reuse、finish/cancel、容量原子性、metrics 和 request churn 验证。
 
 ### 3. Decode 数据路径
 
@@ -100,8 +100,8 @@ allocate/free/reuse      block_tables/seq_lens
 
 | 层次 | 当前状态 | 主要缺口 |
 | --- | --- | --- |
-| Reference / Kernel | 已完成主要 correctness、参数实验与最终 profiling | 有边界的 `num_stages`/索引实验 |
-| Paged KV Runtime | 已完成 allocate-on-append、block table、seq_len、capacity check | free/reuse、request lifecycle、指标 |
+| Reference / Kernel | 已完成主要 correctness、参数实验、最终 profiling 与配置冻结 | 仅在出现明确回归时重新进入 |
+| Paged KV Runtime | 已完成 request lifecycle、free/reuse、capacity atomicity、metrics 和 churn tests | 与 KV append/DecodeEngine 集成 |
 | Decode Data Path | PyTorch append 与 Triton decode 已分别存在 | CUDA RoPE/KV append 与统一 step |
 | Execution Engine | 未实现 | request state、batch builder、admission、step orchestration |
 | End-to-End Evaluation | 已有 kernel benchmark/profiler | 动态 workload、step latency、内存效率、p99 |

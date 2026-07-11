@@ -153,7 +153,7 @@ Windows OpenSSH 环境不依赖 `rsync`，继续沿用 `cp + scp` 流程。
 - allocator invariant validator 和 request churn 测试。
 - 显式限制单 layer runtime；多 layer execution 不在当前 `v0.1.0` 范围。
 
-当前 Codex macOS 环境没有 torch/pytest/CUDA，因此只完成了 compileall 和静态检查，不能写入 GPU 通过结论。
+代码编写阶段的 Codex macOS 环境没有 torch/pytest/CUDA，因此先完成 compileall 和静态检查；随后已在 RTX 5070 完成运行验证。
 
 RTX 5070 focused 验证：
 
@@ -170,4 +170,11 @@ focused 通过后执行完整回归：
 python -m pytest -vv
 ```
 
-验证通过并记录结果后，进入 RoPE + KV append 数据路径。这一步把项目从单 kernel 推进为具有 request lifecycle 和 physical memory ownership 的 decode runtime。
+验证结果：
+
+```text
+focused: 90 passed in 4.47s
+full:    170 passed in 4.66s
+```
+
+PagedKVCache v2 阶段正式完成。下一步进入 RoPE + KV append 数据路径，并在之后用 DecodeEngine 组织动态 active batch。这一步已经把项目从单 kernel 推进为具有 request lifecycle 和 physical memory ownership 的 decode runtime。

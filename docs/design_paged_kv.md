@@ -244,7 +244,7 @@ capacity exhausted -> append fails without partial mutation
 mixed active/finished requests -> block table and seq_lens remain correct
 ```
 
-上述代码已实现，当前等待 RTX 5070 focused/full correctness 验证。
+上述代码已在 RTX 5070 完成验证：focused suite 为 `90 passed in 4.47s`，完整回归为 `170 passed in 4.66s`。这说明 lifecycle/free-list 改动没有破坏既有 paged reference、Triton kernel 和公共 API。
 
 ## 9. Week 6 接口衔接
 

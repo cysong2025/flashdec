@@ -8,7 +8,8 @@
 - block32 相对 block16 的 full-sweep p50 几何平均加速约 1.31x。
 - token-major 在 layout full sweep 中赢得 25/28 个 p50；dim-major p50 几何平均约慢 31.4%。
 - 最终 FP16 medium/large p50 为 `0.155520/0.884576 ms`。
-- PagedKVCache v1 支持 allocate-on-append、block table、seq_len 和容量检查，但不支持 request free/reuse。
+- PagedKVCache v2 已支持 request lifecycle、block free/reuse、容量失败原子性、metrics 和 invariant validation。
+- RTX 5070 runtime v2 focused：`90 passed in 4.47s`；完整回归：`170 passed in 4.66s`。
 
 ## 总目标
 
@@ -59,7 +60,7 @@
 
 ## 阶段 3：Paged KV Runtime v2
 
-状态：代码已实现，待 RTX 5070 focused/full correctness 验证。
+状态：已完成。
 
 目标：实现真正的请求生命周期和 physical block 内存管理，这是项目从算子走向 AI Infra 的第一条主线。
 
@@ -83,6 +84,8 @@
 - `metrics()` 报告 block utilization、internal fragmentation、allocation/free/reuse 和 lifecycle 计数。
 - `validate_invariants()` 检查 owned/free block 完整覆盖、无重复所有权和终态无 block 泄漏。
 - runtime v2 显式限制 `num_layers=1`；多 layer execution 留给后续版本。
+- RTX 5070 focused correctness：`90 passed in 4.47s`。
+- RTX 5070 完整回归：`170 passed in 4.66s`。
 
 核心测试：
 
@@ -187,4 +190,4 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 当前立即执行
 
-PagedKVCache v2 第一批代码已经完成。当前立即在 RTX 5070 执行 focused/full correctness；验证通过后记录结果并进入 RoPE + KV append 数据路径，不再返回 kernel 参数调优。
+PagedKVCache v2 已完成并通过 RTX 5070 focused/full correctness。当前进入 RoPE + KV append 数据路径：先定义 PyTorch reference 和接口语义，再实现 CUDA KV append，最后评估是否融合 RoPE；不再返回 kernel 参数调优。

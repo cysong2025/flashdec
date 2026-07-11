@@ -22,7 +22,7 @@
 
 - runtime v2 当前显式限制 `num_layers=1`。
 - finished/cancelled request id 当前不能重新激活。
-- runtime v2 代码待 RTX 5070 focused/full correctness 验证。
+- runtime v2 已通过 RTX 5070 focused/full correctness 验证。
 - 不包含 prefix cache、swap、evict、连续 batching 调度等 serving runtime 能力。
 
 ## Paged Decode Triton Kernel
@@ -128,6 +128,37 @@
 
 覆盖 token-major/dim-major KV cache、两种 layout 的 block-size 推断、variable sequence lengths、non-contiguous physical blocks、MHA/GQA/MQA 与 FP16/BF16。quick benchmark 的 20 条记录和 full benchmark 的 56 条记录均全部 `validated=True`；full 中 token-major 在 25/28 个 p50、25/28 个 p90 比较中更快，因此作为默认 layout。
 
+### Paged KV Runtime v2
+
+focused 验证：
+
+```bash
+python -m pytest -vv \
+  tests/test_paged_cache.py \
+  tests/test_paged_decode.py \
+  tests/test_public_api.py
+```
+
+结果：
+
+```text
+90 passed in 4.47s
+```
+
+完整回归：
+
+```bash
+python -m pytest -vv
+```
+
+结果：
+
+```text
+170 passed in 4.66s
+```
+
+覆盖 finish/cancel、block release/reuse、终态错误路径、容量失败无 partial request mutation、fragmentation/utilization metrics、active-only metadata、request churn 无 block 泄漏，以及既有 paged decode/kernel/public API 回归。
+
 ## Benchmark 路径
 
 Week 6 默认 benchmark：
@@ -162,4 +193,4 @@ python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_de
 ## 后续计划
 
 - kernel 配置已冻结为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
-- 当前先在 RTX 5070 验证 PagedKVCache runtime v2，再推进 RoPE/KV append 与 DecodeEngine。
+- PagedKVCache runtime v2 已完成验证；当前推进 RoPE/KV append 与 DecodeEngine。
