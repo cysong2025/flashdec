@@ -114,8 +114,8 @@ large trace 关键估算：
    - 当前：`[num_blocks, num_kv_heads, block_size, head_dim]`
    - 候选：`[num_blocks, num_kv_heads, head_dim, block_size]`
 2. block size 对比：
-   - 当前仅支持 `block_size=16`
-   - 后续实验 `8/16/32`
+   - kernel、correctness 参数矩阵和 benchmark 入口已支持 `8/16/32`。
+   - RTX 5070 sweep 尚未完成，当前实测默认值仍为 `16`。
 3. profiler 指导下的 indexing 优化：
    - 减少 block table load。
    - 减少 mask 和 offset 计算。

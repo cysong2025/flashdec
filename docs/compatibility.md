@@ -27,7 +27,7 @@
 | --- | --- |
 | KV cache layout | `[num_blocks, num_kv_heads, block_size, head_dim]` |
 | block table layout | `[num_seqs, max_blocks_per_seq]` |
-| block size | `16` |
+| block size | `8`, `16`, `32`（8/32 待 RTX 5070 correctness 与性能确认） |
 | head dim | `64`, `128` |
 | dtype | `float16`, `bfloat16` |
 | MHA | 支持 |
@@ -40,11 +40,11 @@
 
 当前限制：
 
-- 暂不支持 `block_size=8/32`。
+- `block_size=8/32` 已完成代码与测试路径，尚待 RTX 5070 上板确认；当前实测默认值仍为 `16`。
 - 暂不支持 `head_dim` 之外的 64/128。
 - 暂不支持 FP32 Triton paged decode kernel。
 - 已完成 `num_warps=2/4/8` 手动 sweep，但暂未做自动 autotune。
-- 暂未做 layout / block size autotune。
+- block size 手动 sweep 脚本已完成，结果待上板；暂未做 layout / block size autotune。
 - 暂未和 FlashInfer / vLLM / TensorRT-LLM 做成熟库性能对比。
 
 ## 已验证 Correctness
@@ -123,9 +123,11 @@ Week 8 `num_warps` sweep 与有效带宽估算：
 ```bash
 python benchmarks/run_week8_paged_decode.py --quick --output benchmarks/results/week8_paged_decode_warps_quick.csv
 python benchmarks/run_week8_paged_decode.py --output benchmarks/results/week8_paged_decode_warps.csv
+python benchmarks/run_block_size_sweep.py --quick --output benchmarks/results/week8_paged_decode_block_size_quick.csv
+python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_paged_decode_block_size.csv
 ```
 
 ## 后续计划
 
-- Week 8：`num_warps` 参数实验和有效带宽估算已完成，默认配置调整为 `num_warps=2`；后续推进 block size / layout / `num_stages` 对比。
+- Week 8：`num_warps` 参数实验和有效带宽估算已完成，默认配置调整为 `num_warps=2`；block size 代码与实验入口已完成，待 RTX 5070 结果后再决定默认值，后续推进 layout / `num_stages` 对比。
 - Week 9：补 profiling 报告和性能瓶颈分析。

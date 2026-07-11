@@ -80,51 +80,68 @@ def _make_paged_inputs(
 
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("head_dim", [64, 128])
-def test_paged_decode_attention_matches_reference_variable_lengths(head_dim, dtype):
+@pytest.mark.parametrize("block_size", [8, 16, 32])
+def test_paged_decode_attention_matches_reference_variable_lengths(block_size, head_dim, dtype):
     q, k_cache, v_cache, block_tables, seq_lens, cache = _make_paged_inputs(
         request_ids=[101, 202, 303],
         target_seq_lens=[33, 1, 47],
         num_q_heads=4,
         num_kv_heads=4,
         head_dim=head_dim,
+        block_size=block_size,
         dtype=dtype,
     )
 
     assert cache.request_block_ids(101)[1] != cache.request_block_ids(101)[0] + 1
 
-    actual = paged_decode_attention(q, k_cache, v_cache, block_tables, seq_lens)
+    actual = paged_decode_attention(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+        block_size=block_size,
+    )
     expected = paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens)
 
     _assert_close(actual, expected)
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_paged_decode_attention_supports_gqa_mapping(dtype):
+@pytest.mark.parametrize("block_size", [8, 16, 32])
+def test_paged_decode_attention_supports_gqa_mapping(block_size, dtype):
     q, k_cache, v_cache, block_tables, seq_lens, _ = _make_paged_inputs(
         request_ids=[11, 22],
         target_seq_lens=[16, 31],
         num_q_heads=32,
         num_kv_heads=2,
+        block_size=block_size,
         dtype=dtype,
     )
 
-    actual = paged_decode_attention(q, k_cache, v_cache, block_tables, seq_lens)
+    actual = paged_decode_attention(
+        q, k_cache, v_cache, block_tables, seq_lens, block_size=block_size
+    )
     expected = paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens)
 
     _assert_close(actual, expected)
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_paged_decode_attention_supports_mqa_mapping(dtype):
+@pytest.mark.parametrize("block_size", [8, 16, 32])
+def test_paged_decode_attention_supports_mqa_mapping(block_size, dtype):
     q, k_cache, v_cache, block_tables, seq_lens, _ = _make_paged_inputs(
         request_ids=[31, 41],
         target_seq_lens=[32, 45],
         num_q_heads=16,
         num_kv_heads=1,
+        block_size=block_size,
         dtype=dtype,
     )
 
-    actual = paged_decode_attention(q, k_cache, v_cache, block_tables, seq_lens)
+    actual = paged_decode_attention(
+        q, k_cache, v_cache, block_tables, seq_lens, block_size=block_size
+    )
     expected = paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens)
 
     _assert_close(actual, expected)
@@ -176,10 +193,29 @@ def test_paged_decode_attention_rejects_unsupported_head_dim():
 
 def test_paged_decode_attention_rejects_unsupported_block_size():
     q = torch.randn((1, 1, 64), device="cuda", dtype=torch.float16)
-    k_cache = torch.randn((1, 1, 8, 64), device="cuda", dtype=torch.float16)
+    k_cache = torch.randn((1, 1, 4, 64), device="cuda", dtype=torch.float16)
     v_cache = torch.randn_like(k_cache)
     block_tables = torch.tensor([[0]], device="cuda", dtype=torch.int32)
-    seq_lens = torch.tensor([8], device="cuda", dtype=torch.int32)
+    seq_lens = torch.tensor([4], device="cuda", dtype=torch.int32)
 
-    with pytest.raises(ValueError, match="block_size"):
-        paged_decode_attention(q, k_cache, v_cache, block_tables, seq_lens, block_size=8)
+    with pytest.raises(ValueError, match="block_size 8, 16, or 32"):
+        paged_decode_attention(q, k_cache, v_cache, block_tables, seq_lens, block_size=4)
+
+
+@pytest.mark.parametrize("num_warps", [0, 3, 16, True])
+def test_paged_decode_attention_rejects_invalid_num_warps(num_warps):
+    q = torch.randn((1, 1, 64), device="cuda", dtype=torch.float16)
+    k_cache = torch.randn((1, 1, 16, 64), device="cuda", dtype=torch.float16)
+    v_cache = torch.randn_like(k_cache)
+    block_tables = torch.tensor([[0]], device="cuda", dtype=torch.int32)
+    seq_lens = torch.tensor([16], device="cuda", dtype=torch.int32)
+
+    with pytest.raises(ValueError, match="num_warps"):
+        paged_decode_attention(
+            q,
+            k_cache,
+            v_cache,
+            block_tables,
+            seq_lens,
+            num_warps=num_warps,
+        )

@@ -73,7 +73,7 @@ def _common_metadata(torch, args, dtype_name, impl, case_name, sweep, shape, seq
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
         "benchmark": "week8_paged_decode",
-        "experiment": "num_warps",
+        "experiment": getattr(args, "experiment", "num_warps"),
         "case": case_name,
         "sweep": sweep,
         "dtype": dtype_name,
@@ -252,7 +252,7 @@ def parse_args():
     parser.add_argument("--num-kv-heads", type=int, default=8)
     parser.add_argument("--batch-context", type=int, default=1024)
     parser.add_argument("--context-batch", type=int, default=16)
-    parser.add_argument("--block-size", type=int, choices=[16], default=16)
+    parser.add_argument("--block-size", type=int, choices=[8, 16, 32], default=16)
     parser.add_argument("--num-warps", type=int, nargs="+", default=[2, 4, 8])
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeat", type=int, default=30)

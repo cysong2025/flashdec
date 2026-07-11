@@ -105,7 +105,7 @@ def _paged_decode_attention_kernel(
     )
 
 
-def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size):
+def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size, num_warps):
     if q.device.type != "cuda" or k_cache.device.type != "cuda" or v_cache.device.type != "cuda":
         raise ValueError("q, k_cache, and v_cache must be CUDA tensors")
     if block_tables.device.type != "cuda" or seq_lens.device.type != "cuda":
@@ -143,6 +143,10 @@ def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size):
         raise ValueError("k_cache and v_cache must have the same num_blocks")
     if num_blocks <= 0:
         raise ValueError("num_blocks must be positive")
+    if num_seqs <= 0:
+        raise ValueError("num_seqs must be positive")
+    if num_q_heads <= 0 or num_kv_heads <= 0:
+        raise ValueError("num_q_heads and num_kv_heads must be positive")
     if block_tables.shape[1] <= 0:
         raise ValueError("max_blocks_per_seq must be positive")
     if v_num_kv_heads != num_kv_heads:
@@ -151,14 +155,16 @@ def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size):
         raise ValueError("k_cache and v_cache must have the same block_size")
     if cache_block_size != block_size:
         raise ValueError("block_size must match k_cache/v_cache shape")
-    if block_size != 16:
-        raise ValueError("paged_decode_attention v1 currently supports block_size 16")
+    if block_size not in (8, 16, 32):
+        raise ValueError("paged_decode_attention currently supports block_size 8, 16, or 32")
     if k_head_dim != head_dim or v_head_dim != head_dim:
         raise ValueError("q, k_cache, and v_cache must have the same head_dim")
     if head_dim not in (64, 128):
         raise ValueError("paged_decode_attention currently supports head_dim 64 or 128")
     if num_q_heads % num_kv_heads != 0:
         raise ValueError("num_q_heads must be divisible by num_kv_heads")
+    if isinstance(num_warps, bool) or not isinstance(num_warps, int) or num_warps not in (1, 2, 4, 8):
+        raise ValueError("num_warps must be one of 1, 2, 4, or 8")
 
 
 def paged_decode_attention(
@@ -180,10 +186,11 @@ def paged_decode_attention(
     - seq_lens: [num_seqs]
     - return: [num_seqs, num_q_heads, head_dim]
 
-    Week 8 default config: num_warps=2 based on RTX 5070 sweep.
+    Supported block sizes are 8, 16, and 32. Week 8 default config:
+    block_size=16 and num_warps=2 based on the current RTX 5070 sweep.
     """
     block_size = int(block_size)
-    _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size)
+    _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size, num_warps)
 
     q_contig = q.contiguous()
     k_contig = k_cache.contiguous()

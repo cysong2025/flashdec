@@ -225,5 +225,51 @@ Week 8 后半段或 Week 9 需要对三类场景做 profiling：
 
 当前状态：
 
-- profiler 脚本待补。
-- 先用 Week 8 CSV 指标决定 profiling 的重点 shape。
+- profiler 脚本和 small / medium / large 三场景 RTX 5070 基线已完成，结果见 `docs/performance_report.md`。
+- Nsight 硬件计数因当前 RTX 5070 WSL 环境缺少 `ncu` / `nsys` 仍待补充。
+
+## E4：block size 8/16/32 对比
+
+### 背景
+
+当前实测默认值为 `block_size=16`。block size 会同时影响 block table 项数、最后一个 block 的无效 token、单次循环的 K/V 读取工作量和编译期张量形状，因此不能只凭直觉选择。
+
+### 实验命令
+
+快速 correctness 与性能冒烟：
+
+```bash
+python benchmarks/run_block_size_sweep.py --quick --output benchmarks/results/week8_paged_decode_block_size_quick.csv
+```
+
+完整 batch/context sweep：
+
+```bash
+python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_paged_decode_block_size.csv
+```
+
+默认固定：
+
+- `block_size=8/16/32`
+- `num_warps=2`
+- `head_dim=128`
+- `num_q_heads=32`
+- `num_kv_heads=8`
+- dtype：FP16/BF16
+
+### 结果
+
+- 代码、correctness 参数矩阵和 benchmark 入口已完成。
+- RTX 5070 quick/full sweep 尚未运行，不能据此修改当前 `block_size=16` 默认值。
+
+### 上板后要记录
+
+- 每个 dtype/case 的 p50、p90、mean latency。
+- 每个 block size 的有效带宽与最优次数。
+- 短 context 是否更偏好较小 block，长 context 是否更偏好较大 block。
+- `block_size=8/32` correctness 是否覆盖 FP16/BF16、head_dim 64/128 和 GQA/MQA。
+
+### 下一步
+
+- 根据实测决定保留固定默认值，还是按 context/shape 选择 block size。
+- block size 实验完成后推进 KV layout 对比，形成第三个独立优化实验。

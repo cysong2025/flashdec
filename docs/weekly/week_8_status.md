@@ -65,6 +65,8 @@
 - RTX 5070 上完成 Week 8 quick `num_warps` sweep。
 - RTX 5070 上完成 Week 8 full `num_warps` sweep。
 - paged decode 默认 `num_warps` 已从 4 调整为 2。
+- paged decode kernel、wrapper 和 correctness 参数矩阵已扩展到 `block_size=8/16/32`。
+- 新增 `benchmarks/run_block_size_sweep.py`，用于固定 `num_warps=2` 对比三种 block size。
 
 ## 当前实现范围
 
@@ -80,7 +82,7 @@
 
 暂不支持：
 
-- `block_size=8/32` 的实际 kernel benchmark。
+- `block_size=8/32` 的 RTX 5070 correctness 与实际 benchmark 结果。
 - KV cache physical layout 对比。
 - Nsight / PyTorch profiler 自动摘要。
 - 根据 shape 自动选择 kernel config。
@@ -104,6 +106,18 @@ python3 -m pytest -q tests/test_perf_metrics.py tests/test_benchmark_helpers.py
 ```
 
 原因：当前 macOS Python 环境没有安装 `pytest`。
+
+## Block Size 实验待上板
+
+代码与实验入口已完成，但以下结果尚未在 RTX 5070 上验证：
+
+```bash
+pytest -vv tests/test_paged_decode.py tests/test_public_api.py
+python benchmarks/run_block_size_sweep.py --quick --output benchmarks/results/week8_paged_decode_block_size_quick.csv
+python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_paged_decode_block_size.csv
+```
+
+上板后需要记录三种 block size 的 correctness、p50/p90/mean latency、有效带宽和各 shape 最优次数。在结果完成前继续保留 `block_size=16` 作为实测默认值。
 
 ## RTX 5070 验证记录（2026-06-28）
 
