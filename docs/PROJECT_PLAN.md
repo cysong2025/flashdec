@@ -6,7 +6,7 @@
 >
 > 每周投入：12-18 小时
 >
-> 项目定位：面向 AI Infra / 高性能算子岗位的公开 GitHub 作品集项目。
+> 项目定位：公开、可复现的 AI Infra / 高性能算子工程项目。
 
 ## 1. 项目目标
 
@@ -41,8 +41,8 @@ FlashDec 的目标是围绕 **LLM decode 阶段的 PagedAttention 与 Paged KV C
 - benchmark 脚本：输出 CSV / Markdown 表格。
 - profiling 报告：解释主要瓶颈和优化效果。
 - 一个小型 CUDA extension，优先做 fused RoPE + KV append。
-- 中文 README、中文设计文档、中文性能报告、中文面试问答。
-- 中英文简历 bullet。
+- 中文 README、中文设计文档、中文性能报告和兼容性说明。
+- 可复现的安装、测试、benchmark 与 profiling 命令。
 
 ## 3. 成功标准
 
@@ -55,13 +55,13 @@ FlashDec 的目标是围绕 **LLM decode 阶段的 PagedAttention 与 Paged KV C
 - benchmark 至少明显快于 naive PyTorch reference。
 - README 能清楚解释 decode attention 为什么偏 memory-bound，以及 paged KV cache 解决什么问题。
 
-优秀作品集版本：
+完整工程版本：
 
 - 支持 GQA/MQA。
 - 性能报告包含 latency/token、有效内存带宽、shape sweep。
 - profiling 能解释至少 3 个有效优化和 1 个无效优化。
 - 有一个能构建、能测试、能 benchmark 的 CUDA extension。
-- 面试时能从算法、kernel、内存布局、工程验证四层讲清楚。
+- 文档能从算法、kernel、内存布局和工程验证四层解释实现。
 
 进阶版本：
 
@@ -158,7 +158,7 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 - 有 profiling 报告。
 - 默认 kernel 参数来自实测结果。
 
-### 里程碑 E：公开作品集
+### 里程碑 E：公开发布
 
 截止：2026-09-13
 
@@ -166,7 +166,7 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 
 - 中文 README、中文设计文档、中文性能报告完整。
 - benchmark 可复现。
-- 简历与面试材料准备好。
+- 安装、测试、benchmark 和已知限制可以由新环境复现。
 
 ## 6. 每周计划
 
@@ -533,7 +533,7 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 
 目标：
 
-- 把性能工作变成面试能讲的证据。
+- 用可复现数据解释 kernel 的性能瓶颈。
 
 实验任务：
 
@@ -625,7 +625,7 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 
 目标：
 
-- 让面试官或同学能快速运行、理解、复现实验。
+- 让新读者能快速运行、理解并复现实验。
 
 任务：
 
@@ -662,41 +662,30 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 
 ### Week 12：2026-09-07 至 2026-09-13
 
-主题：发布、简历、面试准备。
+主题：发布与复现验证。
 
 目标：
 
-- 把项目转化为求职信号。
+- 将当前工程固化为可安装、可测试、可 benchmark 的 `v0.1.0`。
 
 任务：
 
 - 打 `v0.1.0` release tag。
 - 固化最终结果表和已知限制。
-- 写中英文简历 bullet。
-- 写面试问答：
-  - decode attention 为什么重要。
-  - KV cache 为什么是推理瓶颈。
-  - Paged KV Cache 解决什么内存问题。
-  - online softmax 如何保证数值稳定。
-  - GQA/MQA 如何映射 q heads 到 kv heads。
-  - kernel 主要时间花在哪里。
-  - 下一步优化什么。
-- 准备三种讲法：
-  - 3 分钟。
-  - 8 分钟。
-  - 20 分钟。
+- 在干净环境复跑安装、correctness、quick benchmark。
+- 检查公共 API、类型与错误输入行为。
+- 整理从 reference、Triton kernel、Paged KV Cache 到 CUDA extension 的技术文档。
 
 交付物：
 
-- `docs/resume_bullets.md`
-- `docs/interview_qa.md`
 - `CHANGELOG.md`
+- `docs/reproducibility.md`
 - GitHub release `v0.1.0`
 
 验收标准：
 
-- 项目可以直接写进简历。
-- 你能从系统、算法、kernel、性能实验四个层次回答问题。
+- 新环境能按 README 跑通至少一个 correctness test 和 quick benchmark。
+- 系统、算法、kernel 与性能实验的结论都能追溯到代码和数据。
 
 ## 7. 每周时间分配
 
@@ -708,7 +697,7 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 - 1-2 小时：benchmark / profiling。
 - 1 小时：周总结和文档。
 
-不要跳过文档时间。这个项目最终能不能写进简历，很大程度取决于证据是否清楚。
+不要跳过文档时间。项目结论需要能追溯到代码、测试命令和 benchmark 数据。
 
 ## 8. 每周复盘模板
 
@@ -768,7 +757,7 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 
 - 主要对比 naive PyTorch 和自己的 dense baseline。
 - FlashInfer/vLLM 用作设计参考和可选对比。
-- 简历强调从零实现、正确性、benchmark、profiling 和优化过程，不夸张宣称超过工业库。
+- 报告如实记录从零实现、正确性、benchmark、profiling 和优化过程，不夸张宣称超过工业库。
 
 ### 风险：公司保密边界
 
@@ -789,20 +778,14 @@ block_tables = cache.append(layer_idx=0, request_ids=request_ids, k=k, v=v)
 7. Paged KV Cache、block table。
 8. profiling 与 memory bandwidth。
 9. PyTorch C++/CUDA custom operators。
-10. README、性能报告、面试表达。
+10. README、性能报告与复现说明。
 
 具体链接见 `docs/CHINESE_RESOURCES.md`。
 
-## 11. 最终简历目标
+## 11. 最终完成定义
 
-中文 bullet：
-
-```text
-基于 PyTorch/Triton/CUDA 从零实现面向 LLM decode 阶段的 PagedAttention 算子与 Paged KV Cache 运行时，支持 variable-length batch、GQA/MQA、FP16/BF16 与 head_dim 64/128；构建 correctness/benchmark/profiling 框架，在 RTX 5070 上完成延迟、带宽与 shape sweep 分析，并基于 block layout、访存合并与 Triton autotune 进行性能优化。
-```
-
-英文 bullet：
-
-```text
-Built FlashDec, a PyTorch/Triton/CUDA LLM decode kernel project implementing PagedAttention-style decode and paged KV cache runtime with variable-length batching, GQA/MQA, FP16/BF16, and head_dim 64/128; developed correctness, benchmark, and profiling infrastructure on RTX 5070 and optimized kernel performance through block layout, coalesced memory access, and Triton autotuning.
-```
+- 公共 API、reference、Triton kernel 和 Paged KV Cache 语义保持一致。
+- FP16/BF16、MHA/GQA/MQA、变长 batch 与主要错误路径有 correctness 覆盖。
+- 默认配置由完整 shape sweep 决定，并在文档中保留原始命令和结果摘要。
+- CUDA extension 能构建、测试并与 PyTorch reference 对齐。
+- README、设计、性能、兼容性和复现文档互相一致。

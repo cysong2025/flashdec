@@ -1,8 +1,8 @@
 # FlashDec
 
-FlashDec 是一个 12 周 AI Infra 作品集项目，主题是 **LLM decode 阶段的 PagedAttention 与 Paged KV Cache 高性能算子**。
+FlashDec 是一个 12 周 AI Infra 工程项目，主题是 **LLM decode 阶段的 PagedAttention 与 Paged KV Cache 高性能算子**。
 
-这个项目的目标不是做一个完整推理服务框架，而是做一个能在简历和面试里讲深的公开项目：
+这个项目的目标不是做一个完整推理服务框架，而是完成一个小而深、公开可复现的 GPU 算子工程：
 
 - 用 PyTorch 写清楚、可靠的 reference 实现。
 - 用 Triton 实现 dense decode attention 和 paged decode attention。
@@ -12,11 +12,12 @@ FlashDec 是一个 12 周 AI Infra 作品集项目，主题是 **LLM decode 阶�
 
 ## 当前状态
 
-Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成性能指标 correctness 与完整 `num_warps` sweep，并将 paged decode 默认配置调整为 `num_warps=2`。Week 9 已完成 PyTorch profiler 与 Chrome trace 基线记录，Nsight 硬件计数因当前环境缺少 `ncu`/`nsys` 暂未补充。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验，当前通用配置为 `token-major + block_size=32 + num_warps=2`。Week 9 已完成 PyTorch profiler 与 Chrome trace 基线记录，Nsight 硬件计数因当前环境缺少 `ncu`/`nsys` 暂未补充。
 
 主要文档：
 
 - [12 周详细执行计划](docs/PROJECT_PLAN.md)
+- [接下来工作计划](docs/NEXT_STEPS.md)
 - [准备清单](docs/PREP_CHECKLIST.md)
 - [中文学习资料导航](docs/CHINESE_RESOURCES.md)
 - [环境记录](docs/environment.md)
@@ -70,7 +71,7 @@ out = flashdec.decode(
 - Week 5-7：Paged KV Cache 与 paged decode Triton kernel。
 - Week 8-9：性能优化、profiling、对比实验。
 - Week 10：小型 CUDA extension。
-- Week 11-12：README、设计文档、benchmark 报告、简历 bullet、面试材料。
+- Week 11-12：README、设计文档、benchmark 报告、发布与复现验证。
 
 ## 中文资料入口
 

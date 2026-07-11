@@ -206,9 +206,8 @@ python benchmarks/run_microbench.py --op all --dtype float16
 3. `float16` 是否正常；如果 BF16 失败，先不阻塞 Week 1。
 4. shape 太大导致编译或资源问题，先降低 `--rows` / `--cols`。
 
-## 10. 本周面试表达
+## 10. 本周工程总结
 
-1. 我用 Triton 实现了 vector add、row-wise softmax 和 RMSNorm，覆盖自定义 GPU kernel 的基本编程模型。
-2. 我为每个 kernel 写了 PyTorch reference 和 correctness tests，避免只看运行不看正确性。
-3. 我建立了 CUDA event benchmark helper，后续 attention kernel 会沿用同一套计时和 CSV 输出方式。
-
+1. Triton vector add、row-wise softmax 和 RMSNorm 覆盖了自定义 GPU kernel 的基本编程模型。
+2. 每个 kernel 都配有 PyTorch reference 和 correctness tests，保证结果可验证。
+3. CUDA event benchmark helper 为后续 attention kernel 提供统一的计时和 CSV 输出方式。

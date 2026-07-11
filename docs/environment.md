@@ -142,7 +142,7 @@ git diff --check
 python3 -m compileall flashdec tests benchmarks
 ```
 
-提交时必须显式列出工程文件，不使用 `git add .`。这样可以避免把简历、PDF、生成脚本、`output/`、`tmp/` 或其他在途文件混入 kernel 提交。
+提交时必须显式列出工程文件，不使用 `git add .`。这样可以避免把本地生成物、临时文件或其他在途文件混入 kernel 提交。
 
 ```bash
 git add <本次 kernel、test、benchmark、docs 文件>
