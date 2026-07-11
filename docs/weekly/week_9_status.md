@@ -64,6 +64,8 @@ profiling 与对比。
 - RTX 5070 上完成 small / medium / large 三场景 PyTorch profiler。
 - RTX 5070 上完成 medium / large Chrome trace 和 CUDA event latency 记录。
 - 当前 RTX 5070 WSL 环境缺少 `ncu` / `nsys`，Nsight 硬件计数暂未补充。
+- `profile_paged_decode.py` 已扩展为显式记录 KV layout、支持 FP16/BF16 联合运行，并让 `--case all` 覆盖 small / medium / large / large-batch。
+- 新增 CPU 可运行的 profiler 参数选择与 summary 格式测试：`tests/test_profile_paged_decode.py`。
 
 ## 当前环境限制
 
@@ -77,7 +79,49 @@ RTX 5070 WSL 环境当前未安装 `ncu` / `nsys`，因此暂时不能补 Nsight
 python3 -m compileall flashdec tests benchmarks
 ```
 
+本轮 profiler 扩展已通过 compileall、`--help` 和纯 Python 逻辑冒烟检查。本机 Python 未安装 pytest，因此新增测试待 WSL 执行。
+
 ## 需要在 RTX 5070 开发板完成
+
+最终配置 correctness：
+
+```bash
+python -m pytest -vv \
+  tests/test_profile_paged_decode.py \
+  tests/test_paged_cache.py \
+  tests/test_paged_decode.py \
+  tests/test_public_api.py
+```
+
+最终配置 smoke：
+
+```bash
+python benchmarks/profile_paged_decode.py \
+  --case small \
+  --dtype both \
+  --kv-layout token_major \
+  --block-size 32 \
+  --num-warps 2 \
+  --repeat 3 \
+  --output-dir benchmarks/profiles/week9_final_default_smoke \
+  --summary-output benchmarks/results/week9_final_default_smoke.md
+```
+
+最终配置 full profiling：
+
+```bash
+python benchmarks/profile_paged_decode.py \
+  --case all \
+  --dtype both \
+  --kv-layout token_major \
+  --block-size 32 \
+  --num-warps 2 \
+  --repeat 10 \
+  --output-dir benchmarks/profiles/week9_final_default \
+  --summary-output benchmarks/results/week9_final_default_summary.md
+```
+
+上述三项当前均待 RTX 5070 执行；下方记录是早期 baseline，保留用于 before/after 对比。
 
 正确性回归：
 

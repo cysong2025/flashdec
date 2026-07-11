@@ -19,7 +19,7 @@
 
 任务：
 
-1. 在 profiler 输出中显式记录 `kv_layout=token_major`。
+1. 在 profiler 输出中显式记录 `kv_layout=token_major`。（代码已完成，待 RTX 5070 验证。）
 2. 用 `block_size=32, num_warps=2` 重跑 FP16/BF16：
    - small：batch=1, context=128。
    - medium：batch=16, context=1024。
@@ -88,4 +88,40 @@
 
 ## 当前立即执行
 
-先完成阶段 1：为 `profile_paged_decode.py` 补充显式 layout 元数据，然后在 RTX 5070 上用最终默认配置重跑四个代表场景。阶段 1 完成前不开始新的 kernel 优化，避免在过期基线上做判断。
+`profile_paged_decode.py` 已完成以下扩展：
+
+- `--dtype both` 一次运行 FP16/BF16。
+- `--kv-layout token_major|dim_major` 显式控制并记录 layout。
+- `--case all` 覆盖 small、medium、large、large-batch。
+- summary 每行记录 shape、dtype、layout、block size、num warps、GPU、PyTorch、CUDA 和 profile 路径。
+- 输出文件名包含 layout、block size 和 num warps，避免不同配置互相覆盖。
+
+下一步在 RTX 5070 完成 correctness、smoke 和 full profiling。阶段 1 验证完成前不开始新的 kernel 优化，避免在过期基线上做判断。
+
+```bash
+python -m pytest -vv \
+  tests/test_profile_paged_decode.py \
+  tests/test_paged_cache.py \
+  tests/test_paged_decode.py \
+  tests/test_public_api.py
+
+python benchmarks/profile_paged_decode.py \
+  --case small \
+  --dtype both \
+  --kv-layout token_major \
+  --block-size 32 \
+  --num-warps 2 \
+  --repeat 3 \
+  --output-dir benchmarks/profiles/week9_final_default_smoke \
+  --summary-output benchmarks/results/week9_final_default_smoke.md
+
+python benchmarks/profile_paged_decode.py \
+  --case all \
+  --dtype both \
+  --kv-layout token_major \
+  --block-size 32 \
+  --num-warps 2 \
+  --repeat 10 \
+  --output-dir benchmarks/profiles/week9_final_default \
+  --summary-output benchmarks/results/week9_final_default_summary.md
+```

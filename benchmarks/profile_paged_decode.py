@@ -40,9 +40,15 @@ def _dtype_name(dtype):
     return str(dtype).replace("torch.", "")
 
 
+def _dtype_names(name):
+    if name == "both":
+        return ["float16", "bfloat16"]
+    return [name]
+
+
 def _selected_cases(case):
     if case == "all":
-        return [CASES["small"], CASES["medium"], CASES["large"]]
+        return list(CASES.values())
     return [CASES[case]]
 
 
@@ -87,7 +93,12 @@ def _make_inputs(torch, args, shape, dtype, case_index):
     q = torch.randn((num_seqs, num_q_heads, head_dim), device="cuda", dtype=dtype)
     block_tables = cache.block_tables(request_ids)
     seq_lens = cache.seq_lens_tensor(request_ids)
-    return q, cache.k_cache[0], cache.v_cache[0], block_tables, seq_lens, cache
+    k_cache = cache.k_cache[0]
+    v_cache = cache.v_cache[0]
+    if args.kv_layout == "dim_major":
+        k_cache = k_cache.permute(0, 1, 3, 2).contiguous()
+        v_cache = v_cache.permute(0, 1, 3, 2).contiguous()
+    return q, k_cache, v_cache, block_tables, seq_lens, cache
 
 
 def _estimate(shape, dtype_name, seq_lens, block_tables, block_size):
@@ -106,7 +117,17 @@ def _estimate(shape, dtype_name, seq_lens, block_tables, block_size):
     )
 
 
-def _validate(torch, q, k_cache, v_cache, block_tables, seq_lens, block_size, num_warps):
+def _validate(
+    torch,
+    q,
+    k_cache,
+    v_cache,
+    block_tables,
+    seq_lens,
+    block_size,
+    num_warps,
+    kv_layout,
+):
     from flashdec.kernels.paged_decode import paged_decode_attention
     from flashdec.paged_reference import paged_decode_attention_ref
 
@@ -118,8 +139,16 @@ def _validate(torch, q, k_cache, v_cache, block_tables, seq_lens, block_size, nu
         seq_lens,
         block_size=block_size,
         num_warps=num_warps,
+        kv_layout=kv_layout,
     )
-    expected = paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens)
+    expected = paged_decode_attention_ref(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+        kv_layout=kv_layout,
+    )
     if q.dtype == torch.bfloat16:
         torch.testing.assert_close(actual, expected, rtol=3e-2, atol=3e-2)
     else:
@@ -164,6 +193,7 @@ def _metadata(torch, args, case_name, shape, dtype_name, impl, seq_lens, block_t
         "min_seq_len": int(seq_lens.min().item()),
         "max_actual_seq_len": int(seq_lens.max().item()),
         "block_size": args.block_size,
+        "kv_layout": args.kv_layout,
         "max_blocks_per_seq": block_tables.shape[1],
         "used_blocks": cache.num_used_blocks,
         "num_warps": args.num_warps,
@@ -217,9 +247,17 @@ def _profile_one_impl(torch, args, case_name, shape, dtype_name, tensors, cache,
             seq_lens,
             block_size=args.block_size,
             num_warps=args.num_warps,
+            kv_layout=args.kv_layout,
         )
     elif impl == "ref":
-        fn = lambda: paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens)
+        fn = lambda: paged_decode_attention_ref(
+            q,
+            k_cache,
+            v_cache,
+            block_tables,
+            seq_lens,
+            kv_layout=args.kv_layout,
+        )
     else:
         raise ValueError(f"unsupported impl: {impl}")
 
@@ -233,7 +271,7 @@ def _profile_one_impl(torch, args, case_name, shape, dtype_name, tensors, cache,
         metadata=metadata,
     )
     metric_metadata = paged_decode_metric_metadata(estimate, mean_ms=latency.mean_ms, p50_ms=latency.p50_ms)
-    label = f"paged_decode/{impl}/{case_name}/{dtype_name}"
+    label = f"paged_decode/{impl}/{case_name}/{dtype_name}/{args.kv_layout}"
     prof = None
     if args.skip_torch_profiler:
         table = "Skipped by --skip-torch-profiler. Use external profilers such as ncu/nsys for this run."
@@ -241,7 +279,10 @@ def _profile_one_impl(torch, args, case_name, shape, dtype_name, tensors, cache,
         prof = _profile_callable(torch, args, label, fn)
         table = prof.key_averages().table(sort_by="cuda_time_total", row_limit=args.row_limit)
 
-    slug = f"{case_name}_{dtype_name}_{impl}_w{args.num_warps}"
+    slug = (
+        f"{case_name}_{dtype_name}_{args.kv_layout}_{impl}"
+        f"_b{args.block_size}_w{args.num_warps}"
+    )
     output_path = Path(args.output_dir) / f"{slug}.txt"
     trace_path = None
     if args.export_trace:
@@ -261,12 +302,19 @@ def _profile_one_impl(torch, args, case_name, shape, dtype_name, tensors, cache,
     summary_rows.append(
         {
             "case": case_name,
+            "shape": "x".join(str(value) for value in shape),
             "impl": impl,
             "dtype": dtype_name,
+            "kv_layout": args.kv_layout,
+            "block_size": args.block_size,
+            "num_warps": args.num_warps,
             "p50_ms": latency_row["p50_ms"],
             "p90_ms": latency_row["p90_ms"],
             "mean_ms": latency_row["mean_ms"],
             "effective_total_gbps_p50": metric_metadata["effective_total_gbps_p50"],
+            "device": metadata["device"],
+            "torch": metadata["torch"],
+            "cuda": metadata["cuda"],
             "profile": str(output_path),
         }
     )
@@ -276,12 +324,14 @@ def _write_summary(path, rows):
     lines = [
         "# Week 9 Paged Decode Profiling Summary",
         "",
-        "| case | impl | dtype | p50_ms | p90_ms | mean_ms | effective_total_gbps_p50 | profile |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
+        "Shape order: `num_seqs x num_q_heads x num_kv_heads x head_dim x max_seq_len`.",
+        "",
+        "| case | shape | impl | dtype | kv_layout | block_size | num_warps | p50_ms | p90_ms | mean_ms | effective_total_gbps_p50 | device | torch | cuda | profile |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |",
     ]
     for row in rows:
         lines.append(
-            "| {case} | {impl} | {dtype} | {p50_ms} | {p90_ms} | {mean_ms} | {effective_total_gbps_p50} | {profile} |".format(
+            "| {case} | {shape} | {impl} | {dtype} | {kv_layout} | {block_size} | {num_warps} | {p50_ms} | {p90_ms} | {mean_ms} | {effective_total_gbps_p50} | {device} | {torch} | {cuda} | {profile} |".format(
                 **row
             )
         )
@@ -302,7 +352,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", choices=[*CASES.keys(), "all"], default="all")
     parser.add_argument("--impl", choices=["triton", "ref", "both"], default="triton")
-    parser.add_argument("--dtype", choices=["float16", "bfloat16"], default="float16")
+    parser.add_argument("--dtype", choices=["float16", "bfloat16", "both"], default="float16")
+    parser.add_argument(
+        "--kv-layout",
+        choices=["token_major", "dim_major"],
+        default="token_major",
+    )
     parser.add_argument("--block-size", type=int, choices=[8, 16, 32], default=32)
     parser.add_argument("--num-warps", type=int, default=2)
     parser.add_argument("--warmup", type=int, default=5)
@@ -326,28 +381,50 @@ def main():
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required for paged decode profiling")
 
-    dtype = _dtype_from_name(torch, args.dtype)
-    if dtype == torch.bfloat16 and not torch.cuda.is_bf16_supported():
-        raise SystemExit("bfloat16 was requested, but this CUDA device does not report BF16 support")
-
     summary_rows = []
-    for case_index, (case_name, shape) in enumerate(_selected_cases(args.case)):
-        q, k_cache, v_cache, block_tables, seq_lens, cache = _make_inputs(torch, args, shape, dtype, case_index)
-        if not args.skip_validate:
-            _validate(torch, q, k_cache, v_cache, block_tables, seq_lens, args.block_size, args.num_warps)
-        tensors = (q, k_cache, v_cache, block_tables, seq_lens)
-        for impl in _impls(args.impl):
-            _profile_one_impl(
+    for dtype_name in _dtype_names(args.dtype):
+        dtype = _dtype_from_name(torch, dtype_name)
+        if dtype == torch.bfloat16 and not torch.cuda.is_bf16_supported():
+            if args.dtype == "bfloat16":
+                raise SystemExit(
+                    "bfloat16 was requested, but this CUDA device does not report BF16 support"
+                )
+            print("Skipping bfloat16 because torch.cuda.is_bf16_supported() is false.")
+            continue
+
+        for case_index, (case_name, shape) in enumerate(_selected_cases(args.case)):
+            q, k_cache, v_cache, block_tables, seq_lens, cache = _make_inputs(
                 torch,
                 args,
-                case_name,
                 shape,
-                _dtype_name(dtype),
-                tensors,
-                cache,
-                impl,
-                summary_rows,
+                dtype,
+                case_index,
             )
+            if not args.skip_validate:
+                _validate(
+                    torch,
+                    q,
+                    k_cache,
+                    v_cache,
+                    block_tables,
+                    seq_lens,
+                    args.block_size,
+                    args.num_warps,
+                    args.kv_layout,
+                )
+            tensors = (q, k_cache, v_cache, block_tables, seq_lens)
+            for impl in _impls(args.impl):
+                _profile_one_impl(
+                    torch,
+                    args,
+                    case_name,
+                    shape,
+                    _dtype_name(dtype),
+                    tensors,
+                    cache,
+                    impl,
+                    summary_rows,
+                )
 
     summary_path = Path(args.summary_output)
     _write_summary(summary_path, summary_rows)
