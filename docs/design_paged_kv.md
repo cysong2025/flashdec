@@ -1,6 +1,6 @@
 # Paged KV Cache 设计说明
 
-本文记录 Week 5 的 Paged KV Cache 数据结构和 paged PyTorch reference。它是 Week 6 paged decode Triton kernel 的正确性基准。
+本文记录 Paged KV Cache 的数据结构、paged PyTorch reference，以及 runtime v2 的 request 生命周期和 physical block allocator。它既是 paged decode Triton kernel 的正确性基准，也是后续 DecodeEngine 的内存管理基础。
 
 ## 1. 设计目标
 
@@ -23,7 +23,7 @@ k_cache / v_cache:
 [num_layers, max_blocks, num_kv_heads, block_size, head_dim]
 ```
 
-Week 5 当前验证单 layer 路径，保留 `num_layers` 维度是为了后续扩展到多层 KV cache。
+storage 保留 `num_layers` 维度作为未来扩展点，但 runtime v2 为避免错误共享 seq_len/block ownership，当前显式要求 `num_layers=1`。
 
 paged reference 使用单层 cache：
 
@@ -128,6 +128,16 @@ seq_lens = cache.seq_lens_tensor([101, 202])
 dense_k, dense_v, dense_seq_lens = cache.to_dense(layer_idx=0, request_ids=[101, 202])
 ```
 
+decode 完成后结束或取消 request，并查询 allocator：
+
+```python
+released = cache.finish_request(request_id=101)
+released = cache.cancel_request(request_id=202)
+state = cache.request_state(101)
+metrics = cache.metrics()
+cache.validate_invariants()
+```
+
 ## 5. Paged Reference 语义
 
 `paged_decode_attention_ref` 的输入：
@@ -179,22 +189,51 @@ PagedKVCache append tokens
 
 ## 7. 当前限制
 
-- 当前只实现 append，不实现 free/reuse request。
-- 当前 Week 5 tests 验证单 layer 路径。
+- runtime v2 当前只支持 `num_layers=1`；构造多 layer cache 会显式报错，避免错误共享 seq_len/block ownership。
+- finished/cancelled request id 不能重新激活；终态记录当前保留用于状态查询和 lifecycle 计数。
+- 释放 physical block 时不会清零 K/V。正确性依赖 block ownership、block table 和 seq_len；新 request 的有效 token 不会读取旧尾部数据。
+- 当前 allocator 和 request scheduler 位于 Python 层，目标是先定义清楚语义，不代表最终高吞吐 serving 实现。
 - paged Triton kernel 已在 RTX 5070 验证 `head_dim=64/128`、FP16/BF16 和 `block_size=8/16/32`；当前通用配置为 block32。
 - 当前 reference 会显式 gather logical K/V，适合作 correctness，不适合当性能实现。
 
-## 8. Runtime v2 方向
+## 8. Runtime v2 状态机与 allocator
 
-PagedKVCache v1 只验证了 append 和 block table 语义。为了支撑单 GPU decode runtime，v2 必须增加：
+PagedKVCache v1 只验证 append 和 block table；v2 增加以下状态机：
 
-- `finish_request(request_id)`：释放请求持有的全部 physical blocks。
-- `cancel_request(request_id)`：与 finish 使用相同回收语义，但单独记录取消原因/计数。
-- free-list reuse：新请求优先复用已释放 block，并验证旧数据不会影响有效 token。
-- request state query：查询 seq_len、block ids 和状态。
-- cache metrics：used/free blocks、利用率、内部碎片、allocation/free/reuse 计数。
-- transactional append：批量 append 容量不足时不得只更新部分 request。
-- 单 layer runtime state：`v0.1.0` 先完整验证单 layer request 生命周期；storage 保留 layer 维度，多 layer execution 后续再扩展。
+```text
+add/implicit append admission -> active -> finished
+                                active -> cancelled
+```
+
+终态转换是单向的。finish/cancel 会释放全部 physical blocks、清空 request 的 block ownership，但保留历史 `seq_len` 和终态供 `request_state()` 查询。终态 request 不允许 append、生成 block table、materialize dense cache 或重新激活。
+
+free list 的规则：
+
+- 初始包含 `[0, max_blocks)` 的全部 physical block。
+- 首次分配按 block id 顺序取出。
+- finish/cancel 释放的 block 放到 free list 前端，后续 request 优先复用。
+- 物理 K/V 不清零；新 request 只通过自己的 seq_len 和 block table 暴露有效 token。
+
+批量 append 的容量原子性：
+
+1. 完成 request id、shape、device、dtype 和终态检查。
+2. 对整个 batch 计算 `needed_new_blocks`。
+3. 若容量不足，直接报错；不创建新 request，不分配 block，也不增长已有 seq_len。
+4. 容量足够后才按 batch row 写入 K/V 并提交状态。
+
+`metrics()` 当前报告：
+
+- used/free/max blocks 与 block utilization。
+- active/reserved tokens 与 internal fragmentation。
+- allocation、fresh allocation、free、reuse、capacity failure 计数。
+- active、finished、cancelled request 计数。
+
+`validate_invariants()` 用于测试和 debug，验证：
+
+- owned blocks 和 free blocks 无交集、无重复。
+- 两者并集恰好覆盖整个 physical block pool。
+- active request 的 block 数和 seq_len 一致。
+- finished/cancelled request 不再持有 block。
 
 v2 correctness 不只比较 attention 输出，还要覆盖请求状态机：
 
@@ -204,6 +243,8 @@ add -> append -> cancel -> block reuse
 capacity exhausted -> append fails without partial mutation
 mixed active/finished requests -> block table and seq_lens remain correct
 ```
+
+上述代码已实现，当前等待 RTX 5070 focused/full correctness 验证。
 
 ## 9. Week 6 接口衔接
 

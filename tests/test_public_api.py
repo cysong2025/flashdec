@@ -4,10 +4,15 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("triton")
 
 import flashdec
+from flashdec.cache import PagedKVCache
 
 
 def test_decode_is_paged_decode_public_api():
     assert flashdec.decode is flashdec.paged_decode_attention
+
+
+def test_paged_kv_cache_is_public_api():
+    assert flashdec.PagedKVCache is PagedKVCache
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is required for Triton kernel tests")

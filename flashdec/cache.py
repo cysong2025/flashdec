@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Hashable
 
 
 @dataclass
 class _RequestState:
+    status: str = "active"
     seq_len: int = 0
     block_ids: list[int] = field(default_factory=list)
 
@@ -27,8 +29,14 @@ class PagedKVCache:
 
     Each request owns a logical list of physical block ids. Appending one token
     writes into the current tail block or allocates a new physical block when
-    the logical position crosses a block boundary.
+    the logical position crosses a block boundary. Finished or cancelled
+    requests release their blocks back to a deterministic free list that
+    prioritizes reuse.
     """
+
+    ACTIVE = "active"
+    FINISHED = "finished"
+    CANCELLED = "cancelled"
 
     def __init__(
         self,
@@ -55,6 +63,8 @@ class PagedKVCache:
         ]:
             if int(value) <= 0:
                 raise ValueError(f"{name} must be positive")
+        if int(num_layers) != 1:
+            raise ValueError("PagedKVCache runtime v2 currently supports num_layers=1")
 
         if not torch.empty((), dtype=dtype).is_floating_point():
             raise ValueError("dtype must be a floating point torch dtype")
@@ -77,14 +87,25 @@ class PagedKVCache:
         self.k_cache = torch.zeros(shape, device=self.device, dtype=self.dtype)
         self.device = self.k_cache.device
         self.v_cache = torch.zeros_like(self.k_cache)
-        self._free_blocks = list(range(self.max_blocks))
+        self._free_blocks = deque(range(self.max_blocks))
         self._requests: dict[Hashable, _RequestState] = {}
+        self._ever_allocated_blocks: set[int] = set()
+        self._allocation_count = 0
+        self._fresh_allocation_count = 0
+        self._free_count = 0
+        self._reuse_count = 0
+        self._capacity_failure_count = 0
 
     def add_request(self, request_id):
         """Register an empty request if it does not already exist."""
         self._check_request_id(request_id)
-        if request_id not in self._requests:
+        state = self._requests.get(request_id)
+        if state is None:
             self._requests[request_id] = _RequestState()
+        elif state.status != self.ACTIVE:
+            raise RuntimeError(
+                f"request_id {request_id!r} is {state.status} and cannot be reactivated"
+            )
         return self
 
     def append(self, layer_idx, request_ids, k, v):
@@ -127,10 +148,17 @@ class PagedKVCache:
 
         needed_new_blocks = 0
         for request_id in ids:
-            state = self._requests.get(request_id, _RequestState())
+            state = self._requests.get(request_id)
+            if state is not None and state.status != self.ACTIVE:
+                raise RuntimeError(
+                    f"request_id {request_id!r} is {state.status} and cannot accept append"
+                )
+            if state is None:
+                state = _RequestState()
             if state.seq_len % self.block_size == 0:
                 needed_new_blocks += 1
         if needed_new_blocks > len(self._free_blocks):
+            self._capacity_failure_count += 1
             raise RuntimeError("PagedKVCache is out of physical blocks")
 
         for row, request_id in enumerate(ids):
@@ -150,13 +178,84 @@ class PagedKVCache:
 
         return self.block_tables(ids)
 
+    def finish_request(self, request_id):
+        """Mark an active request finished and release all owned blocks."""
+        return self._close_request(request_id, self.FINISHED)
+
+    def cancel_request(self, request_id):
+        """Mark an active request cancelled and release all owned blocks."""
+        return self._close_request(request_id, self.CANCELLED)
+
+    def request_state(self, request_id):
+        """Return a detached snapshot of one request's lifecycle state."""
+        state = self._require_request(request_id)
+        return {
+            "request_id": request_id,
+            "status": state.status,
+            "seq_len": state.seq_len,
+            "block_ids": tuple(state.block_ids),
+        }
+
+    def metrics(self):
+        """Return block-pool, fragmentation, lifecycle, and reuse counters."""
+        states = list(self._requests.values())
+        active_states = [state for state in states if state.status == self.ACTIVE]
+        used_blocks = self.num_used_blocks
+        reserved_tokens = used_blocks * self.block_size
+        active_tokens = sum(state.seq_len for state in active_states)
+        fragmentation_tokens = reserved_tokens - active_tokens
+        return {
+            "max_blocks": self.max_blocks,
+            "used_blocks": used_blocks,
+            "free_blocks": self.num_free_blocks,
+            "block_utilization": used_blocks / self.max_blocks,
+            "active_tokens": active_tokens,
+            "reserved_tokens": reserved_tokens,
+            "internal_fragmentation_tokens": fragmentation_tokens,
+            "internal_fragmentation_ratio": (
+                fragmentation_tokens / reserved_tokens if reserved_tokens else 0.0
+            ),
+            "allocation_count": self._allocation_count,
+            "fresh_allocation_count": self._fresh_allocation_count,
+            "free_count": self._free_count,
+            "reuse_count": self._reuse_count,
+            "capacity_failure_count": self._capacity_failure_count,
+            "active_requests": sum(state.status == self.ACTIVE for state in states),
+            "finished_requests": sum(state.status == self.FINISHED for state in states),
+            "cancelled_requests": sum(state.status == self.CANCELLED for state in states),
+        }
+
+    def validate_invariants(self):
+        """Raise RuntimeError if request ownership and the free list diverge."""
+        free_blocks = list(self._free_blocks)
+        if len(free_blocks) != len(set(free_blocks)):
+            raise RuntimeError("PagedKVCache free list contains duplicate blocks")
+
+        owned_blocks = []
+        for state in self._requests.values():
+            if state.status == self.ACTIVE:
+                expected_blocks = (state.seq_len + self.block_size - 1) // self.block_size
+                if len(state.block_ids) != expected_blocks:
+                    raise RuntimeError("active request block count does not match seq_len")
+                owned_blocks.extend(state.block_ids)
+            elif state.block_ids:
+                raise RuntimeError("terminal request still owns physical blocks")
+
+        if len(owned_blocks) != len(set(owned_blocks)):
+            raise RuntimeError("a physical block is owned by multiple requests")
+        if set(owned_blocks) & set(free_blocks):
+            raise RuntimeError("a physical block is both owned and free")
+        if set(owned_blocks) | set(free_blocks) != set(range(self.max_blocks)):
+            raise RuntimeError("physical block accounting does not cover the cache")
+        return True
+
     def block_tables(self, request_ids=None, max_blocks_per_seq=None, pad_value=-1):
         """Return padded physical block ids for each request.
 
         Shape: [num_requests, max_blocks_per_seq].
         """
         torch = _torch()
-        ids = self._normalize_existing_request_ids(request_ids)
+        ids = self._normalize_active_request_ids(request_ids)
         if max_blocks_per_seq is None:
             max_blocks_per_seq = max(1, max((len(self._requests[rid].block_ids) for rid in ids), default=0))
         max_blocks_per_seq = int(max_blocks_per_seq)
@@ -180,7 +279,7 @@ class PagedKVCache:
     def seq_lens_tensor(self, request_ids=None, device=None):
         """Return sequence lengths for the requested rows."""
         torch = _torch()
-        ids = self._normalize_existing_request_ids(request_ids)
+        ids = self._normalize_active_request_ids(request_ids)
         if device is None:
             device = self.device
         lengths = [self._requests[request_id].seq_len for request_id in ids]
@@ -188,8 +287,8 @@ class PagedKVCache:
 
     def request_block_ids(self, request_id):
         """Return the logical-to-physical block list for one request."""
-        self._require_request(request_id)
-        return tuple(self._requests[request_id].block_ids)
+        state = self._require_request(request_id)
+        return tuple(state.block_ids)
 
     def to_dense(self, layer_idx=0, request_ids=None, max_seq_len=None):
         """Materialize the paged cache into dense cache tensors.
@@ -202,7 +301,7 @@ class PagedKVCache:
         """
         torch = _torch()
         layer_idx = self._validate_layer_idx(layer_idx)
-        ids = self._normalize_existing_request_ids(request_ids)
+        ids = self._normalize_active_request_ids(request_ids)
         max_actual_seq_len = max((self._requests[rid].seq_len for rid in ids), default=0)
         if max_seq_len is None:
             max_seq_len = max(1, max_actual_seq_len)
@@ -239,7 +338,26 @@ class PagedKVCache:
     def _allocate_block(self):
         if not self._free_blocks:
             raise RuntimeError("PagedKVCache is out of physical blocks")
-        return self._free_blocks.pop(0)
+        block_id = self._free_blocks.popleft()
+        self._allocation_count += 1
+        if block_id in self._ever_allocated_blocks:
+            self._reuse_count += 1
+        else:
+            self._ever_allocated_blocks.add(block_id)
+            self._fresh_allocation_count += 1
+        return block_id
+
+    def _close_request(self, request_id, terminal_status):
+        state = self._require_active_request(request_id)
+        released_blocks = tuple(state.block_ids)
+        # Do not zero K/V here: ownership plus the next request's seq_len masks
+        # stale tail slots, while avoiding an extra device-wide cleanup path.
+        for block_id in reversed(released_blocks):
+            self._free_blocks.appendleft(block_id)
+        self._free_count += len(released_blocks)
+        state.block_ids.clear()
+        state.status = terminal_status
+        return released_blocks
 
     def _validate_layer_idx(self, layer_idx):
         layer_idx = int(layer_idx)
@@ -266,13 +384,17 @@ class PagedKVCache:
             self._check_request_id(request_id)
         return ids
 
-    def _normalize_existing_request_ids(self, request_ids):
+    def _normalize_active_request_ids(self, request_ids):
         if request_ids is None:
-            ids = list(self._requests.keys())
+            ids = [
+                request_id
+                for request_id, state in self._requests.items()
+                if state.status == self.ACTIVE
+            ]
         else:
             ids = self._normalize_request_ids(request_ids)
         for request_id in ids:
-            self._require_request(request_id)
+            self._require_active_request(request_id)
         return ids
 
     @staticmethod
@@ -283,5 +405,13 @@ class PagedKVCache:
             raise ValueError("request ids must be hashable") from exc
 
     def _require_request(self, request_id):
-        if request_id not in self._requests:
+        state = self._requests.get(request_id)
+        if state is None:
             raise KeyError(f"unknown request_id: {request_id!r}")
+        return state
+
+    def _require_active_request(self, request_id):
+        state = self._require_request(request_id)
+        if state.status != self.ACTIVE:
+            raise RuntimeError(f"request_id {request_id!r} is {state.status}, not active")
+        return state

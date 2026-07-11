@@ -25,6 +25,19 @@ def _make_cache(num_kv_heads=1, head_dim=4, block_size=2, max_blocks=8, dtype=to
     )
 
 
+def test_paged_kv_cache_runtime_v2_rejects_multi_layer_execution():
+    with pytest.raises(ValueError, match="supports num_layers=1"):
+        PagedKVCache(
+            num_layers=2,
+            num_kv_heads=1,
+            head_dim=2,
+            block_size=2,
+            max_blocks=2,
+            dtype=torch.float32,
+            device=DEVICE,
+        )
+
+
 def test_paged_kv_cache_append_tracks_non_contiguous_blocks():
     cache = _make_cache(num_kv_heads=1, head_dim=2, block_size=2, max_blocks=4)
 
@@ -153,3 +166,155 @@ def test_paged_kv_cache_rejects_capacity_overflow():
 
     with pytest.raises(RuntimeError, match="out of physical blocks"):
         cache.append(layer_idx=0, request_ids=[1], k=k, v=v)
+
+
+def test_paged_kv_cache_finish_releases_and_reuses_blocks_without_stale_tokens():
+    cache = _make_cache(num_kv_heads=1, head_dim=2, block_size=2, max_blocks=2)
+
+    for value in (1.0, 2.0, 3.0):
+        k = torch.full((1, 1, 2), value, device=DEVICE, dtype=torch.float32)
+        cache.append(0, [10], k, k + 100)
+
+    assert cache.request_block_ids(10) == (0, 1)
+    assert cache.finish_request(10) == (0, 1)
+    assert cache.request_state(10) == {
+        "request_id": 10,
+        "status": "finished",
+        "seq_len": 3,
+        "block_ids": (),
+    }
+    assert cache.num_used_blocks == 0
+    assert cache.num_free_blocks == 2
+
+    new_k = torch.tensor([[[9.0, 10.0]]], device=DEVICE, dtype=torch.float32)
+    new_v = new_k + 100
+    cache.append(0, [20], new_k, new_v)
+
+    assert cache.request_block_ids(20) == (0,)
+    dense_k, dense_v, seq_lens = cache.to_dense(0, [20])
+    torch.testing.assert_close(dense_k[0, 0], new_k[0])
+    torch.testing.assert_close(dense_v[0, 0], new_v[0])
+    torch.testing.assert_close(seq_lens, torch.tensor([1], device=DEVICE, dtype=torch.int32))
+
+    metrics = cache.metrics()
+    assert metrics["allocation_count"] == 3
+    assert metrics["fresh_allocation_count"] == 2
+    assert metrics["free_count"] == 2
+    assert metrics["reuse_count"] == 1
+    assert metrics["finished_requests"] == 1
+    assert cache.validate_invariants()
+
+
+def test_paged_kv_cache_cancel_releases_blocks_and_rejects_terminal_operations():
+    cache = _make_cache(num_kv_heads=1, head_dim=2, block_size=1, max_blocks=1)
+    k = torch.ones((1, 1, 2), device=DEVICE, dtype=torch.float32)
+    cache.append(0, ["cancel-me"], k, k)
+
+    assert cache.cancel_request("cancel-me") == (0,)
+    assert cache.request_state("cancel-me")["status"] == "cancelled"
+    assert cache.metrics()["cancelled_requests"] == 1
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        cache.append(0, ["cancel-me"], k, k)
+    with pytest.raises(RuntimeError, match="cancelled"):
+        cache.block_tables(["cancel-me"])
+    with pytest.raises(RuntimeError, match="not active"):
+        cache.finish_request("cancel-me")
+    with pytest.raises(RuntimeError, match="cannot be reactivated"):
+        cache.add_request("cancel-me")
+
+    assert cache.validate_invariants()
+
+
+def test_paged_kv_cache_capacity_failure_has_no_partial_request_mutation():
+    cache = _make_cache(num_kv_heads=1, head_dim=2, block_size=2, max_blocks=2)
+    first = torch.ones((1, 1, 2), device=DEVICE, dtype=torch.float32)
+    cache.append(0, [1], first, first)
+    before = cache.request_state(1)
+
+    batch = torch.zeros((3, 1, 2), device=DEVICE, dtype=torch.float32)
+    with pytest.raises(RuntimeError, match="out of physical blocks"):
+        cache.append(0, [1, 2, 3], batch, batch)
+
+    assert cache.request_state(1) == before
+    with pytest.raises(KeyError, match="unknown request_id"):
+        cache.request_state(2)
+    with pytest.raises(KeyError, match="unknown request_id"):
+        cache.request_state(3)
+    assert cache.num_used_blocks == 1
+    assert cache.num_free_blocks == 1
+    assert cache.metrics()["capacity_failure_count"] == 1
+    assert cache.validate_invariants()
+
+
+def test_paged_kv_cache_metrics_report_utilization_and_fragmentation():
+    cache = _make_cache(num_kv_heads=1, head_dim=2, block_size=4, max_blocks=4)
+    batch = torch.zeros((2, 1, 2), device=DEVICE, dtype=torch.float32)
+    cache.append(0, [1, 2], batch, batch)
+    cache.append(0, [1], batch[:1], batch[:1])
+
+    assert cache.metrics() == {
+        "max_blocks": 4,
+        "used_blocks": 2,
+        "free_blocks": 2,
+        "block_utilization": 0.5,
+        "active_tokens": 3,
+        "reserved_tokens": 8,
+        "internal_fragmentation_tokens": 5,
+        "internal_fragmentation_ratio": 0.625,
+        "allocation_count": 2,
+        "fresh_allocation_count": 2,
+        "free_count": 0,
+        "reuse_count": 0,
+        "capacity_failure_count": 0,
+        "active_requests": 2,
+        "finished_requests": 0,
+        "cancelled_requests": 0,
+    }
+    assert cache.validate_invariants()
+
+
+def test_paged_kv_cache_default_metadata_only_contains_active_requests():
+    cache = _make_cache(num_kv_heads=1, head_dim=2, block_size=2, max_blocks=2)
+    batch = torch.zeros((2, 1, 2), device=DEVICE, dtype=torch.float32)
+    cache.append(0, [10, 20], batch, batch)
+    cache.finish_request(10)
+
+    tables = cache.block_tables()
+    seq_lens = cache.seq_lens_tensor()
+
+    torch.testing.assert_close(
+        tables,
+        torch.tensor([[1]], device=DEVICE, dtype=torch.int32),
+    )
+    torch.testing.assert_close(
+        seq_lens,
+        torch.tensor([1], device=DEVICE, dtype=torch.int32),
+    )
+    assert cache.request_state(10)["status"] == "finished"
+    assert cache.request_state(20)["status"] == "active"
+    assert cache.validate_invariants()
+
+
+def test_paged_kv_cache_request_churn_does_not_leak_blocks():
+    cache = _make_cache(num_kv_heads=1, head_dim=2, block_size=1, max_blocks=1)
+    token = torch.ones((1, 1, 2), device=DEVICE, dtype=torch.float32)
+
+    for request_id in range(20):
+        cache.append(0, [request_id], token, token)
+        if request_id % 2 == 0:
+            cache.finish_request(request_id)
+        else:
+            cache.cancel_request(request_id)
+        assert cache.num_used_blocks == 0
+        assert cache.num_free_blocks == 1
+        assert cache.validate_invariants()
+
+    metrics = cache.metrics()
+    assert metrics["allocation_count"] == 20
+    assert metrics["fresh_allocation_count"] == 1
+    assert metrics["reuse_count"] == 19
+    assert metrics["free_count"] == 20
+    assert metrics["active_requests"] == 0
+    assert metrics["finished_requests"] == 10
+    assert metrics["cancelled_requests"] == 10

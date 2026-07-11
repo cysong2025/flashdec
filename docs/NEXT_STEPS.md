@@ -59,6 +59,8 @@
 
 ## 阶段 3：Paged KV Runtime v2
 
+状态：代码已实现，待 RTX 5070 focused/full correctness 验证。
+
 目标：实现真正的请求生命周期和 physical block 内存管理，这是项目从算子走向 AI Infra 的第一条主线。
 
 任务：
@@ -72,6 +74,15 @@
    - allocation/free/reuse 次数。
 4. 保证批量 append 容量不足时不发生 partial mutation。
 5. 固定验证单 layer runtime，并在 API/文档中明确多 layer execution 尚不在 `v0.1.0` 范围。
+
+当前实现：
+
+- active -> finished/cancelled 单向状态转换，终态 request 不能继续 append 或重新激活。
+- 释放 block 优先进入 free list 前端供新请求复用；释放时不清零物理 K/V。
+- 批量 append 在分配前统一计算所需 block，容量不足时不创建新 request、不增长已有 seq_len。
+- `metrics()` 报告 block utilization、internal fragmentation、allocation/free/reuse 和 lifecycle 计数。
+- `validate_invariants()` 检查 owned/free block 完整覆盖、无重复所有权和终态无 block 泄漏。
+- runtime v2 显式限制 `num_layers=1`；多 layer execution 留给后续版本。
 
 核心测试：
 
@@ -176,4 +187,4 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 当前立即执行
 
-阶段 2 已完成并冻结 kernel 配置。当前立即进入 PagedKVCache v2：先实现 request state、`finish_request()`、`cancel_request()` 和 physical block free/reuse，再补容量失败原子性、metrics 与 request churn 测试。完整边界见阶段 3。
+PagedKVCache v2 第一批代码已经完成。当前立即在 RTX 5070 执行 focused/full correctness；验证通过后记录结果并进入 RoPE + KV append 数据路径，不再返回 kernel 参数调优。

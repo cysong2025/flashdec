@@ -143,4 +143,31 @@ Windows OpenSSH 环境不依赖 `rsync`，继续沿用 `cp + scp` 流程。
 
 ## 下一阶段入口
 
-配置已经冻结。下一步开始 PagedKVCache v2：优先实现 `finish_request()`、`cancel_request()`、physical block free/reuse、无 partial mutation 的容量失败语义和 request churn 测试。这是从单 kernel 走向 decode runtime 的主线。
+配置已经冻结。PagedKVCache v2 第一批代码已经实现：
+
+- `finish_request()` / `cancel_request()`。
+- physical block release 和 reuse-priority free list。
+- active/finished/cancelled request state query。
+- batch append 容量 preflight，无 partial request mutation。
+- block utilization、internal fragmentation、allocation/free/reuse/lifecycle metrics。
+- allocator invariant validator 和 request churn 测试。
+- 显式限制单 layer runtime；多 layer execution 不在当前 `v0.1.0` 范围。
+
+当前 Codex macOS 环境没有 torch/pytest/CUDA，因此只完成了 compileall 和静态检查，不能写入 GPU 通过结论。
+
+RTX 5070 focused 验证：
+
+```bash
+python -m pytest -vv \
+  tests/test_paged_cache.py \
+  tests/test_paged_decode.py \
+  tests/test_public_api.py
+```
+
+focused 通过后执行完整回归：
+
+```bash
+python -m pytest -vv
+```
+
+验证通过并记录结果后，进入 RoPE + KV append 数据路径。这一步把项目从单 kernel 推进为具有 request lifecycle 和 physical memory ownership 的 decode runtime。

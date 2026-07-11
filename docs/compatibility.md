@@ -12,11 +12,17 @@
 - 生成 padded `block_tables`。
 - 维护 `seq_lens`。
 - materialize dense KV cache 以对齐 reference。
+- active/finished/cancelled request lifecycle。
+- `finish_request()` / `cancel_request()` block release。
+- reuse-priority physical block free list。
+- block utilization、internal fragmentation 和 allocation/free/reuse metrics。
+- capacity preflight 和 allocator invariant validation。
 
 当前限制：
 
-- 只实现 append，不实现 request free / block reuse。
-- Week 5 tests 主要验证单 layer 路径。
+- runtime v2 当前显式限制 `num_layers=1`。
+- finished/cancelled request id 当前不能重新激活。
+- runtime v2 代码待 RTX 5070 focused/full correctness 验证。
 - 不包含 prefix cache、swap、evict、连续 batching 调度等 serving runtime 能力。
 
 ## Paged Decode Triton Kernel
@@ -35,6 +41,7 @@
 | MQA | 支持 |
 | benchmark 默认 block size | `32` |
 | 默认 `num_warps` | `2` |
+| 默认 `num_stages` | `None`，使用 Triton implicit default |
 | variable seq lens | 支持 |
 | non-contiguous physical blocks | 支持 |
 | `seq_len == 0` | 输出 zero |
@@ -47,6 +54,7 @@
 - 已完成 `num_warps=2/4/8` 手动 sweep，但暂未做自动 autotune。
 - block size quick/full sweep 已完成，暂未做 block size autotune。
 - dim-major layout `[num_blocks, num_kv_heads, head_dim, block_size]` 已通过 RTX 5070 correctness、quick 和 full benchmark；full p50 几何平均约慢 31%，不是默认 runtime layout，也不做自动 layout dispatch。
+- `num_stages=default/1/2/3/4` full sweep 已完成，最佳候选仅约快 0.39%，因此不修改默认 staging。
 - 暂未和 FlashInfer / vLLM / TensorRT-LLM 做成熟库性能对比。
 
 ## 已验证 Correctness
@@ -153,5 +161,5 @@ python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_de
 
 ## 后续计划
 
-- Week 8：`num_warps=2`、`block_size=32` 与 token-major 是当前通用 benchmark 默认配置；FP16 的少数小 shape 仍可单独测试 block16。layout full sweep 已完成，下一步推进 token-major 的 `num_stages` 或 profiler 对比。
-- Week 9：补 profiling 报告和性能瓶颈分析。
+- kernel 配置已冻结为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
+- 当前先在 RTX 5070 验证 PagedKVCache runtime v2，再推进 RoPE/KV append 与 DecodeEngine。
