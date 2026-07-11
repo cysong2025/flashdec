@@ -105,7 +105,7 @@ request churn -> no leaked blocks
 
 ## 阶段 4：RoPE + KV Append 数据路径
 
-状态：PyTorch reference 和组合接口已实现，待 RTX 5070 correctness 验证；CUDA 路径尚未实现。
+状态：PyTorch reference 和组合接口已通过 RTX 5070 correctness；CUDA 路径因缺少 `nvcc`/CUDA Toolkit 尚未实现。
 
 目标：实现至少一条原生 CUDA 数据路径，并与 PagedKVCache v2 集成。
 
@@ -125,6 +125,8 @@ request churn -> no leaked blocks
 - `rope_paged_kv_append_ref()`：旋转 Q/K、保持 V 不变、把 rotated K/raw V 写入 paged cache。
 - `RopeAppendResult`：返回 rotated Q、pre-append positions、block tables 和 post-append seq_lens。
 - focused tests 覆盖手算公式、partial rotary、FP16/BF16/FP32、block 边界、容量失败和 terminal request。
+- RTX 5070 focused：`38 passed in 3.60s`；完整回归：`186 passed in 4.96s`。
+- PyTorch 为 `2.11.0+cu128`，PyTorch CUDA 为 12.8；当前 `nvcc` 不存在、`CUDA_HOME=None`。
 
 完成标准：
 
@@ -200,4 +202,4 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 当前立即执行
 
-PagedKVCache v2 已完成并通过 RTX 5070 focused/full correctness。RoPE + paged KV append reference 已完成，当前先在 RTX 5070 验证；通过后检查 `nvcc`/CUDA_HOME 并实现独立 CUDA KV append，最后才评估融合 RoPE。
+PagedKVCache v2 与 RoPE + paged KV append reference 均已通过 RTX 5070 correctness。当前先按 NVIDIA WSL 官方路径安装不含 Linux driver 的 CUDA Toolkit 12.8，确认 `nvcc`/CUDA_HOME 后实现独立 CUDA KV append；最后才评估融合 RoPE。

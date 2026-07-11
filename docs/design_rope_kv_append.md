@@ -110,4 +110,11 @@ focused 通过后执行：
 python -m pytest -vv
 ```
 
-当前代码尚未在 RTX 5070 执行，因此不能写入通过数量或 CUDA 性能结论。
+RTX 5070 验证结果：
+
+```text
+focused: 38 passed in 3.60s
+full:    186 passed in 4.96s
+```
+
+PyTorch reference 语义已经固定。当前没有 `nvcc`，因此尚未构建 CUDA extension，也没有 CUDA KV append 性能结论。

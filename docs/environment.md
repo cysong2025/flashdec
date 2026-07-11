@@ -73,6 +73,7 @@ python scripts/check_env.py
 - Triton：3.6.0
 - CUDA available：true
 - NVCC：not found
+- `CUDA_HOME`：None
 
 ### 原始输出
 
@@ -123,6 +124,19 @@ not found
 - 是否能 import triton：是。
 - 是否能运行最小 CUDA tensor：是，PyTorch 可识别 RTX 5070。
 - 是否需要调整 PyTorch / CUDA / Triton 版本：Week 1 不需要。`nvcc` 暂未安装，不影响 PyTorch/Triton 小算子验证；后续 CUDA extension 阶段需要补 CUDA Toolkit。
+
+### Week 11 CUDA Extension 前置检查（2026-07-12）
+
+```text
+RoPE/KV append focused: 38 passed in 3.60s
+Full regression: 186 passed in 4.96s
+nvcc: command not found
+PyTorch: 2.11.0+cu128
+PyTorch CUDA: 12.8
+CUDA_HOME: None
+```
+
+结论：GPU runtime、PyTorch CUDA 和 Triton 均可用，但系统缺少 CUDA compiler/toolkit，因此当前只能运行预编译 PyTorch/Triton 路径，不能构建 C++/CUDA extension。WSL 中必须安装 toolkit-only package，不能安装 Linux NVIDIA driver。
 
 ## Mac 开发与 RTX 5070 验证工作流
 

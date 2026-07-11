@@ -74,7 +74,8 @@
 - 目前只有 PyTorch reference，尚无 CUDA extension，也没有性能结论。
 - 只支持当前 PagedKVCache v2 的单 layer runtime。
 - 不包含 RoPE scaling、YaRN、NTK-aware scaling 或 interleaved-pair convention。
-- 代码待 RTX 5070 focused/full correctness 验证。
+- RTX 5070 focused 为 `38 passed in 3.60s`，完整回归为 `186 passed in 4.96s`。
+- native CUDA extension 当前受限于 `nvcc` 未安装、`CUDA_HOME=None`。
 
 ## 已验证 Correctness
 
