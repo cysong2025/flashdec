@@ -29,6 +29,7 @@ benchmark 记录至少包含：
 - `run_week7_paged_decode.py`：Week 7 paged decode batch/context/dtype shape sweep。
 - `run_week8_paged_decode.py`：Week 8 paged decode `num_warps` sweep，并输出 tokens/s、估算字节数和有效 GB/s。
 - `run_block_size_sweep.py`：固定当前 `num_warps` 默认值，对比 paged decode 的 `block_size=8/16/32`。
+- `run_layout_sweep.py`：固定 `block_size=32, num_warps=2`，对比 token-major 与 dim-major KV cache layout。
 - `profile_paged_decode.py`：Week 9 paged decode PyTorch profiler 文本摘要，可选导出 Chrome trace。
 
 当前通用 benchmark/profile 默认配置为 `block_size=32, num_warps=2`。FP16 的少数小 shape 可显式使用 `block_size=16` 对照。

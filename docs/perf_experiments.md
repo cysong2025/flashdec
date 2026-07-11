@@ -295,3 +295,41 @@ python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_page
 
 - block size 实验已闭环，推进 KV layout 对比，形成第三个独立优化实验。
 - 若 KV layout 对比不能稳定提升，优先用 Nsight/Profiler 验证 block table indexing、mask 与 register pressure。
+
+## E5：KV Cache Layout 对比
+
+### 背景
+
+当前 token-major layout 为 `[num_blocks, num_kv_heads, block_size, head_dim]`，同一 token 的 head_dim 连续。候选 dim-major layout 为 `[num_blocks, num_kv_heads, head_dim, block_size]`，同一 head_dim 的 token 位置连续。
+
+Triton kernel 使用显式 stride 访问 K/V，候选 layout 不改变 attention 语义、online softmax 或 block table；benchmark 在计时前完成 layout 转换，只比较 decode kernel 对不同物理布局的访问成本。
+
+### 实验命令
+
+quick sweep：
+
+```bash
+python benchmarks/run_layout_sweep.py --quick --output benchmarks/results/week8_paged_decode_layout_quick.csv
+```
+
+full sweep：
+
+```bash
+python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_decode_layout.csv
+```
+
+固定配置：
+
+- `block_size=32`
+- `num_warps=2`
+- `head_dim=128`
+- `num_q_heads=32`
+- `num_kv_heads=8`
+- dtype：FP16/BF16
+
+### 待上板确认
+
+- token-major/dim-major 都与同一 PyTorch reference 对齐。
+- variable lengths、non-contiguous physical blocks、MHA/GQA/MQA 在两种 layout 下正确。
+- 各 dtype/shape 的 p50、p90、mean 与有效带宽。
+- 若 dim-major 无稳定收益，保留 token-major 作为唯一 runtime layout，避免增加 cache append 复杂度。

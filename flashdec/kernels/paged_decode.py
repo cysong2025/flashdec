@@ -9,6 +9,19 @@ import triton
 import triton.language as tl
 
 
+_KV_LAYOUT_AXES = {
+    "token_major": (2, 3),
+    "dim_major": (3, 2),
+}
+
+
+def _layout_axes(kv_layout):
+    try:
+        return _KV_LAYOUT_AXES[kv_layout]
+    except KeyError as exc:
+        raise ValueError("kv_layout must be 'token_major' or 'dim_major'") from exc
+
+
 @triton.jit
 def _paged_decode_attention_kernel(
     q_ptr,
@@ -105,7 +118,8 @@ def _paged_decode_attention_kernel(
     )
 
 
-def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size, num_warps):
+def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size, num_warps, kv_layout):
+    token_axis, dim_axis = _layout_axes(kv_layout)
     if q.device.type != "cuda" or k_cache.device.type != "cuda" or v_cache.device.type != "cuda":
         raise ValueError("q, k_cache, and v_cache must be CUDA tensors")
     if block_tables.device.type != "cuda" or seq_lens.device.type != "cuda":
@@ -120,7 +134,7 @@ def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size, nu
     if q.dim() != 3:
         raise ValueError("q must have shape [num_seqs, num_q_heads, head_dim]")
     if k_cache.dim() != 4 or v_cache.dim() != 4:
-        raise ValueError("k_cache and v_cache must have shape [num_blocks, num_kv_heads, block_size, head_dim]")
+        raise ValueError("k_cache and v_cache must be 4D tensors")
     if block_tables.dim() != 2:
         raise ValueError("block_tables must have shape [num_seqs, max_blocks_per_seq]")
     if seq_lens.dim() != 1:
@@ -135,8 +149,12 @@ def _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size, nu
         raise ValueError("seq_lens must be int32 or int64")
 
     num_seqs, num_q_heads, head_dim = q.shape
-    num_blocks, num_kv_heads, cache_block_size, k_head_dim = k_cache.shape
-    v_num_blocks, v_num_kv_heads, v_block_size, v_head_dim = v_cache.shape
+    num_blocks, num_kv_heads = k_cache.shape[:2]
+    v_num_blocks, v_num_kv_heads = v_cache.shape[:2]
+    cache_block_size = k_cache.shape[token_axis]
+    k_head_dim = k_cache.shape[dim_axis]
+    v_block_size = v_cache.shape[token_axis]
+    v_head_dim = v_cache.shape[dim_axis]
     if block_tables.shape[0] != num_seqs or seq_lens.numel() != num_seqs:
         raise ValueError("block_tables and seq_lens must have one row/value per sequence")
     if v_num_blocks != num_blocks:
@@ -176,29 +194,39 @@ def paged_decode_attention(
     sm_scale=None,
     block_size=None,
     num_warps=2,
+    kv_layout="token_major",
 ):
     """Return paged single-token decode attention using Triton.
 
     Shapes:
     - q: [num_seqs, num_q_heads, head_dim]
-    - k_cache/v_cache: [num_blocks, num_kv_heads, block_size, head_dim]
+    - token_major k_cache/v_cache: [num_blocks, num_kv_heads, block_size, head_dim]
+    - dim_major k_cache/v_cache: [num_blocks, num_kv_heads, head_dim, block_size]
     - block_tables: [num_seqs, max_blocks_per_seq]
     - seq_lens: [num_seqs]
     - return: [num_seqs, num_q_heads, head_dim]
 
     Supported block sizes are 8, 16, and 32. When block_size is omitted, it
-    is inferred from k_cache/v_cache. The current benchmark default is
-    block_size=32 and num_warps=2 based on the RTX 5070 full sweep.
+    is inferred from k_cache/v_cache according to kv_layout. The current
+    benchmark default is block_size=32 and num_warps=2.
     """
+    token_axis, dim_axis = _layout_axes(kv_layout)
     if block_size is None:
         if k_cache.dim() != 4:
-            raise ValueError(
-                "k_cache must have shape [num_blocks, num_kv_heads, block_size, head_dim]"
-            )
-        block_size = k_cache.shape[2]
+            raise ValueError("k_cache must be a 4D tensor")
+        block_size = k_cache.shape[token_axis]
     else:
         block_size = int(block_size)
-    _validate_inputs(q, k_cache, v_cache, block_tables, seq_lens, block_size, num_warps)
+    _validate_inputs(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+        block_size,
+        num_warps,
+        kv_layout,
+    )
 
     q_contig = q.contiguous()
     k_contig = k_cache.contiguous()
@@ -206,7 +234,7 @@ def paged_decode_attention(
     block_tables_contig = block_tables.contiguous()
     seq_lens_contig = seq_lens.contiguous()
     num_seqs, num_q_heads, head_dim = q_contig.shape
-    _, num_kv_heads, _, _ = k_contig.shape
+    _, num_kv_heads = k_contig.shape[:2]
     max_blocks_per_seq = block_tables_contig.shape[1]
     group_size = num_q_heads // num_kv_heads
     if sm_scale is None:
@@ -226,12 +254,12 @@ def paged_decode_attention(
         q_contig.stride(2),
         k_contig.stride(0),
         k_contig.stride(1),
-        k_contig.stride(2),
-        k_contig.stride(3),
+        k_contig.stride(token_axis),
+        k_contig.stride(dim_axis),
         v_contig.stride(0),
         v_contig.stride(1),
-        v_contig.stride(2),
-        v_contig.stride(3),
+        v_contig.stride(token_axis),
+        v_contig.stride(dim_axis),
         block_tables_contig.stride(0),
         block_tables_contig.stride(1),
         out.stride(0),

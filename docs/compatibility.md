@@ -25,7 +25,7 @@
 
 | 能力 | 当前状态 |
 | --- | --- |
-| KV cache layout | `[num_blocks, num_kv_heads, block_size, head_dim]` |
+| KV cache layout | token-major 已验证；dim-major 代码与测试路径待 RTX 5070 确认 |
 | block table layout | `[num_seqs, max_blocks_per_seq]` |
 | block size | `8`, `16`, `32`（均已通过 RTX 5070 correctness） |
 | head dim | `64`, `128` |
@@ -45,7 +45,8 @@
 - 暂不支持 `head_dim` 之外的 64/128。
 - 暂不支持 FP32 Triton paged decode kernel。
 - 已完成 `num_warps=2/4/8` 手动 sweep，但暂未做自动 autotune。
-- block size quick sweep 已完成，full sweep 待完成；暂未做 layout / block size autotune。
+- block size quick/full sweep 已完成，暂未做 layout / block size autotune。
+- dim-major layout `[num_blocks, num_kv_heads, head_dim, block_size]` 已实现为候选路径，尚待 RTX 5070 correctness 与 benchmark。
 - 暂未和 FlashInfer / vLLM / TensorRT-LLM 做成熟库性能对比。
 
 ## 已验证 Correctness

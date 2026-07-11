@@ -185,6 +185,24 @@ python benchmarks/run_week8_paged_decode.py --quick --block-size 32 --num-warps 
 
 full block-size CSV 额外包含 84 条 validated 记录，结论已合并到同一摘要。
 
+## KV Layout 实验待上板
+
+新增候选 dim-major layout：
+
+```text
+token_major: [num_blocks, num_kv_heads, block_size, head_dim]
+dim_major:   [num_blocks, num_kv_heads, head_dim, block_size]
+```
+
+两种 layout 共用同一 Triton kernel、PyTorch reference 和 block table；转换仅发生在 benchmark 计时前。待 RTX 5070 执行：
+
+```bash
+python -m pytest -vv tests/test_paged_cache.py tests/test_paged_decode.py tests/test_public_api.py
+python benchmarks/run_layout_sweep.py --quick --output benchmarks/results/week8_paged_decode_layout_quick.csv
+```
+
+quick 通过后再执行 full layout sweep。默认 runtime layout 在结果前仍保持 token-major。
+
 ## RTX 5070 验证记录（2026-06-28）
 
 运行环境：

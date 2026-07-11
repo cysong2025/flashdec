@@ -87,6 +87,7 @@ def _common_metadata(torch, args, dtype_name, impl, case_name, sweep, shape, seq
         "min_seq_len": int(seq_lens.min().item()),
         "max_actual_seq_len": int(seq_lens.max().item()),
         "block_size": args.block_size,
+        "kv_layout": args.kv_layout,
         "max_blocks_per_seq": block_tables.shape[1],
         "used_blocks": cache.num_used_blocks,
         "validated": str(not args.skip_validate),
@@ -154,10 +155,15 @@ def _make_inputs(torch, args, shape, dtype, case_index):
     q = torch.randn((num_seqs, num_q_heads, head_dim), device="cuda", dtype=dtype)
     block_tables = cache.block_tables(request_ids)
     seq_lens = cache.seq_lens_tensor(request_ids)
-    return q, cache.k_cache[0], cache.v_cache[0], block_tables, seq_lens, cache
+    k_cache = cache.k_cache[0]
+    v_cache = cache.v_cache[0]
+    if args.kv_layout == "dim_major":
+        k_cache = k_cache.permute(0, 1, 3, 2).contiguous()
+        v_cache = v_cache.permute(0, 1, 3, 2).contiguous()
+    return q, k_cache, v_cache, block_tables, seq_lens, cache
 
 
-def _validate(torch, q, k_cache, v_cache, block_tables, seq_lens, block_size, num_warps):
+def _validate(torch, q, k_cache, v_cache, block_tables, seq_lens, block_size, num_warps, kv_layout):
     from flashdec.kernels.paged_decode import paged_decode_attention
     from flashdec.paged_reference import paged_decode_attention_ref
 
@@ -169,8 +175,11 @@ def _validate(torch, q, k_cache, v_cache, block_tables, seq_lens, block_size, nu
         seq_lens,
         block_size=block_size,
         num_warps=num_warps,
+        kv_layout=kv_layout,
     )
-    expected = paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens)
+    expected = paged_decode_attention_ref(
+        q, k_cache, v_cache, block_tables, seq_lens, kv_layout=kv_layout
+    )
     if q.dtype == torch.bfloat16:
         torch.testing.assert_close(actual, expected, rtol=3e-2, atol=3e-2)
     else:
@@ -206,7 +215,9 @@ def run_shape(torch, args, case_index, case_name, sweep, shape, dtype):
     if args.mode == "all":
         ref_result = benchmark_case(
             "paged_decode_attention_ref",
-            lambda: paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens),
+            lambda: paged_decode_attention_ref(
+                q, k_cache, v_cache, block_tables, seq_lens, kv_layout=args.kv_layout
+            ),
             warmup=args.warmup,
             repeat=args.repeat,
             metadata=_common_metadata(torch, args, dtype_name, "torch_ref", case_name, sweep, shape, seq_lens, block_tables, cache),
@@ -216,7 +227,17 @@ def run_shape(torch, args, case_index, case_name, sweep, shape, dtype):
 
     for num_warps in args.num_warps:
         if not args.skip_validate:
-            _validate(torch, q, k_cache, v_cache, block_tables, seq_lens, args.block_size, num_warps)
+            _validate(
+                torch,
+                q,
+                k_cache,
+                v_cache,
+                block_tables,
+                seq_lens,
+                args.block_size,
+                num_warps,
+                args.kv_layout,
+            )
         triton_result = benchmark_case(
             "triton_paged_decode_attention",
             lambda num_warps=num_warps: paged_decode_attention(
@@ -227,6 +248,7 @@ def run_shape(torch, args, case_index, case_name, sweep, shape, dtype):
                 seq_lens,
                 block_size=args.block_size,
                 num_warps=num_warps,
+                kv_layout=args.kv_layout,
             ),
             warmup=args.warmup,
             repeat=args.repeat,
@@ -253,6 +275,7 @@ def parse_args():
     parser.add_argument("--batch-context", type=int, default=1024)
     parser.add_argument("--context-batch", type=int, default=16)
     parser.add_argument("--block-size", type=int, choices=[8, 16, 32], default=32)
+    parser.add_argument("--kv-layout", choices=["token_major", "dim_major"], default="token_major")
     parser.add_argument("--num-warps", type=int, nargs="+", default=[2, 4, 8])
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeat", type=int, default=30)

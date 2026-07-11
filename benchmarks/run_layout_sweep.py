@@ -1,4 +1,4 @@
-"""Compare paged decode block sizes 8, 16, and 32 on representative shapes."""
+"""Compare token-major and dim-major paged KV cache layouts."""
 
 from __future__ import annotations
 
@@ -23,7 +23,8 @@ from benchmarks.run_week8_paged_decode import (
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dtype", choices=["float16", "bfloat16", "both"], default="both")
-    parser.add_argument("--block-sizes", type=int, nargs="+", choices=[8, 16, 32], default=[8, 16, 32])
+    parser.add_argument("--kv-layouts", nargs="+", choices=["token_major", "dim_major"], default=["token_major", "dim_major"])
+    parser.add_argument("--block-size", type=int, choices=[8, 16, 32], default=32)
     parser.add_argument("--head-dim", type=int, choices=[64, 128], default=128)
     parser.add_argument("--num-q-heads", type=int, default=32)
     parser.add_argument("--num-kv-heads", type=int, default=8)
@@ -32,10 +33,10 @@ def parse_args():
     parser.add_argument("--num-warps", type=int, nargs="+", default=[2])
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeat", type=int, default=30)
-    parser.add_argument("--seed", type=int, default=87)
+    parser.add_argument("--seed", type=int, default=131)
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--skip-validate", action="store_true")
-    parser.add_argument("--output", default="benchmarks/results/week8_paged_decode_block_size.csv")
+    parser.add_argument("--output", default="benchmarks/results/week8_paged_decode_layout.csv")
     args = parser.parse_args()
     if args.num_q_heads <= 0 or args.num_kv_heads <= 0:
         parser.error("num_q_heads and num_kv_heads must be positive")
@@ -66,13 +67,12 @@ def main():
             raise SystemExit("bfloat16 was requested, but this CUDA device does not report BF16 support")
 
     args.mode = "triton"
-    args.experiment = "block_size"
-    args.kv_layout = "token_major"
+    args.experiment = "kv_layout"
     cases = _make_shape_matrix(args)
     results = []
     for dtype in dtypes:
-        for block_size in args.block_sizes:
-            args.block_size = block_size
+        for kv_layout in args.kv_layouts:
+            args.kv_layout = kv_layout
             for case_index, (case_name, sweep, shape) in enumerate(cases):
                 results.extend(run_shape(torch, args, case_index, case_name, sweep, shape, dtype))
 

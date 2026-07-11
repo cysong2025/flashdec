@@ -3,24 +3,46 @@
 from __future__ import annotations
 
 
-def paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens, sm_scale=None):
+_KV_LAYOUT_AXES = {
+    "token_major": (2, 3),
+    "dim_major": (3, 2),
+}
+
+
+def _layout_axes(kv_layout):
+    try:
+        return _KV_LAYOUT_AXES[kv_layout]
+    except KeyError as exc:
+        raise ValueError("kv_layout must be 'token_major' or 'dim_major'") from exc
+
+
+def paged_decode_attention_ref(
+    q,
+    k_cache,
+    v_cache,
+    block_tables,
+    seq_lens,
+    sm_scale=None,
+    kv_layout="token_major",
+):
     """Reference single-token decode attention over a paged KV cache.
 
     Shapes:
     - q: [num_seqs, num_q_heads, head_dim]
-    - k_cache/v_cache: [num_blocks, num_kv_heads, block_size, head_dim]
+    - token_major k_cache/v_cache: [num_blocks, num_kv_heads, block_size, head_dim]
+    - dim_major k_cache/v_cache: [num_blocks, num_kv_heads, head_dim, block_size]
     - block_tables: [num_seqs, max_blocks_per_seq]
     - seq_lens: [num_seqs]
     - return: [num_seqs, num_q_heads, head_dim]
     """
     import torch
 
+    token_axis, dim_axis = _layout_axes(kv_layout)
+
     if q.dim() != 3:
         raise ValueError("q must have shape [num_seqs, num_q_heads, head_dim]")
     if k_cache.dim() != 4 or v_cache.dim() != 4:
-        raise ValueError(
-            "k_cache and v_cache must have shape [num_blocks, num_kv_heads, block_size, head_dim]"
-        )
+        raise ValueError("k_cache and v_cache must be 4D tensors")
     if block_tables.dim() != 2:
         raise ValueError("block_tables must have shape [num_seqs, max_blocks_per_seq]")
     if seq_lens.dim() != 1:
@@ -35,8 +57,12 @@ def paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens, sm_s
         raise ValueError("block_tables must contain integer physical block ids")
 
     num_seqs, num_q_heads, head_dim = q.shape
-    num_blocks, num_kv_heads, block_size, k_head_dim = k_cache.shape
-    v_num_blocks, v_num_kv_heads, v_block_size, v_head_dim = v_cache.shape
+    num_blocks, num_kv_heads = k_cache.shape[:2]
+    v_num_blocks, v_num_kv_heads = v_cache.shape[:2]
+    block_size = k_cache.shape[token_axis]
+    k_head_dim = k_cache.shape[dim_axis]
+    v_block_size = v_cache.shape[token_axis]
+    v_head_dim = v_cache.shape[dim_axis]
     if v_num_blocks != num_blocks:
         raise ValueError("k_cache and v_cache must have the same num_blocks")
     if v_num_kv_heads != num_kv_heads:
@@ -75,8 +101,14 @@ def paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens, sm_s
         block_ids = torch.tensor(block_ids_cpu, device=k_cache.device, dtype=torch.long)
         k_blocks = k_cache.index_select(0, block_ids)
         v_blocks = v_cache.index_select(0, block_ids)
-        k_seq = k_blocks.permute(0, 2, 1, 3).reshape(-1, num_kv_heads, head_dim)[:seq_len]
-        v_seq = v_blocks.permute(0, 2, 1, 3).reshape(-1, num_kv_heads, head_dim)[:seq_len]
+        if kv_layout == "token_major":
+            k_seq = k_blocks.permute(0, 2, 1, 3).reshape(-1, num_kv_heads, head_dim)
+            v_seq = v_blocks.permute(0, 2, 1, 3).reshape(-1, num_kv_heads, head_dim)
+        else:
+            k_seq = k_blocks.permute(0, 3, 1, 2).reshape(-1, num_kv_heads, head_dim)
+            v_seq = v_blocks.permute(0, 3, 1, 2).reshape(-1, num_kv_heads, head_dim)
+        k_seq = k_seq[:seq_len]
+        v_seq = v_seq[:seq_len]
 
         for q_head in range(num_q_heads):
             kv_head = q_head // group_size

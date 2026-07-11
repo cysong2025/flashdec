@@ -57,7 +57,8 @@ def test_paged_kv_cache_append_tracks_non_contiguous_blocks():
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_paged_decode_attention_matches_dense_reference(dtype):
+@pytest.mark.parametrize("kv_layout", ["token_major", "dim_major"])
+def test_paged_decode_attention_matches_dense_reference(kv_layout, dtype):
     torch.manual_seed(41)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(41)
@@ -98,7 +99,20 @@ def test_paged_decode_attention_matches_dense_reference(dtype):
     seq_lens = cache.seq_lens_tensor(request_ids)
     dense_k, dense_v, dense_seq_lens = cache.to_dense(layer_idx=0, request_ids=request_ids)
 
-    paged = paged_decode_attention_ref(q, cache.k_cache[0], cache.v_cache[0], block_tables, seq_lens)
+    k_cache = cache.k_cache[0]
+    v_cache = cache.v_cache[0]
+    if kv_layout == "dim_major":
+        k_cache = k_cache.permute(0, 1, 3, 2).contiguous()
+        v_cache = v_cache.permute(0, 1, 3, 2).contiguous()
+
+    paged = paged_decode_attention_ref(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+        kv_layout=kv_layout,
+    )
     dense = dense_decode_attention_ref(q, dense_k, dense_v, dense_seq_lens)
 
     if dtype is torch.float16:
