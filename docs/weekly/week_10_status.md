@@ -15,9 +15,38 @@
 
 ## 当前状态
 
-代码已完成，尚未在 RTX 5070 上验证。当前不能宣称某个显式 `num_stages` 更快，也不能修改默认值。
+阶段二已完成。RTX 5070 correctness、quick 和 full sweep 均已执行；没有显式 `num_stages` 达到默认值替换门槛，因此保留 Triton implicit default 并冻结 kernel 配置。
 
-本地 macOS 只做静态验证；CUDA correctness 和性能实验必须在 RTX 5070 WSL 环境完成。
+correctness：
+
+```text
+88 passed in 5.00s
+```
+
+full sweep 共 30 条记录，对应 3 个代表场景 × 2 种 dtype × 5 个 staging 配置，全部为 `validated=True`。
+
+## Full sweep 结果
+
+| num_stages | 六场景 p50 几何平均加速 | p50 胜场 | 最大 p50 回退 | FP16 几何平均 | BF16 几何平均 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1.0002x | 3/6 | 1.10% | 1.0025x | 0.9979x |
+| 2 | 1.0039x | 4/6 | 0.17% | 1.0074x | 1.0005x |
+| 3 | 1.0038x | 3/6 | 0.43% | 1.0100x | 0.9978x |
+| 4 | 1.0036x | 4/6 | 0.55% | 1.0096x | 0.9975x |
+
+stage 2 是六场景几何平均最优候选，但仅约快 0.39%，远低于 5% 门槛。stage 3/4 在 FP16 上约快 1%，BF16 却整体略慢；它们在 BF16 medium 上的最大 p90 回退分别达到约 13.38% 和 18.93%。
+
+FP16 large 的 implicit default p90 为 `1.178848 ms`，而显式候选约为 `0.921-0.926 ms`；但 default p50 仅比候选慢约 1.8%-2.1%，说明该差异主要来自尾部抖动，不能据此修改默认配置。
+
+## 最终决策
+
+- 保留 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
+- 不选择显式 stage 2，因为 0.39% 的总体收益不足以覆盖测量噪声、维护成本和未来环境变化。
+- 不再为 `num_stages` 做候选 Profiler，也不增加 dtype/shape dispatch。
+- 这是一项有价值的负结果：显式 staging 没有给当前 memory-bound paged decode kernel 带来可观、跨 dtype 的稳定收益。
+- kernel 参数调优到此冻结，开始 PagedKVCache v2。
+
+详细摘要见 `benchmarks/results/week10_num_stages_summary.md`。
 
 ## RTX 5070 执行顺序
 
@@ -82,7 +111,7 @@ python benchmarks/run_num_stages_sweep.py \
 3. medium、large、large-batch 中任一主要 shape 的 p50 回退不超过 5%。
 4. FP16 与 BF16 的方向基本一致。
 
-若没有候选满足条件，记录负结果并保留 `num_stages=None`。无论结果如何，本轮后冻结 kernel 配置并进入 PagedKVCache v2。
+实际结果没有候选满足条件，因此已记录负结果并保留 `num_stages=None`。本轮后冻结 kernel 配置并进入 PagedKVCache v2。
 
 ## 结果同步
 
@@ -114,4 +143,4 @@ Windows OpenSSH 环境不依赖 `rsync`，继续沿用 `cp + scp` 流程。
 
 ## 下一阶段入口
 
-结果分析并冻结配置后，开始 PagedKVCache v2：优先实现 `finish_request()`、`cancel_request()`、physical block free/reuse、无 partial mutation 的容量失败语义和 request churn 测试。这是从单 kernel 走向 decode runtime 的主线。
+配置已经冻结。下一步开始 PagedKVCache v2：优先实现 `finish_request()`、`cancel_request()`、physical block free/reuse、无 partial mutation 的容量失败语义和 request churn 测试。这是从单 kernel 走向 decode runtime 的主线。

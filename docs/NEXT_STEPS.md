@@ -2,9 +2,9 @@
 
 ## 当前基线
 
-- RTX 5070 最终配置 correctness：`76 passed in 4.49s`。
+- RTX 5070 Week 10 kernel correctness：`88 passed in 5.00s`。
 - paged decode 支持 FP16/BF16、head_dim 64/128、MHA/GQA/MQA、变长 batch、block size 8/16/32。
-- 当前通用配置：token-major、`block_size=32`、`num_warps=2`。
+- 当前冻结配置：token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
 - block32 相对 block16 的 full-sweep p50 几何平均加速约 1.31x。
 - token-major 在 layout full sweep 中赢得 25/28 个 p50；dim-major p50 几何平均约慢 31.4%。
 - 最终 FP16 medium/large p50 为 `0.155520/0.884576 ms`。
@@ -29,6 +29,8 @@
 
 ## 阶段 2：冻结 Kernel 配置
 
+状态：已完成。
+
 目标：完成最后一个有边界的参数实验，然后停止无止境调参。
 
 任务：
@@ -40,11 +42,14 @@
 5. 只有 p50 几何平均稳定提升超过 5%，且主要 shape 无明显回退，才修改默认值。
 6. 对 block table/mask/offset 只允许一个 time-boxed 实验；无稳定收益就记录负结果并结束 kernel 调优。
 
-当前实现状态：
+最终结果：
 
 - 已完成 wrapper 的可选 `num_stages`，`None` 继续表示 Triton implicit default。
 - 已完成 `default/1/2/3/4` 专项 sweep、Profiler 参数/元数据和测试代码。
-- 待 RTX 5070 完成 correctness、quick 和 full sweep；在结果分析前不修改默认值。
+- RTX 5070 correctness：`88 passed in 5.00s`；full sweep 的 30 条记录均为 `validated=True`。
+- 最佳候选 stage 2 的六场景 p50 几何平均仅快约 0.39%，未达到 5% 门槛。
+- 保留 `num_stages=None`，不再为 staging 增加 shape dispatch 或额外 Profiler。
+- kernel 配置冻结；除 correctness 或明确性能回归外，不再重复 sweep 已冻结参数。
 
 完成标准：
 
@@ -171,4 +176,4 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 当前立即执行
 
-阶段 2 只作为短周期收尾：在 RTX 5070 执行 `num_stages` correctness、quick 和 full sweep，依据 Week 10 决策规则冻结 kernel 配置。随后立即进入 PagedKVCache v2 的 `finish/cancel/free/reuse`，而不是继续增加更多孤立算子或参数实验。完整命令见 `docs/weekly/week_10_status.md`。
+阶段 2 已完成并冻结 kernel 配置。当前立即进入 PagedKVCache v2：先实现 request state、`finish_request()`、`cancel_request()` 和 physical block free/reuse，再补容量失败原子性、metrics 与 request churn 测试。完整边界见阶段 3。

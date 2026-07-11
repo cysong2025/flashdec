@@ -13,7 +13,7 @@ FlashDec 是一个 12 周 AI Infra 工程项目，主题是 **单 GPU LLM decode
 
 ## 当前状态
 
-Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验，当前通用配置为 `token-major + block_size=32 + num_warps=2`。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling，correctness 为 `76 passed in 4.49s`；Nsight 硬件计数因当前环境缺少 `ncu`/`nsys` 暂未补充。Week 10 已完成可选 `num_stages` 接口和有边界的 sweep 工具，等待 RTX 5070 correctness 与性能验证后冻结最终 kernel 配置。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 correctness 为 `88 passed in 5.00s`；`num_stages=1/2/3/4` 的最佳 p50 几何平均收益仅约 0.39%，未达到 5% 门槛，因此冻结通用配置为 `token-major + block_size=32 + num_warps=2 + num_stages=None`，项目主线转入 Paged KV runtime v2。
 
 主要文档：
 

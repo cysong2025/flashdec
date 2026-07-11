@@ -8,7 +8,8 @@
 - Week 8 完整 `num_warps=2/4/8` sweep 显示：`num_warps=2` 在 28 个 dtype/case 组合中全部 p50 最优。
 - block-size full sweep 显示 block32 在 24/28 个 p50 组合中最优，相对 block16 的 p50 几何平均加速约 1.31x。
 - KV layout full sweep 显示 token-major 在 25/28 个 p50 和 25/28 个 p90 组合中最优；dim-major 的 p50 几何平均约慢 31.4%。
-- 当前 paged decode 通用配置为 `token-major + block_size=32 + num_warps=2`。
+- 当前 paged decode 冻结配置为 `token-major + block_size=32 + num_warps=2 + num_stages=None`。
+- Week 10 `num_stages` full sweep 的最佳候选 stage 2 仅取得约 1.0039x p50 几何平均加速，未达到 5% 门槛；最终冻结为 `num_stages=None`。
 - Week 8 有效带宽估算显示：长 context 下 kernel 更接近 K/V 访存主导。
 - Week 9 PyTorch profiler 和 Chrome trace 进一步显示：large context 下总估算流量几乎全部来自 K/V 读取，kernel 时间随 context 近似线性增长。
 - 最终默认配置已完成 FP16/BF16 的 small、medium、large、large-batch profiling；correctness 为 `76 passed in 4.49s`。
@@ -156,10 +157,8 @@ CUDA event 结果：
 
 ## 下一步优化候选
 
-1. 做 `num_stages` 的受控 sweep，并对低于 5% 的差异视为噪声而非默认策略。
-2. profiler 指导下的 indexing 优化：
-   - 减少 block table load。
-   - 减少 mask 和 offset 计算。
-3. 与 dense Triton baseline 做部分 shape 对比。
-4. 实现 fused RoPE + paged KV append CUDA extension，并与 PyTorch reference 对齐。
+1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
+2. 主线转入 PagedKVCache v2 的 request lifecycle、block free/reuse、容量原子性和 metrics。
+3. 实现 fused RoPE + paged KV append CUDA extension，并与 PyTorch reference 对齐。
+4. 只有 profiler 出现明确索引瓶颈时，才允许一次 time-boxed block table/mask/offset 实验。
 5. 条件允许时，与 FlashInfer 或 vLLM 公开实现做有限对比。

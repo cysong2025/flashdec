@@ -362,3 +362,23 @@ quick sweep 产生 20 条记录，均为 `validated=True`。在 10 个 dtype/cas
 - BF16 batch=1 的 dim-major p50 在 quick/full 间从 0.028448 ms 变为 0.199648 ms。两个 run 均通过 correctness，但说明亚 0.1 ms 延迟容易受测量环境影响；若该 shape 变成目标 workload，应在 interleaved profiler run 中复测。
 
 决定：保留 token-major `[num_blocks, num_kv_heads, block_size, head_dim]` 作为唯一默认 runtime layout；不引入 dim-major cache append、第二套缓存格式或 shape dispatch。layout 实验到此闭环，后续用 profiler 验证 token-major kernel 的 block table indexing、mask 与 register pressure。详细表格见 `benchmarks/results/week8_layout_summary.md`。
+
+## E6：num_stages 有边界实验
+
+### 背景与规则
+
+在 token-major、`block_size=32`、`num_warps=2` 已确定后，只对 Triton `num_stages=default/1/2/3/4` 做最后一次受控实验。决策只使用 medium、large、large-batch 的 FP16/BF16 六个组合；只有 p50 几何平均提升超过 5%、主要 shape 无超过 5% 回退且跨 dtype 方向一致，才修改默认值。
+
+### 验证结果
+
+- RTX 5070 correctness：`88 passed in 5.00s`。
+- full sweep 共 30 条记录，全部 `validated=True`。
+- stage 1/2/3/4 的六场景 p50 几何平均加速分别为 `1.0002x/1.0039x/1.0038x/1.0036x`。
+- 最佳候选 stage 2 仅约快 0.39%；FP16/BF16 几何平均分别为 `1.0074x/1.0005x`。
+- stage 3/4 在 FP16 上约快 1%，但 BF16 分别整体约慢 0.22%/0.25%；BF16 medium p90 还出现约 13.38%/18.93% 回退。
+
+### 决策
+
+没有候选达到 5% 门槛。保留 `num_stages=None`，不增加显式 staging 默认值或 shape/dtype dispatch，也不再对候选做 Profiler。最终 kernel 配置冻结为 token-major、`block_size=32`、`num_warps=2`、Triton implicit staging。
+
+这个负结果说明：当前 paged decode 已以 K/V 访存为主，改变软件流水 staging 不能稳定转化为跨 dtype 的明显收益。详细表格见 `benchmarks/results/week10_num_stages_summary.md`。
