@@ -463,4 +463,4 @@ finish after commit -> releases block once for all layer storage
 
 ## 17. 当前状态
 
-本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。当前代码仍显式限制 `num_layers=1`，transaction API、multi-layer tests、CUDA location-only write 和 RTX 5070 证据均尚未实现；不能把本文视为功能完成。
+本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。R2-A Cache reference transaction、multi-layer tests 与事务/真实 KV bytes 指标已实现，等待 WSL 回归；Engine sequential layer API、CUDA location-only write、multi-layer workload 和 RTX 5070 证据仍未实现，因此不能把 R2 视为整体完成。

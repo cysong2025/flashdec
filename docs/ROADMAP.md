@@ -141,7 +141,7 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 优先级：P1，是 v0.2 的第一条核心深度主线。预计 2 个阶段周。
 
-当前状态：R1-A planner 和 R1-B Engine/Cache 集成已实现，R1-B WSL full regression 为 `293 passed`。R1-C 三策略 trace-driven workload、boundary deadlock、系统指标、scheduled fused/Triton 测试和 benchmark CLI 已实现；新代码的 WSL/full regression 与 RTX 5070 策略数据尚未完成。
+当前状态：R1-A/R1-B/R1-C 均已实现。commit `16de9d4` 的 RTX 5070 正式矩阵包含 2 cases x 2 dtypes x 3 policies x 3 trials，共 36 行并通过完整性/策略不变量校验。boundary-deadlock 中默认 lifetime FIFO + aging 为 100% completion、0 cancel、0 deadlock；cancel baseline 为 50% completion，greedy baseline 为 0% completion 与 1 次确定 deadlock。finite queue 三策略均 100% completion，说明 R1 的主要收益是容量安全与进展保证，而不是无条件 latency/TPS 优势。
 
 ### 要回答的问题
 
@@ -225,7 +225,7 @@ request larger than schedulable capacity -> explicit rejection
 
 优先级：P1，是 v0.2 的第二条核心深度主线。预计 2 个阶段周。
 
-当前状态：状态机、committed/pending seq_len、shared location、abort rollback、sequential layer Engine API、测试和 benchmark 边界已在 `docs/design_multi_layer_kv_transaction.md` 冻结；代码与 RTX 5070 证据尚未开始。
+当前状态：状态机、committed/pending seq_len、shared location、abort rollback、sequential layer Engine API、测试和 benchmark 边界已冻结。R2-A Cache reference transaction 已实现 begin/write/commit/abort、open-transaction invariant、事务/真实 KV bytes 指标与 2/4-layer 测试，等待 WSL 回归；R2-B Engine API、R2-C fused CUDA 和 RTX 证据尚未开始。
 
 ### 要回答的问题
 
@@ -362,9 +362,9 @@ capacity failure -> refcount and ownership unchanged
 
 ## 11. 当前立即执行顺序
 
-1. 在既有 WSL 环境验证 R1-C focused/full regression 与 scheduled fused/Triton correctness。
-2. 运行 boundary-deadlock/finite-queue 的 FP16/BF16 三策略对照并冻结结论。
-3. Scheduler correctness/benchmark 冻结后，再按 R2 设计实现 multi-layer transaction；不并行启动 prefix。
+1. 在既有 WSL 环境验证 R2-A multi-layer transaction focused/full regression。
+2. 回归通过后实现 R2-B Engine sequential layer API 与失败自动 abort。
+3. R2-B 冻结后再实现 R2-C fused CUDA location-only write；不并行启动 prefix。
 4. 全部功能完成后统一执行 clean-machine install、版本升级和 release tag。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

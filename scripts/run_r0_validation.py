@@ -72,6 +72,7 @@ def build_validation_steps(python_executable, phases):
         "tests/test_fused_rope_kv_append.py",
         "tests/test_rope_append.py",
         "tests/test_paged_cache.py",
+        "tests/test_multi_layer_transaction.py",
         "tests/test_paged_decode.py",
         "tests/test_decode_engine.py",
         "tests/test_workload.py",

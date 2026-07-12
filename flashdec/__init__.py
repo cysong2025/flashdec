@@ -2,6 +2,7 @@
 
 __all__ = [
     "PagedKVCache",
+    "KVTokenTransactionView",
     "AdmissionResult",
     "DecodeEngine",
     "DecodeStepResult",
@@ -50,10 +51,13 @@ def __getattr__(name):
             "DecodeEngine": DecodeEngine,
             "DecodeStepResult": DecodeStepResult,
         }[name]
-    if name == "PagedKVCache":
-        from .cache import PagedKVCache
+    if name in ("KVTokenTransactionView", "PagedKVCache"):
+        from .cache import KVTokenTransactionView, PagedKVCache
 
-        return PagedKVCache
+        return {
+            "KVTokenTransactionView": KVTokenTransactionView,
+            "PagedKVCache": PagedKVCache,
+        }[name]
     if name in (
         "ActiveRequestMetadata",
         "BlockAwareScheduler",

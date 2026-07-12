@@ -85,7 +85,7 @@ Week 12 之后的长期深化目标、阶段交付物与验收门槛见 `docs/RO
 - 批量 append 在分配前统一计算所需 block，容量不足时不创建新 request、不增长已有 seq_len。
 - `metrics()` 报告 block utilization、internal fragmentation、allocation/free/reuse 和 lifecycle 计数。
 - `validate_invariants()` 检查 owned/free block 完整覆盖、无重复所有权和终态无 block 泄漏。
-- runtime v2 显式限制 `num_layers=1`；多 layer execution 留给后续版本。
+- legacy append/runtime v2 路径继续只支持 `num_layers=1`；R2-A 新增的多层写入只能通过 token transaction API。
 - RTX 5070 focused correctness：`90 passed in 4.47s`。
 - RTX 5070 完整回归：`170 passed in 4.66s`。
 
@@ -216,6 +216,6 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 当前立即执行
 
-R1-B 已通过 WSL `293 passed`。下一步在既有 WSL 环境验证 R1-C 的 focused/full regression、scheduled fused/Triton 数值对齐和三策略 boundary-deadlock/finite-queue CSV；结果回传后冻结 completion、forced cancellation、deadlock、有效 TPS、等待时间和显存利用率结论。clean-machine install 推迟到全部功能完成后的最终发布验证，期间版本保持 `0.0.0`。
+R1 已在 RTX 5070 完成 36 行正式策略矩阵并通过严格摘要校验。boundary-deadlock 中 lifetime FIFO + aging 完成 2/2 请求且无取消/死锁；cancel baseline 完成 1/2，greedy baseline 完成 0/2 并触发确定的零进展检测。普通 finite queue 中三种策略均完成 6/6，请勿把 R1 表述为无条件吞吐优化。
 
-完成 `v0.1.0` 后不继续增加零散 kernel。Scheduler v2 的 R1-A 纯策略 planner 与 focused tests 已提前隔离实现；release gate 闭合后的下一条代码主线是 R1-B Engine/Cache 集成：`state_version`、scheduler-facing snapshot、decision apply 与 lifecycle commitment release。随后进入 R1-C，对比 `cancel_on_backpressure`、`greedy_step_only` 与 `lifetime_fifo_aging`，不能退化成只看本 step 空闲 block 的策略。Scheduler 验证完成后才按 `docs/design_multi_layer_kv_transaction.md` 实现 R2，不能只删除 `num_layers=1` 检查。
+当前进入 R2。R2-A Cache reference transaction 已实现：多层写入共享一次预留位置，committed `seq_len` 仅在全部 layer 成功后增长一次，abort 会归还新 block 并保持 partial bytes 不可见。下一步先在 WSL 执行 focused/full CPU/reference 回归；通过后再实现 R2-B Engine `begin_step/step_layer/commit_step/abort_step`，随后才进入 fused CUDA location-only write。clean-machine install 继续推迟到全部主线功能完成后的最终发布验证，期间版本保持 `0.0.0`。

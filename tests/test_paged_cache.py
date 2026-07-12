@@ -25,17 +25,20 @@ def _make_cache(num_kv_heads=1, head_dim=4, block_size=2, max_blocks=8, dtype=to
     )
 
 
-def test_paged_kv_cache_runtime_v2_rejects_multi_layer_execution():
-    with pytest.raises(ValueError, match="supports num_layers=1"):
-        PagedKVCache(
-            num_layers=2,
-            num_kv_heads=1,
-            head_dim=2,
-            block_size=2,
-            max_blocks=2,
-            dtype=torch.float32,
-            device=DEVICE,
-        )
+def test_paged_kv_cache_multi_layer_requires_transaction_writes():
+    cache = PagedKVCache(
+        num_layers=2,
+        num_kv_heads=1,
+        head_dim=2,
+        block_size=2,
+        max_blocks=2,
+        dtype=torch.float32,
+        device=DEVICE,
+    )
+    cache.add_request(1)
+    token = torch.ones((1, 1, 2), device=DEVICE, dtype=torch.float32)
+    with pytest.raises(RuntimeError, match="transaction API"):
+        cache.append(0, [1], token, token)
 
 
 def test_paged_kv_cache_append_tracks_non_contiguous_blocks():
@@ -270,6 +273,18 @@ def test_paged_kv_cache_metrics_report_utilization_and_fragmentation():
         "active_requests": 2,
         "finished_requests": 0,
         "cancelled_requests": 0,
+        "transaction_begin_count": 0,
+        "transaction_commit_count": 0,
+        "transaction_abort_count": 0,
+        "open_transaction_count": 0,
+        "pending_request_count": 0,
+        "reserved_transaction_blocks": 0,
+        "transaction_layer_write_count": 0,
+        "transaction_rollback_block_count": 0,
+        "transaction_failure_count": 0,
+        "bytes_per_block": 64,
+        "allocated_kv_bytes": 128,
+        "reserved_transaction_bytes": 0,
     }
     assert cache.validate_invariants()
 

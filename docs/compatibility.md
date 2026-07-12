@@ -17,13 +17,14 @@
 - reuse-priority physical block free list。
 - block utilization、internal fragmentation 和 allocation/free/reuse metrics。
 - capacity preflight 和 allocator invariant validation。
+- R2-A multi-layer token transaction：shared location、sequential layer write、commit/abort rollback。
 
 当前限制：
 
-- runtime v2 当前显式限制 `num_layers=1`。
+- legacy `append()`/RoPE/DecodeEngine 路径仍限制 `num_layers=1`；`num_layers>1` 目前只支持 Cache reference transaction。
 - finished/cancelled request id 当前不能重新激活。
 - runtime v2 已通过 RTX 5070 focused/full correctness 验证。
-- 不包含 prefix cache、swap、evict、连续 batching 调度等 serving runtime 能力。
+- 已支持 R1 block-aware scheduler；仍不包含 prefix cache、swap、evict 或生产级多线程 serving。
 
 ## Paged Decode Triton Kernel
 
@@ -91,7 +92,7 @@
 - short-churn、mixed-steady、long-pressure synthetic workload 与完整 step p50/p90/p99/TPS/memory metrics。
 - 可选 `profile_ranges=True` 的 preflight/append/decode 归因；默认关闭。
 
-当前限制：单 layer；Q/K/V 由调用方提供；没有 model forward、sampling、block-aware continuous scheduler、prefix cache 或网络服务。GPU Engine fused/Triton correctness 已由用户反馈通过；首轮 dynamic workload 12/12 rows 通过 invariant，3-trial 与 complete-step profiler 的最新代码仍待 RTX 5070 复验。
+当前限制：DecodeEngine 仍为单 layer；Q/K/V 由调用方提供；没有 model forward、sampling、prefix cache 或网络服务。R1 block-aware scheduler 的 36 行 RTX 正式矩阵已完成；R2-A 仅完成 Cache reference transaction，Engine multi-layer API 仍待实现。
 
 ### Week 11 Native CUDA KV Append
 

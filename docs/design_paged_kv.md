@@ -23,7 +23,7 @@ k_cache / v_cache:
 [num_layers, max_blocks, num_kv_heads, block_size, head_dim]
 ```
 
-storage 保留 `num_layers` 维度作为未来扩展点，但 runtime v2 为避免错误共享 seq_len/block ownership，当前显式要求 `num_layers=1`。
+storage 保留 `num_layers` 维度。legacy runtime v2 append 为避免错误重复推进 seq_len，仍要求 `num_layers=1`；R2-A 允许通过 multi-layer token transaction 共享一次 block location，并在全部 layer 完成后只推进一次 seq_len。
 
 paged reference 使用单层 cache：
 
@@ -189,7 +189,7 @@ PagedKVCache append tokens
 
 ## 7. 当前限制
 
-- runtime v2 当前只支持 `num_layers=1`；构造多 layer cache 会显式报错，避免错误共享 seq_len/block ownership。
+- legacy runtime v2 append 当前只支持 `num_layers=1`；构造多 layer cache 后必须使用 R2 token transaction，不能逐层调用 legacy append。
 - finished/cancelled request id 不能重新激活；终态记录当前保留用于状态查询和 lifecycle 计数。
 - 释放 physical block 时不会清零 K/V。正确性依赖 block ownership、block table 和 seq_len；新 request 的有效 token 不会读取旧尾部数据。
 - 当前 allocator 和 request scheduler 位于 Python 层，目标是先定义清楚语义，不代表最终高吞吐 serving 实现。

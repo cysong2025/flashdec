@@ -13,6 +13,38 @@ class _RequestState:
     status: str = "active"
     seq_len: int = 0
     block_ids: list[int] = field(default_factory=list)
+    transaction_id: int | None = None
+
+
+@dataclass(frozen=True)
+class KVTokenTransactionView:
+    """Detached public snapshot of one multi-layer token transaction."""
+
+    transaction_id: int
+    cache_version: int
+    request_ids: tuple[Hashable, ...]
+    positions: object
+    physical_block_ids: object
+    block_offsets: object
+    block_tables: object
+    effective_seq_lens: object
+    next_layer_idx: int
+    state: str
+
+
+@dataclass
+class _KVTokenTransactionState:
+    transaction_id: int
+    cache_version: int
+    request_ids: tuple[Hashable, ...]
+    positions: tuple[int, ...]
+    locations: tuple[tuple[int, int], ...]
+    block_tables: object
+    newly_allocated_by_request: dict[Hashable, int]
+    allocation_order: tuple[int, ...]
+    next_layer_idx: int = 0
+    written_layers: set[int] = field(default_factory=set)
+    state: str = "open"
 
 
 def _torch():
@@ -64,9 +96,6 @@ class PagedKVCache:
         ]:
             if int(value) <= 0:
                 raise ValueError(f"{name} must be positive")
-        if int(num_layers) != 1:
-            raise ValueError("PagedKVCache runtime v2 currently supports num_layers=1")
-
         if not torch.empty((), dtype=dtype).is_floating_point():
             raise ValueError("dtype must be a floating point torch dtype")
 
@@ -97,9 +126,20 @@ class PagedKVCache:
         self._reuse_count = 0
         self._capacity_failure_count = 0
         self._state_version = 0
+        self._next_transaction_id = 1
+        self._open_transaction_id: int | None = None
+        self._transactions: dict[int, _KVTokenTransactionState] = {}
+        self._transaction_begin_count = 0
+        self._transaction_commit_count = 0
+        self._transaction_abort_count = 0
+        self._transaction_layer_write_count = 0
+        self._transaction_rollback_block_count = 0
+        self._transaction_failure_count = 0
 
     def add_request(self, request_id):
         """Register an empty request if it does not already exist."""
+        if self._open_transaction_id is not None:
+            raise RuntimeError("cannot add a request during an open token transaction")
         self._check_request_id(request_id)
         state = self._requests.get(request_id)
         if state is None:
@@ -125,6 +165,7 @@ class PagedKVCache:
         Returns:
             A padded block table tensor for the provided request ids.
         """
+        self._require_legacy_append_available()
         layer_idx, ids, k, v = self._prepare_append_inputs(layer_idx, request_ids, k, v)
         self._preflight_append(ids)
         locations = self._allocate_append_locations(ids)
@@ -149,6 +190,7 @@ class PagedKVCache:
         PyTorch RoPE reference before appending, or ``append_fused_cuda`` for
         the separate fused data path.
         """
+        self._require_legacy_append_available()
         torch = _torch()
         layer_idx, ids, k, v = self._prepare_append_inputs(layer_idx, request_ids, k, v)
         if self.device.type != "cuda":
@@ -205,6 +247,7 @@ class PagedKVCache:
         retains capacity preflight, physical block allocation, and seq_len
         mutation. It returns ``(rotated_q, block_tables)``.
         """
+        self._require_legacy_append_available()
         torch = _torch()
         layer_idx, ids, k, v = self._prepare_append_inputs(layer_idx, request_ids, k, v)
         if self.device.type != "cuda":
@@ -268,6 +311,143 @@ class PagedKVCache:
         self._state_version += 1
         return q_rotated, self.block_tables(ids)
 
+    def begin_token(self, request_ids):
+        """Reserve one shared token location for every layer in the batch.
+
+        Requests must already be active.  The committed sequence lengths stay
+        unchanged until :meth:`commit_token`; boundary blocks allocated here
+        are returned by :meth:`abort_token`.
+        """
+        if self._open_transaction_id is not None:
+            raise RuntimeError("PagedKVCache already has an open token transaction")
+        ids = tuple(self._normalize_request_ids(request_ids))
+        if not ids:
+            raise ValueError("request_ids must be non-empty")
+        if len(set(ids)) != len(ids):
+            raise ValueError("request_ids must be unique within one token transaction")
+        states = [self._require_active_request(request_id) for request_id in ids]
+        if any(state.transaction_id is not None for state in states):
+            raise RuntimeError("request already belongs to an open token transaction")
+
+        needed_new_blocks = sum(
+            state.seq_len % self.block_size == 0 for state in states
+        )
+        if needed_new_blocks > len(self._free_blocks):
+            self._capacity_failure_count += 1
+            self._transaction_failure_count += 1
+            raise RuntimeError("PagedKVCache is out of physical blocks")
+
+        transaction_id = self._next_transaction_id
+        positions = tuple(state.seq_len for state in states)
+        locations = []
+        newly_allocated = {}
+        allocation_order = []
+        try:
+            for request_id, state, position in zip(ids, states, positions):
+                logical_block = position // self.block_size
+                block_offset = position % self.block_size
+                if block_offset == 0:
+                    block_id = self._allocate_block()
+                    state.block_ids.append(block_id)
+                    newly_allocated[request_id] = block_id
+                    allocation_order.append(block_id)
+                locations.append((state.block_ids[logical_block], block_offset))
+            block_tables = self.block_tables(ids)
+            for state in states:
+                state.transaction_id = transaction_id
+        except Exception:
+            for request_id, block_id in newly_allocated.items():
+                state = self._requests[request_id]
+                if state.block_ids and state.block_ids[-1] == block_id:
+                    state.block_ids.pop()
+                state.transaction_id = None
+            for block_id in reversed(allocation_order):
+                self._free_blocks.appendleft(block_id)
+            self._transaction_failure_count += 1
+            raise
+
+        cache_version = self._state_version + 1
+        transaction = _KVTokenTransactionState(
+            transaction_id=transaction_id,
+            cache_version=cache_version,
+            request_ids=ids,
+            positions=positions,
+            locations=tuple(locations),
+            block_tables=block_tables,
+            newly_allocated_by_request=newly_allocated,
+            allocation_order=tuple(allocation_order),
+        )
+        self._transactions[transaction_id] = transaction
+        self._open_transaction_id = transaction_id
+        self._next_transaction_id += 1
+        self._transaction_begin_count += 1
+        self._state_version = cache_version
+        return self._transaction_view(transaction)
+
+    def write_token_layer(self, transaction, layer_idx, k, v):
+        """Write one layer at the locations reserved by ``begin_token``."""
+        state = self._require_open_transaction(transaction)
+        try:
+            layer_idx = self._validate_layer_idx(layer_idx)
+            if layer_idx != state.next_layer_idx:
+                raise RuntimeError(
+                    f"transaction requires layer {state.next_layer_idx}, got layer {layer_idx}"
+                )
+            _, ids, k, v = self._prepare_append_inputs(
+                layer_idx, state.request_ids, k, v
+            )
+            if tuple(ids) != state.request_ids:
+                raise RuntimeError("transaction request order changed unexpectedly")
+
+            for row, (physical_block, block_offset) in enumerate(state.locations):
+                self.k_cache[layer_idx, physical_block, :, block_offset, :] = k[row]
+                self.v_cache[layer_idx, physical_block, :, block_offset, :] = v[row]
+        except Exception:
+            self._transaction_failure_count += 1
+            raise
+        state.written_layers.add(layer_idx)
+        state.next_layer_idx += 1
+        self._transaction_layer_write_count += 1
+        return self._transaction_view(state)
+
+    def commit_token(self, transaction):
+        """Publish one token after every layer has been written successfully."""
+        state = self._require_open_transaction(transaction)
+        if state.next_layer_idx != self.num_layers:
+            raise RuntimeError("cannot commit token before all layers are written")
+        for request_id in state.request_ids:
+            request = self._requests[request_id]
+            request.seq_len += 1
+            request.transaction_id = None
+        state.state = "committed"
+        self._open_transaction_id = None
+        self._transaction_commit_count += 1
+        self._state_version += 1
+        return self._transaction_view(state)
+
+    def abort_token(self, transaction):
+        """Abort an open token and return any boundary blocks it reserved."""
+        state = self._require_open_transaction(transaction)
+        for request_id, block_id in state.newly_allocated_by_request.items():
+            request = self._requests[request_id]
+            if not request.block_ids or request.block_ids[-1] != block_id:
+                raise RuntimeError("transaction rollback block ownership is inconsistent")
+            request.block_ids.pop()
+        for block_id in reversed(state.allocation_order):
+            self._free_blocks.appendleft(block_id)
+        for request_id in state.request_ids:
+            self._requests[request_id].transaction_id = None
+        state.state = "aborted"
+        self._open_transaction_id = None
+        self._transaction_abort_count += 1
+        self._transaction_rollback_block_count += len(state.allocation_order)
+        self._state_version += 1
+        return self._transaction_view(state)
+
+    def transaction_view(self, transaction):
+        """Return the latest detached snapshot for a transaction handle."""
+        return self._transaction_view(self._require_transaction(transaction))
+
     def finish_request(self, request_id):
         """Mark an active request finished and release all owned blocks."""
         return self._close_request(request_id, self.FINISHED)
@@ -304,6 +484,10 @@ class PagedKVCache:
                 raise RuntimeError(
                     f"request_id {request_id!r} is {state.status} and cannot accept append"
                 )
+            elif state.transaction_id is not None:
+                raise RuntimeError(
+                    f"request_id {request_id!r} belongs to an open token transaction"
+                )
             else:
                 positions.append(state.seq_len)
         if device is None:
@@ -315,6 +499,22 @@ class PagedKVCache:
         states = list(self._requests.values())
         active_states = [state for state in states if state.status == self.ACTIVE]
         used_blocks = self.num_used_blocks
+        bytes_per_block = (
+            self.num_layers
+            * 2
+            * self.num_kv_heads
+            * self.block_size
+            * self.head_dim
+            * self.k_cache.element_size()
+        )
+        open_transaction = (
+            self._transactions.get(self._open_transaction_id)
+            if self._open_transaction_id is not None
+            else None
+        )
+        reserved_transaction_blocks = (
+            len(open_transaction.allocation_order) if open_transaction is not None else 0
+        )
         reserved_tokens = used_blocks * self.block_size
         active_tokens = sum(state.seq_len for state in active_states)
         fragmentation_tokens = reserved_tokens - active_tokens
@@ -337,6 +537,20 @@ class PagedKVCache:
             "active_requests": sum(state.status == self.ACTIVE for state in states),
             "finished_requests": sum(state.status == self.FINISHED for state in states),
             "cancelled_requests": sum(state.status == self.CANCELLED for state in states),
+            "transaction_begin_count": self._transaction_begin_count,
+            "transaction_commit_count": self._transaction_commit_count,
+            "transaction_abort_count": self._transaction_abort_count,
+            "open_transaction_count": int(open_transaction is not None),
+            "pending_request_count": (
+                len(open_transaction.request_ids) if open_transaction is not None else 0
+            ),
+            "reserved_transaction_blocks": reserved_transaction_blocks,
+            "transaction_layer_write_count": self._transaction_layer_write_count,
+            "transaction_rollback_block_count": self._transaction_rollback_block_count,
+            "transaction_failure_count": self._transaction_failure_count,
+            "bytes_per_block": bytes_per_block,
+            "allocated_kv_bytes": used_blocks * bytes_per_block,
+            "reserved_transaction_bytes": reserved_transaction_blocks * bytes_per_block,
         }
 
     def validate_invariants(self):
@@ -348,12 +562,18 @@ class PagedKVCache:
         owned_blocks = []
         for state in self._requests.values():
             if state.status == self.ACTIVE:
-                expected_blocks = (state.seq_len + self.block_size - 1) // self.block_size
+                pending_tokens = int(state.transaction_id is not None)
+                expected_blocks = (
+                    state.seq_len + pending_tokens + self.block_size - 1
+                ) // self.block_size
                 if len(state.block_ids) != expected_blocks:
                     raise RuntimeError("active request block count does not match seq_len")
                 owned_blocks.extend(state.block_ids)
-            elif state.block_ids:
-                raise RuntimeError("terminal request still owns physical blocks")
+            else:
+                if state.block_ids:
+                    raise RuntimeError("terminal request still owns physical blocks")
+                if state.transaction_id is not None:
+                    raise RuntimeError("terminal request belongs to a token transaction")
 
         if len(owned_blocks) != len(set(owned_blocks)):
             raise RuntimeError("a physical block is owned by multiple requests")
@@ -361,6 +581,44 @@ class PagedKVCache:
             raise RuntimeError("a physical block is both owned and free")
         if set(owned_blocks) | set(free_blocks) != set(range(self.max_blocks)):
             raise RuntimeError("physical block accounting does not cover the cache")
+
+        open_states = [
+            transaction
+            for transaction in self._transactions.values()
+            if transaction.state == "open"
+        ]
+        if self._open_transaction_id is None:
+            if open_states:
+                raise RuntimeError("open transaction is missing from cache state")
+            if any(state.transaction_id is not None for state in self._requests.values()):
+                raise RuntimeError("request has an in-flight marker without an open transaction")
+        else:
+            if len(open_states) != 1:
+                raise RuntimeError("PagedKVCache must have exactly one open transaction")
+            transaction = open_states[0]
+            if transaction.transaction_id != self._open_transaction_id:
+                raise RuntimeError("open transaction id does not match cache state")
+            if transaction.written_layers != set(range(transaction.next_layer_idx)):
+                raise RuntimeError("transaction written layers are not sequential")
+            if not 0 <= transaction.next_layer_idx <= self.num_layers:
+                raise RuntimeError("transaction next layer is out of range")
+            for request_id, position, location in zip(
+                transaction.request_ids,
+                transaction.positions,
+                transaction.locations,
+            ):
+                request = self._require_active_request(request_id)
+                if request.transaction_id != transaction.transaction_id:
+                    raise RuntimeError("request transaction marker does not match")
+                if position != request.seq_len:
+                    raise RuntimeError("transaction position is not the committed seq_len")
+                logical_block = position // self.block_size
+                expected_location = (
+                    request.block_ids[logical_block],
+                    position % self.block_size,
+                )
+                if location != expected_location:
+                    raise RuntimeError("transaction physical location does not match ownership")
         return True
 
     def block_tables(self, request_ids=None, max_blocks_per_seq=None, pad_value=-1):
@@ -454,6 +712,72 @@ class PagedKVCache:
         """Return the logical ownership/sequence mutation version."""
         return self._state_version
 
+    @property
+    def has_open_transaction(self):
+        return self._open_transaction_id is not None
+
+    def _transaction_view(self, transaction):
+        torch = _torch()
+        block_ids = torch.tensor(
+            [location[0] for location in transaction.locations],
+            device=self.device,
+            dtype=torch.int64,
+        )
+        block_offsets = torch.tensor(
+            [location[1] for location in transaction.locations],
+            device=self.device,
+            dtype=torch.int64,
+        )
+        positions = torch.tensor(
+            transaction.positions,
+            device=self.device,
+            dtype=torch.int64,
+        )
+        effective_seq_lens = torch.tensor(
+            [position + 1 for position in transaction.positions],
+            device=self.device,
+            dtype=torch.int32,
+        )
+        return KVTokenTransactionView(
+            transaction_id=transaction.transaction_id,
+            cache_version=transaction.cache_version,
+            request_ids=transaction.request_ids,
+            positions=positions,
+            physical_block_ids=block_ids,
+            block_offsets=block_offsets,
+            block_tables=transaction.block_tables.clone(),
+            effective_seq_lens=effective_seq_lens,
+            next_layer_idx=transaction.next_layer_idx,
+            state=transaction.state,
+        )
+
+    def _require_transaction(self, transaction):
+        if not isinstance(transaction, KVTokenTransactionView):
+            raise TypeError("transaction must be a KVTokenTransactionView")
+        state = self._transactions.get(transaction.transaction_id)
+        if state is None:
+            raise RuntimeError("unknown token transaction")
+        if (
+            transaction.cache_version != state.cache_version
+            or transaction.request_ids != state.request_ids
+        ):
+            raise RuntimeError("stale or invalid token transaction handle")
+        return state
+
+    def _require_open_transaction(self, transaction):
+        state = self._require_transaction(transaction)
+        if state.state != "open":
+            raise RuntimeError(f"token transaction is already {state.state}")
+        if self._open_transaction_id != state.transaction_id:
+            raise RuntimeError("token transaction is not the current open transaction")
+        return state
+
+    def _require_legacy_append_available(self):
+        if self.num_layers != 1:
+            raise RuntimeError("multi-layer cache writes require the token transaction API")
+        if self._open_transaction_id is not None:
+            raise RuntimeError("legacy append is not allowed during an open token transaction")
+
     def _prepare_append_inputs(self, layer_idx, request_ids, k, v):
         layer_idx = self._validate_layer_idx(layer_idx)
         ids = self._normalize_request_ids(request_ids)
@@ -528,6 +852,8 @@ class PagedKVCache:
         return block_id
 
     def _close_request(self, request_id, terminal_status):
+        if self._open_transaction_id is not None:
+            raise RuntimeError("cannot close a request during an open token transaction")
         state = self._require_active_request(request_id)
         released_blocks = tuple(state.block_ids)
         # Do not zero K/V here: ownership plus the next request's seq_len masks
