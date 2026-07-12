@@ -274,6 +274,24 @@ def test_paged_kv_cache_metrics_report_utilization_and_fragmentation():
     assert cache.validate_invariants()
 
 
+def test_paged_kv_cache_state_version_tracks_only_successful_state_mutations():
+    cache = _make_cache(num_kv_heads=1, head_dim=2, block_size=1, max_blocks=1)
+    token = torch.ones((1, 1, 2), device=DEVICE, dtype=torch.float32)
+    assert cache.state_version == 0
+
+    cache.add_request("owner")
+    assert cache.state_version == 1
+    cache.append(0, ["owner"], token, token)
+    assert cache.state_version == 2
+
+    with pytest.raises(RuntimeError, match="out of physical blocks"):
+        cache.append(0, ["other"], token, token)
+    assert cache.state_version == 2
+
+    cache.finish_request("owner")
+    assert cache.state_version == 3
+
+
 def test_paged_kv_cache_default_metadata_only_contains_active_requests():
     cache = _make_cache(num_kv_heads=1, head_dim=2, block_size=2, max_blocks=2)
     batch = torch.zeros((2, 1, 2), device=DEVICE, dtype=torch.float32)

@@ -1,5 +1,6 @@
-"""Dynamic request lifecycle and decode-step coverage for DecodeEngine v1."""
+"""Dynamic request lifecycle and scheduler integration coverage for DecodeEngine."""
 
+from dataclasses import replace
 import shutil
 
 import pytest
@@ -19,6 +20,7 @@ from flashdec.engine import (
 )
 from flashdec.paged_reference import paged_decode_attention_ref
 from flashdec.rope import rope_paged_kv_append_ref
+from flashdec.scheduler import BlockAwareScheduler, RequestSpec, SchedulerConfig
 
 
 HAS_CUDA_TOOLCHAIN = (
@@ -198,6 +200,149 @@ def test_decode_engine_optional_profile_ranges_preserve_cpu_reference_step():
 def test_decode_engine_rejects_non_bool_profile_ranges():
     with pytest.raises(ValueError, match="profile_ranges"):
         DecodeEngine(_make_cache(), profile_ranges="yes")
+
+
+def test_scheduler_managed_engine_applies_decisions_and_releases_commitment():
+    torch.manual_seed(275)
+    engine = DecodeEngine(_make_cache(block_size=2, max_blocks=4))
+    scheduler = BlockAwareScheduler(
+        SchedulerConfig(max_active_requests=2, max_batch_requests=1)
+    )
+    assert engine.submit_request(RequestSpec("a", 0, 4, 0)).status == DecodeEngine.WAITING
+    assert engine.submit_request(RequestSpec("b", 0, 4, 1)).status == DecodeEngine.WAITING
+
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    decision = scheduler.plan(snapshot)
+    applied = engine.apply_scheduler_decision(decision)
+
+    assert applied == (
+        AdmissionResult("a", DecodeEngine.ACTIVE),
+        AdmissionResult("b", DecodeEngine.ACTIVE),
+    )
+    assert decision.runnable_ids == ("a",)
+    assert decision.deferred_ids == ("b",)
+    assert engine.metrics()["committed_blocks"] == 4
+    assert engine.metrics()["committed_but_unallocated_blocks"] == 4
+
+    q, k, v = _step_inputs(1)
+    first = engine.step(q, k, v, request_ids=["a"])
+    assert first.status == DecodeEngine.STEP_OK
+    assert engine.metrics()["committed_but_unallocated_blocks"] == 3
+
+    snapshot = engine.scheduling_snapshot(
+        logical_step=1,
+        active_service_wait_steps={"a": 0, "b": 1},
+    )
+    decision = scheduler.plan(snapshot)
+    assert decision.runnable_ids == ("b",)
+    assert engine.apply_scheduler_decision(decision) == ()
+    second = engine.step(q, k, v, request_ids=["b"])
+    assert second.status == DecodeEngine.STEP_OK
+
+    assert engine.finish_request("a") == (0,)
+    assert engine.metrics()["committed_blocks"] == 2
+    assert engine.metrics()["committed_but_unallocated_blocks"] == 1
+    assert engine.validate_invariants()
+
+
+def test_scheduler_decision_stale_version_is_rejected_without_partial_admission():
+    engine = DecodeEngine(_make_cache(block_size=2, max_blocks=4))
+    scheduler = BlockAwareScheduler(
+        SchedulerConfig(max_active_requests=2, max_batch_requests=2)
+    )
+    engine.submit_request(RequestSpec("first", 0, 2, 0))
+    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
+    before_version = engine.state_version
+    engine.submit_request(RequestSpec("later", 0, 2, 1))
+
+    with pytest.raises(RuntimeError, match="stale scheduler decision"):
+        engine.apply_scheduler_decision(decision)
+
+    assert engine.state_version == before_version + 1
+    assert engine.request_state("first")["status"] == DecodeEngine.WAITING
+    assert engine.request_state("later")["status"] == DecodeEngine.WAITING
+    assert engine.cache.num_used_blocks == 0
+    assert engine.metrics()["stale_decision_count"] == 1
+
+
+def test_scheduler_decision_validation_is_atomic_and_rejects_external_cache_mutation():
+    engine = DecodeEngine(_make_cache(block_size=2, max_blocks=4))
+    scheduler = BlockAwareScheduler(
+        SchedulerConfig(max_active_requests=1, max_batch_requests=1)
+    )
+    engine.submit_request(RequestSpec("request", 0, 2, 0))
+    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
+    malformed = replace(
+        decision,
+        committed_blocks_after=decision.committed_blocks_after + 1,
+    )
+
+    with pytest.raises(ValueError, match="committed_blocks_after"):
+        engine.apply_scheduler_decision(malformed)
+    assert engine.request_state("request")["status"] == DecodeEngine.WAITING
+    assert engine.cache.num_used_blocks == 0
+
+    engine.cache.add_request("request")
+    with pytest.raises(RuntimeError, match="mutated outside"):
+        engine.apply_scheduler_decision(decision)
+    assert engine.request_state("request")["status"] == DecodeEngine.WAITING
+    assert engine.metrics()["stale_decision_count"] == 1
+
+    populated_cache = _make_cache()
+    populated_cache.add_request("preexisting")
+    populated_engine = DecodeEngine(populated_cache)
+    with pytest.raises(RuntimeError, match="requires an empty PagedKVCache"):
+        populated_engine.submit_request(RequestSpec("new", 0, 2, 0))
+
+
+def test_scheduler_rejects_impossible_request_and_keeps_it_out_of_cache():
+    engine = DecodeEngine(_make_cache(block_size=2, max_blocks=2))
+    scheduler = BlockAwareScheduler(
+        SchedulerConfig(max_active_requests=1, max_batch_requests=1)
+    )
+    engine.submit_request(RequestSpec("too-large", 0, 5, 0))
+    engine.submit_request(RequestSpec("small", 0, 2, 1))
+
+    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
+    applied = engine.apply_scheduler_decision(decision)
+
+    assert applied == (
+        AdmissionResult("small", DecodeEngine.ACTIVE),
+        AdmissionResult("too-large", DecodeEngine.REJECTED),
+    )
+    assert engine.request_state("too-large")["status"] == DecodeEngine.REJECTED
+    with pytest.raises(KeyError, match="unknown request_id"):
+        engine.cache.request_state("too-large")
+    assert engine.metrics()["rejected_requests"] == 1
+    assert engine.validate_invariants()
+
+
+def test_scheduler_initial_context_must_be_seeded_then_replanned():
+    engine = DecodeEngine(_make_cache(block_size=2, max_blocks=2))
+    scheduler = BlockAwareScheduler(
+        SchedulerConfig(max_active_requests=1, max_batch_requests=1)
+    )
+    engine.submit_request(RequestSpec("context", 2, 2, 0))
+    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
+    engine.apply_scheduler_decision(decision)
+
+    q, k, v = _step_inputs(1)
+    with pytest.raises(RuntimeError, match="requires an applied decision"):
+        engine.step(q, k, v, request_ids=["context"])
+    assert engine.prefill_request("context", k, v) == 1
+    assert engine.prefill_request("context", k, v) == 2
+    with pytest.raises(RuntimeError, match="already fully seeded"):
+        engine.prefill_request("context", k, v)
+
+    snapshot = engine.scheduling_snapshot(logical_step=1)
+    assert snapshot.active[0].seq_len == 2
+    assert snapshot.active[0].remaining_tokens == 2
+    decision = scheduler.plan(snapshot)
+    engine.apply_scheduler_decision(decision)
+    result = engine.step(q, k, v, request_ids=["context"])
+    assert result.status == DecodeEngine.STEP_OK
+    assert engine.request_state("context")["cache"]["seq_len"] == 3
+    assert engine.validate_invariants()
 
 
 @pytest.mark.skipif(not HAS_CUDA_TOOLCHAIN, reason=CUDA_TOOLCHAIN_REASON)

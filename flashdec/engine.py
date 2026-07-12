@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Hashable
 
@@ -58,6 +59,7 @@ class DecodeEngine:
     ACTIVE = "active"
     FINISHED = "finished"
     CANCELLED = "cancelled"
+    REJECTED = "rejected"
 
     STEP_OK = "ok"
     STEP_BACKPRESSURE = "backpressure"
@@ -100,22 +102,263 @@ class DecodeEngine:
         self._completed_step_count = 0
         self._appended_token_count = 0
         self._backpressure_count = 0
+        self._state_version = 0
+        self._observed_cache_state_version = cache.state_version
+        self._scheduler_managed = False
+        self._request_specs = {}
+        self._stale_decision_count = 0
+        self._applied_decision_count = 0
+        self._pending_runnable_ids = None
 
     def add_request(self, request_id):
         """Submit a new request in ``waiting`` state without allocating KV memory."""
+        if self._scheduler_managed:
+            raise RuntimeError("scheduler-managed engines require submit_request(RequestSpec)")
+        return self._add_waiting_request(request_id, spec=None)
+
+    def submit_request(self, spec):
+        """Submit an immutable scheduler request specification.
+
+        Calling this method enables scheduler-managed mode. Legacy
+        ``add_request``/``admit`` remain available on engines that have not
+        entered this mode, so existing unscheduled callers keep their API.
+        """
+        from .scheduler import RequestSpec
+
+        if not isinstance(spec, RequestSpec):
+            raise TypeError("spec must be a RequestSpec")
+        if (
+            not self._scheduler_managed
+            and self.cache.state_version != self._observed_cache_state_version
+        ):
+            raise RuntimeError("cannot enable scheduler mode after external cache mutation")
+        self._require_cache_synchronized()
+        if self._statuses and not self._scheduler_managed:
+            raise RuntimeError("cannot mix legacy requests with scheduler-managed requests")
+        if not self._scheduler_managed:
+            cache_metrics = self.cache.metrics()
+            if any(
+                cache_metrics[name]
+                for name in ("active_requests", "finished_requests", "cancelled_requests")
+            ):
+                raise RuntimeError("scheduler-managed mode requires an empty PagedKVCache")
+        self._scheduler_managed = True
+        return self._add_waiting_request(spec.request_id, spec=spec)
+
+    def _add_waiting_request(self, request_id, spec):
         self._check_request_id(request_id)
         if request_id in self._statuses:
             raise RuntimeError(f"request_id {request_id!r} already exists in the DecodeEngine")
+        if spec is not None:
+            if any(
+                existing.submission_order == spec.submission_order
+                for existing in self._request_specs.values()
+            ):
+                raise ValueError("submission_order must be unique within one DecodeEngine")
+            self._request_specs[request_id] = spec
         self._statuses[request_id] = self.WAITING
+        self._bump_state_version()
         return AdmissionResult(request_id=request_id, status=self.WAITING)
 
     def admit(self, request_ids=None):
         """Move waiting requests to active state without reserving physical blocks."""
+        if self._scheduler_managed:
+            raise RuntimeError("scheduler-managed engines require apply_scheduler_decision")
         ids = self._normalize_waiting_ids(request_ids)
-        for request_id in ids:
-            self.cache.add_request(request_id)
-            self._statuses[request_id] = self.ACTIVE
+        self._admit_ids(ids)
+        self._bump_state_version()
         return tuple(AdmissionResult(request_id=request_id, status=self.ACTIVE) for request_id in ids)
+
+    @property
+    def state_version(self):
+        """Return the monotonic Engine lifecycle/sequence version."""
+        return self._state_version
+
+    def scheduling_snapshot(
+        self,
+        logical_step,
+        *,
+        waiting_wait_steps=None,
+        waiting_skip_counts=None,
+        active_service_wait_steps=None,
+    ):
+        """Build scheduler metadata from authoritative Engine/Cache state.
+
+        Scheduler-owned fairness counters are supplied as mappings; request
+        specs, sequence lengths, physical ownership, and commitments are
+        derived or validated here and cannot be forged by the caller.
+        """
+        from .scheduler import (
+            ActiveRequestMetadata,
+            SchedulingSnapshot,
+            WaitingRequestMetadata,
+        )
+
+        if not self._scheduler_managed:
+            raise RuntimeError("scheduling_snapshot requires submit_request(RequestSpec)")
+        self._require_cache_synchronized()
+        if isinstance(logical_step, bool) or not isinstance(logical_step, int) or logical_step < 0:
+            raise ValueError("logical_step must be a non-negative integer")
+
+        waiting_ids = tuple(
+            request_id
+            for request_id, status in self._statuses.items()
+            if status == self.WAITING
+        )
+        active_ids = self.active_request_ids()
+        wait_steps = self._normalize_counter_mapping(
+            waiting_wait_steps, waiting_ids, "waiting_wait_steps"
+        )
+        skip_counts = self._normalize_counter_mapping(
+            waiting_skip_counts, waiting_ids, "waiting_skip_counts"
+        )
+        service_wait = self._normalize_counter_mapping(
+            active_service_wait_steps, active_ids, "active_service_wait_steps"
+        )
+
+        waiting = tuple(
+            WaitingRequestMetadata(
+                self._request_specs[request_id],
+                wait_steps=wait_steps[request_id],
+                skip_count=skip_counts[request_id],
+            )
+            for request_id in sorted(
+                waiting_ids,
+                key=lambda item: self._request_specs[item].submission_order,
+            )
+        )
+        active = []
+        for request_id in active_ids:
+            spec = self._request_specs[request_id]
+            cache_state = self.cache.request_state(request_id)
+            seq_len = cache_state["seq_len"]
+            completed_tokens = seq_len - spec.initial_context_tokens
+            if completed_tokens < 0:
+                raise RuntimeError(
+                    f"request_id {request_id!r} initial context has not been fully seeded"
+                )
+            remaining_tokens = spec.max_new_tokens - completed_tokens
+            if remaining_tokens <= 0:
+                raise RuntimeError(
+                    f"request_id {request_id!r} exhausted max_new_tokens but remains active"
+                )
+            active.append(
+                ActiveRequestMetadata(
+                    spec=spec,
+                    seq_len=seq_len,
+                    remaining_tokens=remaining_tokens,
+                    physical_blocks=len(cache_state["block_ids"]),
+                    committed_blocks=spec.commitment_blocks(self.cache.block_size),
+                    service_wait_steps=service_wait[request_id],
+                )
+            )
+
+        return SchedulingSnapshot(
+            state_version=self._state_version,
+            logical_step=logical_step,
+            block_size=self.cache.block_size,
+            max_blocks=self.cache.max_blocks,
+            free_blocks=self.cache.num_free_blocks,
+            waiting=waiting,
+            active=tuple(active),
+        )
+
+    def apply_scheduler_decision(self, decision):
+        """Atomically apply admission/rejection from one fresh decision."""
+        from .scheduler import SchedulerDecision
+
+        if not isinstance(decision, SchedulerDecision):
+            raise TypeError("decision must be a SchedulerDecision")
+        if not self._scheduler_managed:
+            raise RuntimeError("apply_scheduler_decision requires scheduler-managed mode")
+        self._require_cache_synchronized(stale=True)
+        if decision.snapshot_version != self._state_version:
+            self._stale_decision_count += 1
+            raise RuntimeError("stale scheduler decision")
+        if self._pending_runnable_ids is not None:
+            raise RuntimeError("a scheduler decision is already pending execution")
+
+        waiting_ids = tuple(
+            request_id
+            for request_id, status in self._statuses.items()
+            if status == self.WAITING
+        )
+        active_ids = self.active_request_ids()
+        admit_ids = self._validate_decision_ids("admit_ids", decision.admit_ids)
+        rejected_ids = self._validate_decision_ids("rejected_ids", decision.rejected_ids)
+        runnable_ids = self._validate_decision_ids("runnable_ids", decision.runnable_ids)
+        deferred_ids = self._validate_decision_ids("deferred_ids", decision.deferred_ids)
+        decision_waiting_ids = self._validate_decision_ids(
+            "waiting_ids", decision.waiting_ids
+        )
+        if set(admit_ids) & set(rejected_ids):
+            raise ValueError("admit_ids and rejected_ids must be disjoint")
+        if not set(admit_ids).issubset(waiting_ids):
+            raise ValueError("admit_ids must contain waiting requests")
+        if not set(rejected_ids).issubset(waiting_ids):
+            raise ValueError("rejected_ids must contain waiting requests")
+
+        active_after = set(active_ids) | set(admit_ids)
+        if set(runnable_ids) & set(deferred_ids):
+            raise ValueError("runnable_ids and deferred_ids must be disjoint")
+        if set(runnable_ids) | set(deferred_ids) != active_after:
+            raise ValueError("runnable_ids and deferred_ids must partition active requests")
+        waiting_after = set(waiting_ids) - set(admit_ids) - set(rejected_ids)
+        if set(decision_waiting_ids) != waiting_after:
+            raise ValueError("waiting_ids do not match the post-decision waiting set")
+        if decision.free_blocks_before_step != self.cache.num_free_blocks:
+            raise RuntimeError("scheduler decision free-block snapshot is stale")
+
+        committed_before = sum(
+            self._request_specs[request_id].commitment_blocks(self.cache.block_size)
+            for request_id in active_ids
+        )
+        committed_after = committed_before + sum(
+            self._request_specs[request_id].commitment_blocks(self.cache.block_size)
+            for request_id in admit_ids
+        )
+        if decision.committed_blocks_before != committed_before:
+            raise ValueError("committed_blocks_before does not match Engine state")
+        if decision.committed_blocks_after != committed_after:
+            raise ValueError("committed_blocks_after does not match admitted requests")
+        if committed_after > self.cache.max_blocks:
+            raise ValueError("committed blocks exceed physical cache capacity")
+
+        changed = bool(admit_ids or rejected_ids)
+        if admit_ids:
+            self._admit_ids(admit_ids)
+        for request_id in rejected_ids:
+            self._statuses[request_id] = self.REJECTED
+        if changed:
+            self._bump_state_version()
+        self._applied_decision_count += 1
+
+        contexts_ready = all(
+            self.cache.request_state(request_id)["seq_len"]
+            >= self._request_specs[request_id].initial_context_tokens
+            for request_id in runnable_ids
+        )
+        if runnable_ids and contexts_ready:
+            self._pending_runnable_ids = runnable_ids
+        return tuple(
+            AdmissionResult(request_id, self._statuses[request_id])
+            for request_id in (*admit_ids, *rejected_ids)
+        )
+
+    def prefill_request(self, request_id, k, v, layer_idx=0):
+        """Seed one scheduler-managed prompt token outside decode timing."""
+        if not self._scheduler_managed:
+            raise RuntimeError("prefill_request requires scheduler-managed mode")
+        self._require_cache_synchronized()
+        self._require_status(request_id, self.ACTIVE)
+        spec = self._request_specs[request_id]
+        current = self.cache.request_state(request_id)["seq_len"]
+        if current >= spec.initial_context_tokens:
+            raise RuntimeError("request initial context is already fully seeded")
+        self.cache.append(layer_idx, [request_id], k, v)
+        self._sync_cache_version()
+        self._bump_state_version()
+        return self.cache.request_state(request_id)["seq_len"]
 
     def active_request_ids(self):
         """Return active request ids in deterministic admission order."""
@@ -129,8 +372,11 @@ class DecodeEngine:
         """Return engine state plus cache state when the request has been admitted."""
         status = self._require_known_request(request_id)
         result = {"request_id": request_id, "status": status}
-        if status != self.WAITING:
+        if status not in (self.WAITING, self.REJECTED):
             result["cache"] = self.cache.request_state(request_id)
+        spec = self._request_specs.get(request_id)
+        if spec is not None:
+            result["spec"] = spec
         return result
 
     def step(
@@ -149,6 +395,7 @@ class DecodeEngine:
         without changing cache ownership, request seq_len, or lifecycle state.
         The supplied row order is preserved in all successful result tensors.
         """
+        self._require_cache_synchronized()
         range_factory = self._profile_range_factory
         if range_factory is None:
             ids = self._normalize_active_ids(request_ids)
@@ -159,7 +406,16 @@ class DecodeEngine:
                 ids = self._normalize_active_ids(request_ids)
                 self._validate_step_inputs(ids, q, k, v)
                 needed_new_blocks = self._needed_new_blocks(ids)
+        if self._scheduler_managed:
+            if self._pending_runnable_ids is None:
+                raise RuntimeError("scheduler-managed step requires an applied decision")
+            if ids != self._pending_runnable_ids:
+                raise RuntimeError("request_ids must match the applied scheduler runnable_ids")
         if needed_new_blocks > self.cache.num_free_blocks:
+            if self._scheduler_managed:
+                raise RuntimeError(
+                    "scheduler commitment invariant violated by physical backpressure"
+                )
             self._backpressure_count += 1
             return DecodeStepResult(
                 status=self.STEP_BACKPRESSURE,
@@ -213,6 +469,8 @@ class DecodeEngine:
                 )
         self._completed_step_count += 1
         self._appended_token_count += len(ids)
+        self._sync_cache_version()
+        self._bump_state_version()
         return DecodeStepResult(
             status=self.STEP_OK,
             request_ids=ids,
@@ -226,16 +484,22 @@ class DecodeEngine:
 
     def finish_request(self, request_id):
         """Finish an active request and release its physical cache blocks."""
+        self._require_cache_synchronized()
         self._require_status(request_id, self.ACTIVE)
         released = self.cache.finish_request(request_id)
         self._statuses[request_id] = self.FINISHED
+        self._sync_cache_version()
+        self._bump_state_version()
         return released
 
     def cancel_request(self, request_id):
         """Cancel an active request and release its physical cache blocks."""
+        self._require_cache_synchronized()
         self._require_status(request_id, self.ACTIVE)
         released = self.cache.cancel_request(request_id)
         self._statuses[request_id] = self.CANCELLED
+        self._sync_cache_version()
+        self._bump_state_version()
         return released
 
     def metrics(self):
@@ -245,9 +509,21 @@ class DecodeEngine:
             "active_requests": sum(status == self.ACTIVE for status in self._statuses.values()),
             "finished_requests": sum(status == self.FINISHED for status in self._statuses.values()),
             "cancelled_requests": sum(status == self.CANCELLED for status in self._statuses.values()),
+            "rejected_requests": sum(status == self.REJECTED for status in self._statuses.values()),
             "completed_step_count": self._completed_step_count,
             "appended_token_count": self._appended_token_count,
             "backpressure_count": self._backpressure_count,
+            "state_version": self._state_version,
+            "cache_state_version": self.cache.state_version,
+            "scheduler_managed": self._scheduler_managed,
+            "committed_blocks": self._committed_blocks(),
+            "committed_but_unallocated_blocks": (
+                self._committed_blocks() - self.cache.num_used_blocks
+                if self._scheduler_managed
+                else 0
+            ),
+            "stale_decision_count": self._stale_decision_count,
+            "applied_decision_count": self._applied_decision_count,
             "append_backend": self.append_backend,
             "decode_backend": self.decode_backend,
             "cache": self.cache.metrics(),
@@ -255,9 +531,10 @@ class DecodeEngine:
 
     def validate_invariants(self):
         """Check that engine lifecycle state agrees with cache ownership state."""
+        self._require_cache_synchronized()
         self.cache.validate_invariants()
         for request_id, status in self._statuses.items():
-            if status == self.WAITING:
+            if status in (self.WAITING, self.REJECTED):
                 try:
                     self.cache.request_state(request_id)
                 except KeyError:
@@ -266,7 +543,71 @@ class DecodeEngine:
             cache_status = self.cache.request_state(request_id)["status"]
             if cache_status != status:
                 raise RuntimeError("DecodeEngine and PagedKVCache request status diverged")
+        if self._scheduler_managed:
+            for request_id in self.active_request_ids():
+                spec = self._request_specs[request_id]
+                physical_blocks = len(self.cache.request_block_ids(request_id))
+                if physical_blocks > spec.commitment_blocks(self.cache.block_size):
+                    raise RuntimeError("physical ownership exceeds scheduler commitment")
+            if self.cache.num_used_blocks > self._committed_blocks():
+                raise RuntimeError("used physical blocks exceed active commitments")
         return True
+
+    def _admit_ids(self, ids):
+        for request_id in ids:
+            self.cache.add_request(request_id)
+            self._statuses[request_id] = self.ACTIVE
+        self._sync_cache_version()
+
+    def _bump_state_version(self):
+        self._state_version += 1
+        self._pending_runnable_ids = None
+
+    def _sync_cache_version(self):
+        self._observed_cache_state_version = self.cache.state_version
+
+    def _require_cache_synchronized(self, *, stale=False):
+        if not self._scheduler_managed:
+            return
+        if self.cache.state_version != self._observed_cache_state_version:
+            if stale:
+                self._stale_decision_count += 1
+            raise RuntimeError("PagedKVCache mutated outside scheduler-managed DecodeEngine")
+
+    def _committed_blocks(self):
+        if not self._scheduler_managed:
+            return 0
+        return sum(
+            self._request_specs[request_id].commitment_blocks(self.cache.block_size)
+            for request_id in self.active_request_ids()
+        )
+
+    def _normalize_counter_mapping(self, values, request_ids, name):
+        if values is None:
+            values = {}
+        if not isinstance(values, Mapping):
+            raise TypeError(f"{name} must be a mapping")
+        unknown = set(values) - set(request_ids)
+        if unknown:
+            raise ValueError(f"{name} contains unknown request ids")
+        result = {}
+        for request_id in request_ids:
+            value = values.get(request_id, 0)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} values must be non-negative integers")
+            result[request_id] = value
+        return result
+
+    def _validate_decision_ids(self, name, values):
+        try:
+            ids = tuple(values)
+        except TypeError as exc:
+            raise TypeError(f"{name} must be iterable") from exc
+        for request_id in ids:
+            self._check_request_id(request_id)
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"{name} must contain unique request ids")
+        return ids
 
     def _decode(self, q, block_tables, seq_lens):
         if self.decode_backend == "reference":

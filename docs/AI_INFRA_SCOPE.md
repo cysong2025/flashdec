@@ -105,9 +105,9 @@ allocate/free/reuse      block_tables/seq_lens
 | Reference / Kernel | 已完成主要 correctness、参数实验、最终 profiling 与配置冻结 | 仅在出现明确回归时重新进入 |
 | Paged KV Runtime | 已完成 request lifecycle、free/reuse、capacity atomicity、metrics、churn tests 和 Engine 集成；multi-layer transaction 语义已设计 | transaction begin/write/commit/abort、rollback 与 RTX 实测 |
 | Decode Data Path | 三条路径已通过 RTX correctness；append-only fused p50 为 1.2226x，complete-step 正式 p50 为 1.0668x；阶段归因已完成 | scheduler/multi-layer 下的数据路径集成 |
-| Execution Engine | DecodeEngine v1 已完成 CPU/reference 与 RTX fused/Triton correctness；Scheduler R1-A 纯策略 planner 已实现 | Engine snapshot/decision apply、lifecycle commitment 与 workload 实测 |
+| Execution Engine | DecodeEngine v1 已完成 RTX correctness；Scheduler R1-B snapshot/decision apply/commitment lifecycle 已实现 | WSL/RTX 回归与 R1-C 三策略 workload 实测 |
 | End-to-End Evaluation | 36 行 multi-trial 与 12-case profiler 已完成；p50/p90/TPS 几何平均 1.0668x/1.0317x/1.0811x | short-churn 与 p99 噪声解释、scheduler 策略对照 |
-| Reproducibility | 一键 R0 编排器与正式 GPU 证据已完成 | clean WSL venv、版本升级和 release tag |
+| Reproducibility | 一键 R0 编排器与正式 GPU 证据已完成 | 全部功能完成后的 clean-machine 验证、版本升级和 release tag |
 
 ## v0.1.0 完成标准
 

@@ -141,7 +141,7 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 优先级：P1，是 v0.2 的第一条核心深度主线。预计 2 个阶段周。
 
-当前状态：目标语义、deadlock 反例、lifetime commitment、状态所有权、测试与 benchmark 边界已在 `docs/design_scheduler.md` 冻结；R1-A 纯 Python planner 与 dependency-free focused tests 已实现，Mac `unittest` 12/12 和随机 invariant 1000/1000 通过。WSL full regression、Engine/Cache 集成和 RTX 5070 证据尚未完成。
+当前状态：目标语义和实验边界已冻结；R1-A 纯 Python planner 与 dependency-free focused tests 已实现，R1-B Engine/Cache state version、snapshot、decision apply、rejection 和 commitment lifecycle 代码也已完成。Mac `unittest` 12/12 与静态门禁通过；WSL PyTorch/full regression、R1-C workload 和 RTX 5070 证据尚未完成。
 
 ### 要回答的问题
 
@@ -362,10 +362,9 @@ capacity failure -> refcount and ownership unchanged
 
 ## 11. 当前立即执行顺序
 
-1. 在全新 WSL venv 完成 editable install、focused/full regression 与 quick workload。
-2. 提交版本 `0.1.0`、验证 release tag，闭合 R0。
-3. 实现 R1-B Engine/Cache snapshot、state version、decision apply 与 commitment lifecycle。
-4. 实现 R1-C 三策略 workload 对照和 boundary-deadlock 实验。
-5. Scheduler correctness/benchmark 冻结后，再按 R2 设计实现 multi-layer transaction；不并行启动 prefix。
+1. 在既有 WSL 环境验证 R1-B focused/full regression 与 RTX fused/Triton compatibility。
+2. 实现 R1-C 三策略 workload 对照和 boundary-deadlock 实验。
+3. Scheduler correctness/benchmark 冻结后，再按 R2 设计实现 multi-layer transaction；不并行启动 prefix。
+4. 全部功能完成后统一执行 clean-machine install、版本升级和 release tag。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

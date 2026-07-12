@@ -133,9 +133,9 @@ class SchedulerDecision:
 
 | 组件 | 拥有的状态 | 不允许拥有 |
 | --- | --- | --- |
-| Scheduler | request spec、commitment、wait/skip/service 计数 | K/V tensor、physical block id、Engine lifecycle mutation |
-| DecodeEngine | waiting/active/terminal 状态、稳定 row mapping、`state_version`、决策执行 | allocator free list |
-| PagedKVCache | physical block、request block list、seq_len、KV storage、allocator invariant | admission/fairness policy |
+| Scheduler | admission/runnable policy、wait/skip/service 计数 | K/V tensor、physical block id、Engine lifecycle mutation |
+| DecodeEngine | immutable request spec、waiting/active/terminal 状态、commitment 派生、稳定 row mapping、`state_version`、决策执行 | allocator free list |
+| PagedKVCache | physical block、request block list、seq_len、KV storage、allocator invariant、ownership `state_version` | admission/fairness policy |
 | Workload/Caller | Q/K/V 输入、arrival、请求 token budget | 直接伪造 scheduler/cache 内部状态 |
 
 Scheduler 的 `plan(snapshot)` 不修改 Engine 或 Cache。只有 Engine 接受并应用 decision 后，Scheduler 才通过明确的 outcome 更新 commitment 与 fairness 计数。
@@ -145,10 +145,29 @@ Scheduler 的 `plan(snapshot)` 不修改 Engine 或 Cache。只有 Engine 接受
 R1 使用单线程 event loop，但仍需要防止“基于旧容量做出的决策”被延迟执行：
 
 - Engine 维护单调递增的 `state_version`。
+- Cache 维护独立 ownership/seq_len `state_version`；scheduler-managed Engine 记录最后一次已观察版本，直接绕过 Engine 修改 Cache 会使 decision 失效。
 - submit、admit、成功 append、finish、cancel 都递增版本。
 - `SchedulingSnapshot` 和 `SchedulerDecision` 携带版本。
 - Engine 应用 decision 前必须验证 `decision.snapshot_version == engine.state_version`。
 - 版本不匹配时拒绝 decision，记录 `stale_decision_count`，重新 snapshot/plan；不能尝试部分执行。
+
+R1-B 的兼容接口为：
+
+```python
+engine.submit_request(spec)
+snapshot = engine.scheduling_snapshot(
+    logical_step,
+    waiting_wait_steps=...,
+    waiting_skip_counts=...,
+    active_service_wait_steps=...,
+)
+decision = scheduler.plan(snapshot)
+engine.apply_scheduler_decision(decision)
+```
+
+旧 `add_request()` / `admit()` / `step()` 继续作为 unscheduled compatibility path；同一个 Engine 不能混用两种 submission 模式。scheduler-managed step 必须严格使用最后一次已应用 decision 的 `runnable_ids`。永久超过容量的 request 进入 Engine-only `rejected` 终态，不创建 Cache ownership。
+
+带 initial context 的新 admission 先通过 `prefill_request()` 在正式 decode 计时外写入 prompt K/V；prefill 会递增版本并清除 pending decision，因此必须重新 snapshot/plan 后才能执行第一个 decode token。
 
 这不是线程安全承诺。多线程锁、异步 CUDA stream ownership 和分布式状态一致性不在 v2 范围。
 
@@ -304,6 +323,8 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 - lifecycle 同步释放 commitment。
 - 保持 Cache 为唯一 physical allocator。
 
+当前状态：以上代码与 CPU/PyTorch 集成测试已实现；Mac 已通过 compileall/diff check 和 R1-A 12/12 dependency-free tests。PyTorch CPU、完整回归与 RTX fused/Triton 仍待 WSL 验证。
+
 ### R1-C：Workload 与对照实验
 
 - runner 支持三种 policy。
@@ -320,4 +341,4 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 
 ## 14. 当前状态
 
-本文已冻结 R1 的目标语义与实验边界，并完成隔离的 R1-A 纯策略层及测试代码。Engine `state_version`/snapshot/decision apply、workload policy 对照和 RTX 5070 数据尚未实现或验证。R0 的 multi-trial、complete-step profiler 和 clean-install/release gate 仍应先闭合，再接入 R1-B，避免同时改变 performance baseline 与调度语义。
+本文已冻结 R1 的目标语义与实验边界，并完成 R1-A 纯策略层和 R1-B Engine/Cache 集成代码。R1-B 的 WSL/RTX 回归、R1-C workload policy 对照和 RTX 5070 数据尚未完成。R0 multi-trial/profile 证据已闭合；clean-machine install 按当前开发决策统一推迟到全部功能完成后的最终发布验证，版本继续保持 `0.0.0`。

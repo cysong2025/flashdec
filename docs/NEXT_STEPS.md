@@ -216,6 +216,6 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 当前立即执行
 
-将正式 multi-trial/profiler summary 提交后，在新的 WSL 目录和 venv 执行 `docs/reproducibility.md` 的 editable install、focused/full regression 与 quick evidence。clean-install gate 通过前保持版本 `0.0.0`，不创建 tag；通过后发布 `v0.1.0`，再进入 R1-B Engine/Cache 集成。
+R1-B Engine/Cache 集成代码完成后，先在既有 WSL 环境运行 focused/full regression，确认 legacy workload、fused CUDA 与 Triton 路径没有回归；通过后进入 R1-C 三策略 workload。clean-machine install 按当前决策推迟到全部功能完成后的最终发布验证，期间版本保持 `0.0.0`，不创建 tag。
 
 完成 `v0.1.0` 后不继续增加零散 kernel。Scheduler v2 的 R1-A 纯策略 planner 与 focused tests 已提前隔离实现；release gate 闭合后的下一条代码主线是 R1-B Engine/Cache 集成：`state_version`、scheduler-facing snapshot、decision apply 与 lifecycle commitment release。随后进入 R1-C，对比 `cancel_on_backpressure`、`greedy_step_only` 与 `lifetime_fifo_aging`，不能退化成只看本 step 空闲 block 的策略。Scheduler 验证完成后才按 `docs/design_multi_layer_kv_transaction.md` 实现 R2，不能只删除 `num_layers=1` 检查。

@@ -96,6 +96,7 @@ class PagedKVCache:
         self._free_count = 0
         self._reuse_count = 0
         self._capacity_failure_count = 0
+        self._state_version = 0
 
     def add_request(self, request_id):
         """Register an empty request if it does not already exist."""
@@ -103,6 +104,7 @@ class PagedKVCache:
         state = self._requests.get(request_id)
         if state is None:
             self._requests[request_id] = _RequestState()
+            self._state_version += 1
         elif state.status != self.ACTIVE:
             raise RuntimeError(
                 f"request_id {request_id!r} is {state.status} and cannot be reactivated"
@@ -130,6 +132,7 @@ class PagedKVCache:
             self.k_cache[layer_idx, physical_block, :, block_offset, :] = k[row]
             self.v_cache[layer_idx, physical_block, :, block_offset, :] = v[row]
         self._advance_request_lengths(ids)
+        self._state_version += 1
         return self.block_tables(ids)
 
     def append_cuda(self, layer_idx, request_ids, k, v):
@@ -181,6 +184,7 @@ class PagedKVCache:
             v,
         )
         self._advance_request_lengths(ids)
+        self._state_version += 1
         return self.block_tables(ids)
 
     def append_fused_cuda(
@@ -261,6 +265,7 @@ class PagedKVCache:
             base=base,
         )
         self._advance_request_lengths(ids)
+        self._state_version += 1
         return q_rotated, self.block_tables(ids)
 
     def finish_request(self, request_id):
@@ -444,6 +449,11 @@ class PagedKVCache:
     def num_used_blocks(self):
         return self.max_blocks - len(self._free_blocks)
 
+    @property
+    def state_version(self):
+        """Return the logical ownership/sequence mutation version."""
+        return self._state_version
+
     def _prepare_append_inputs(self, layer_idx, request_ids, k, v):
         layer_idx = self._validate_layer_idx(layer_idx)
         ids = self._normalize_request_ids(request_ids)
@@ -489,8 +499,10 @@ class PagedKVCache:
     def _allocate_append_locations(self, ids):
         locations = []
         for request_id in ids:
-            self.add_request(request_id)
-            state = self._requests[request_id]
+            state = self._requests.get(request_id)
+            if state is None:
+                state = _RequestState()
+                self._requests[request_id] = state
             token_index = state.seq_len
             logical_block = token_index // self.block_size
             block_offset = token_index % self.block_size
@@ -525,6 +537,7 @@ class PagedKVCache:
         self._free_count += len(released_blocks)
         state.block_ids.clear()
         state.status = terminal_status
+        self._state_version += 1
         return released_blocks
 
     def _validate_layer_idx(self, layer_idx):
