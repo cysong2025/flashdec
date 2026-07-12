@@ -141,7 +141,7 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 优先级：P1，是 v0.2 的第一条核心深度主线。预计 2 个阶段周。
 
-当前状态：目标语义、deadlock 反例、lifetime commitment、状态所有权、测试与 benchmark 边界已在 `docs/design_scheduler.md` 冻结；R1-A 纯 Python planner 与 focused tests 已实现，Mac 无依赖 smoke 通过。Engine/Cache 集成和 RTX 5070 证据尚未开始，待 R0 release gate 闭合后实施。
+当前状态：目标语义、deadlock 反例、lifetime commitment、状态所有权、测试与 benchmark 边界已在 `docs/design_scheduler.md` 冻结；R1-A 纯 Python planner 与 dependency-free focused tests 已实现，Mac `unittest` 12/12 和随机 invariant 1000/1000 通过。WSL full regression、Engine/Cache 集成和 RTX 5070 证据尚未完成。
 
 ### 要回答的问题
 

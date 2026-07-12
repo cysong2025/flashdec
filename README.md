@@ -70,6 +70,8 @@ python scripts/check_release.py
 CPU/reference focused 验证：
 
 ```bash
+python -m unittest discover -s tests -p 'test_scheduler.py' -v
+
 python -m pytest -q \
   tests/test_decode_reference.py \
   tests/test_paged_cache.py \

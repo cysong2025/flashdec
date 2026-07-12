@@ -75,6 +75,14 @@ git rev-parse --short HEAD
 
 CPU/reference suite 不需要 NVIDIA GPU 或 CUDA Toolkit，但 Linux 环境仍需安装项目依赖：
 
+Scheduler R1-A 没有 torch/pytest 依赖，可先在任意 Python 3.10+ 环境独立执行：
+
+```bash
+python -m unittest discover -s tests -p 'test_scheduler.py' -v
+```
+
+完整 CPU/reference suite：
+
 ```bash
 python -m pytest -vv \
   tests/test_benchmark_helpers.py \

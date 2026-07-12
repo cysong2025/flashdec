@@ -295,7 +295,7 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 - 实现 commitment 计算、FIFO/aging admission、fair runnable selection。
 - 完成不依赖 torch/CUDA 的纯 Python tests。
 
-当前状态：已实现 `flashdec/scheduler.py` 和 `tests/test_scheduler.py`。planner 不依赖 torch，Mac 已通过 `compileall` 与直接 smoke/invariant 检查；正式 pytest 与完整回归等待 WSL 执行。
+当前状态：已实现 `flashdec/scheduler.py` 和 `tests/test_scheduler.py`。planner 和 focused tests 不依赖 torch/pytest；Mac 标准库 `unittest` 为 12/12 通过，另有 1000/1000 随机合法 snapshot invariant 检查通过。WSL pytest 收集与完整回归仍待执行。
 
 ### R1-B：Engine/Cache 集成
 
