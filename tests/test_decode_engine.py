@@ -183,7 +183,10 @@ def test_decode_engine_optional_profile_ranges_preserve_cpu_reference_step():
     engine.admit([1])
     q, k, v = _step_inputs(1)
 
-    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as prof:
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU],
+        acc_events=True,
+    ) as prof:
         result = engine.step(q, k, v)
 
     keys = {event.key for event in prof.key_averages()}
