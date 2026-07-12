@@ -77,6 +77,8 @@ Engine 在执行 RoPE/KV append 前根据每个 active request 的当前 `seq_le
 - admission 不预留 physical block；资源不足在 `step()` 以 backpressure 表示。
 - 不实现 continuous batching scheduler、priority、preemption、prefix cache 或 CPU offload。
 
+后续 Scheduler v2 不会让 Scheduler 直接持有 physical blocks，而是在 admission 时建立 lifetime logical commitment，再由 Cache 按 append 进度惰性分配。详细状态所有权、deadlock 反例与 stale-decision 语义见 `docs/design_scheduler.md`。
+
 ## 验证
 
 CPU/reference tests 覆盖动态 admission、batch row order、finish/cancel、block reuse 与 backpressure 无 mutation。RTX 5070 额外覆盖：

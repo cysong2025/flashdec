@@ -44,6 +44,7 @@ Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 den
 - [RoPE + KV Append 设计说明](docs/design_rope_kv_append.md)
 - [Fused RoPE + Paged KV Append 设计说明](docs/design_fused_rope_kv_append.md)
 - [DecodeEngine v1 设计说明](docs/design_decode_engine.md)
+- [Block-aware Scheduler v2 设计说明](docs/design_scheduler.md)
 - [动态 Workload 设计说明](docs/design_dynamic_workload.md)
 - [CUDA KV Append 设计说明](docs/design_cuda_kv_append.md)
 - [兼容性记录](docs/compatibility.md)
@@ -113,7 +114,7 @@ python -m pytest -vv \
 
 - `v0.1.0` 固定为单 GPU、单 layer、每 request 每 step 一个 decode token。
 - Q/K/V 由调用方提供；不包含完整 Transformer forward、tokenizer、sampling 或网络服务。
-- 当前没有 block-aware continuous scheduler；压力 workload baseline 会显式记录 backpressure/cancellation。
+- Block-aware Scheduler v2 已冻结设计但尚未实现；当前压力 workload baseline 仍会显式记录 backpressure/cancellation。
 - 不包含 prefix cache、swap/offload、抢占、tensor/pipeline parallel 或多机。
 - CUDA extension 使用 lazy JIT，需要匹配 PyTorch CUDA build 的 Toolkit、NVCC、host compiler 和 Ninja。
 - macOS 工作区只能执行静态检查；正式 correctness/benchmark/profiling 以 RTX 5070 WSL 为准。

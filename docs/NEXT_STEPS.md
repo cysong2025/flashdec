@@ -218,4 +218,4 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 拉取最新 multi-trial/aggregator/profiler/release candidate，在 RTX 5070 上依次运行 focused tests、`--quick --trials 2`、正式 `--trials 3`、trial summarizer 和 mixed-steady quick profiler。数据回传并冻结结论后，在新的 WSL venv 执行 `docs/reproducibility.md` 全流程；所有 gate 通过前保持版本 `0.0.0`，不创建 tag。
 
-完成 `v0.1.0` 后不继续增加零散 kernel；下一条代码主线是 `flashdec/scheduler.py` 的 block-aware admission/runnable subset/fairness。Scheduler 验证完成后才开始 multi-layer KV token transaction。
+完成 `v0.1.0` 后不继续增加零散 kernel；下一条代码主线是 `docs/design_scheduler.md` 已冻结语义的 Scheduler v2：admission-time lifetime block commitment、logical commitment/physical allocation 分离、FIFO + aging/drain barrier、fair runnable subset 和 stale-decision 检查。它必须和 `cancel_on_backpressure`、`greedy_step_only` 做对照，不能退化成只看本 step 空闲 block 的策略。Scheduler 验证完成后才开始 multi-layer KV token transaction。

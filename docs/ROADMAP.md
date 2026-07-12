@@ -141,6 +141,8 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 优先级：P1，是 v0.2 的第一条核心深度主线。预计 2 个阶段周。
 
+当前状态：目标语义、deadlock 反例、lifetime commitment、状态所有权、测试与 benchmark 边界已在 `docs/design_scheduler.md` 冻结；代码与 RTX 5070 证据尚未开始，待 R0 release gate 闭合后实施。
+
 ### 要回答的问题
 
 当前 workload 遇到容量压力时取消最老请求。更合理的问题是：
@@ -160,17 +162,31 @@ free_blocks_before_step
 decision_reason
 ```
 
-第一版只实现 deterministic FIFO + aging，不实现 priority API、swap 或生产级抢占。
+第一版只实现 deterministic FIFO + aging，不实现 priority API、swap 或生产级抢占。完整资源语义见 `docs/design_scheduler.md`。
+
+仅按本 step 的 `free_blocks` 选择 runnable subset 不能作为默认策略：当全部 active requests 同时到达 block boundary 且没有 free block 时，任何 request 都无法推进到释放容量，系统会死锁。默认 policy 因此使用 admission-time lifetime commitment：
+
+```text
+request_total_blocks = ceil(
+    (initial_context_tokens + max_new_tokens) / block_size
+)
+
+sum(active commitments) <= max_blocks - reserve_blocks
+```
+
+commitment 是 Scheduler 的逻辑容量账本，physical block 仍由 PagedKVCache 按 append 进度惰性分配。`greedy_step_only` 只作为可能 stall/deadlock 的实验对照。
 
 ### 工作内容
 
-- `SchedulerConfig`：`max_active_requests`、`max_batch_requests`、block reserve 和 policy。
+- `RequestSpec`：确定的 initial context、最大 decode token budget 和稳定提交顺序。
+- `SchedulerConfig`：`max_active_requests`、`max_batch_requests`、block reserve、aging threshold 和 policy。
 - waiting queue 与稳定提交顺序。
-- block-aware admission：资源不足时保持 waiting，而不是先 active 再失败。
-- runnable subset：如果全部 active rows 同时跨 block boundary，选择容量允许的部分请求执行。
-- aging/skip counter：有限 workload 中不能永久跳过同一请求。
-- DecodeEngine 增加 scheduler-facing metadata query，但 allocator 所有权仍由 cache 管理。
-- workload runner 支持 `cancel_on_backpressure` baseline 与 `block_aware` policy 对比。
+- lifetime block-aware admission：完整生命周期容量无法承诺时保持 waiting，而不是先 active 再失败。
+- FIFO + aging/drain barrier：允许小请求利用空余容量，但有限 workload 不能永久绕过老请求。
+- fair runnable subset：按 service wait 轮转并服从 `max_batch_requests`；默认策略的跨 boundary 容量由 commitment 保证。
+- DecodeEngine 增加 scheduler-facing snapshot 与单调 `state_version`，拒绝 stale decision；allocator 所有权仍由 cache 管理。
+- workload runner 对比 `cancel_on_backpressure`、`greedy_step_only` 与 `lifetime_fifo_aging`。
+- 新增 adversarial boundary-deadlock workload，禁止 benchmark 无限等待。
 
 ### 指标
 
@@ -179,27 +195,31 @@ decision_reason
 - successful tokens、stall/backpressure steps。
 - forced cancellations。
 - scheduler decision wall time。
-- block utilization、fragmentation、reuse。
+- committed/physical block utilization、committed-but-unallocated blocks、fragmentation、reuse。
 - per-request service steps 与最大等待时间。
+- stale decision 与 resource-deadlock count。
 
 ### 核心测试
 
 ```text
 oversubscribed waiting queue -> capacity-safe admission
-all rows need a block -> runnable subset fits free blocks
+all rows need a block -> lifetime commitment prevents boundary deadlock
 deferred row -> later becomes runnable
 finite workload -> no starvation
 finish/cancel -> waiting request admitted and reuses blocks
 scheduler decision -> no cache mutation
 same decision seed/config -> deterministic order
+stale decision -> rejected without partial mutation
+request larger than schedulable capacity -> explicit rejection
 ```
 
 ### 验收门槛
 
 - 默认 pressure workload 不依赖强制取消来恢复进度。
-- 有限请求集合最终全部完成或由调用方显式取消。
+- 有限且单请求可容纳的请求集合，在停止到达后最终全部完成或由调用方显式取消。
 - scheduler decision 不修改 cache；只有 Engine/cache API 可以改变所有权。
-- 相对 cancel-on-backpressure baseline，报告 completed tokens、p50/p99、等待时间和利用率的取舍，不要求每个指标都更好。
+- active commitment 不超过 schedulable capacity，physical ownership 不超过 commitment。
+- 相对 cancel-on-backpressure/greedy baseline，报告 completed tokens、p50/p99、等待时间和利用率的取舍，不要求每个指标都更好。
 
 ## 6. 阶段 R2：Multi-layer KV Token Transaction
 

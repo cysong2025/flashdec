@@ -15,6 +15,7 @@
 - multi-trial backend-order 交替、严格 trial CSV validator 和跨 trial stability summary。
 - 可选 DecodeEngine profiler ranges、阶段 CPU/device totals、CUDA event count 和 Chrome trace。
 - `scripts/check_release.py` release artifact/version/Git gate checker。
+- Scheduler v2 设计规格：lifetime block commitment、logical/physical capacity 分离、FIFO + aging、公平 runnable batch 与 stale-decision gate。
 
 ### Changed
 
