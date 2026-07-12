@@ -280,8 +280,8 @@ python scripts/check_release.py --require-clean
 | --- | --- | --- |
 | Kernel/runtime historical correctness | 已完成 | Week 1-11 weekly docs 与结果摘要 |
 | 首轮 dynamic workload/invariant | 已完成 | `week12_decode_engine_workload_summary.md` |
-| Multi-trial runner/validator code | 已实现，待真实数据 | 36-row RTX CSV + generated summary |
-| Complete-step profiler code | 已实现严格 12-case/range validator，待上板 | validated profile summary + quick trace |
+| Multi-trial runner/validator | 已完成 | commit `3708b87` 的 36-row RTX CSV + validated summary |
+| Complete-step profiler | 已完成 | commit `3708b87` 的 validated 12-case summary + quick trace |
 | Clean WSL editable install | 待执行 | 新 venv 命令、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

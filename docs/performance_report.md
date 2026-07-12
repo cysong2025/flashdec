@@ -15,6 +15,8 @@
 - 最终默认配置已完成 FP16/BF16 的 small、medium、large、large-batch profiling；correctness 为 `76 passed in 4.49s`。
 - 最终 FP16 medium/large p50 分别为 `0.155520/0.884576 ms`，相对早期 block16 event baseline 加速 `1.305x/1.481x`。
 - 当前 RTX 5070 WSL 环境缺少 `ncu` / `nsys`，Nsight 硬件计数暂未补充。
+- Week 12 正式 36 行 multi-trial 显示 fused complete-step p50/p90/TPS 几何平均为 1.0668x/1.0317x/1.0811x；short-churn p50 跨 trial 穿过 1.0。
+- Week 12 正式 12-case profiler 显示 fusion 将 CUDA event 数减少 21.8%-45.6%，paged decode device time 仅变化 -1.7%-+1.1%。
 
 ## Profiling 计划
 
@@ -155,10 +157,38 @@ CUDA event 结果：
 - PyTorch profiler 已经能确认主要 CUDA 时间集中在 `_paged_decode_attention_kernel`；但它还不能替代 Nsight 的硬件计数。
 - 因当前环境没有 `ncu` / `nsys`，Week 10 先使用 CUDA event、PyTorch profiler 和逻辑带宽估算推进优化实验；后续环境具备时再补硬件计数。
 
+## Week 12 Complete-step Multi-trial（2026-07-12）
+
+正式矩阵固定 RTX 5070、commit `3708b87`、Triton decode、block size 32 和 2 warps。三轮使用 seed 431/432/433，并交替 torch/fused backend 顺序。
+
+| dtype | workload | p50 median [min, max] | p90 median | p99 median [min, max] | TPS median | 结论 |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| FP16 | short-churn | 1.0001x [0.9311, 1.0042] | 0.9917x | 3.1075x [1.8226, 3.5203] | 1.0928x | p50 不稳定 |
+| FP16 | mixed-steady | 1.0927x [1.0837, 1.1109] | 1.1248x | 1.2761x [1.2699, 2.0583] | 1.1004x | 稳定提升 |
+| FP16 | long-pressure | 1.0890x [1.0614, 1.1274] | 1.0900x | 1.0103x [0.4886, 1.0766] | 1.0899x | p50 稳定，p99 不稳定 |
+| BF16 | short-churn | 1.0366x [0.9892, 1.0508] | 1.2267x | 0.6758x [0.2444, 5.0578] | 1.0735x | p50/p99 不稳定 |
+| BF16 | mixed-steady | 1.0948x [1.0882, 1.2193] | 1.1779x | 1.1966x [1.0020, 1.3348] | 1.1651x | 稳定提升 |
+| BF16 | long-pressure | 1.0744x [1.0741, 1.1054] | 1.0854x | 1.0688x [0.3759, 3.3289] | 1.0754x | p50 稳定，p99 不稳定 |
+
+总体几何平均为 p50 1.0668x、p90 1.0317x、mean/TPS 1.0811x。p99 几何平均虽然为 1.2590x，但范围跨越极大，不能作为稳定收益。
+
+## Week 12 Engine 阶段归因（2026-07-12）
+
+| dtype | workload | instrumented wall p50 | CUDA event 减少 | Engine CPU total 减少 | decode device 变化 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| FP16 | short-churn | 1.1679x | 21.8% | 27.0% | +0.7% |
+| FP16 | mixed-steady | 1.2768x | 22.8% | 28.5% | +0.7% |
+| FP16 | long-pressure | 1.1000x | 45.6% | -3.7% | +1.1% |
+| BF16 | short-churn | 1.0653x | 21.8% | 11.8% | +0.7% |
+| BF16 | mixed-steady | 1.3346x | 22.8% | 28.2% | -1.7% |
+| BF16 | long-pressure | 1.1523x | 45.6% | 10.0% | -0.0% |
+
+这里的 profiler totals 是 nested attribution，不能相加，也不能替代 non-instrumented benchmark。Attention device time 基本不变，而事件数显著下降，支持“fusion 优化 append/launch/runtime 路径”的判断。long-pressure FP16 的 CPU total 与 instrumented p99 仍有回退，是必须保留的负结果。
+
 ## 下一步优化候选
 
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
-2. 主线转入 PagedKVCache v2 的 request lifecycle、block free/reuse、容量原子性和 metrics。
-3. 实现 fused RoPE + paged KV append CUDA extension，并与 PyTorch reference 对齐。
-4. 只有 profiler 出现明确索引瓶颈时，才允许一次 time-boxed block table/mask/offset 实验。
-5. 条件允许时，与 FlashInfer 或 vLLM 公开实现做有限对比。
+2. R0 clean-install/release 完成后，主线进入 block-aware scheduler 的 Engine/Cache 集成。
+3. 对比 cancel-on-backpressure、greedy-step-only 与 lifetime FIFO + aging 的完成率、公平性和资源效率。
+4. Scheduler 冻结后实现 multi-layer KV token transaction；不再通过新增零散 kernel 扩展项目。
+5. shared prefix 完成后，与固定版本 vLLM 做有限、同边界公开对比。

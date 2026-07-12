@@ -30,14 +30,12 @@
 
 - Week 10 staging 最佳候选相对 implicit default 的 p50 几何平均仅约 1.0039x，未达到 5% 门槛，因此保留默认 staging。
 - Week 11 append-only full benchmark：fused CUDA p50 几何平均为 1.2226x vs torch。
-- Week 12 首轮 complete-step full benchmark：fused p50/p90/TPS 几何平均为 1.0537x/1.0588x/1.0674x；p99 为 0.9641x，仍需 3-trial 复验。
-- short-churn 首轮 p50 未获得稳定 fusion 收益，作为系统级负结果保留。
+- Week 12 正式 36 行 multi-trial：fused p50/p90/TPS 几何平均为 1.0668x/1.0317x/1.0811x；全部 invariant、block accounting、pair trajectory 与 seed/order 校验通过。
+- short-churn 的 FP16/BF16 p50 均跨 trial 穿过 1.0；p99 ratio 范围为 0.2444x-5.0578x，因此保留为系统级噪声/负结果，不声明稳定尾延迟收益。
+- 12-case complete-step profiler 显示 fusion 将 CUDA event 数减少 21.8%-45.6%，而 paged decode device time 变化仅为 -1.7%-+1.1%；收益主要来自 append/launch/runtime 路径。
 
 ### Pending before v0.1.0
 
-- RTX 5070 新提交 focused/full regression。
-- 36-row multi-trial CSV、validator 和稳定性摘要。
-- complete-step profiler ranges、CUDA event count 与 trace 验证。
 - clean WSL venv editable install 和 quick workload 复现。
 - 将 `pyproject.toml` 与 `flashdec.__version__` 同步更新为 `0.1.0`。
 - 创建并验证 `v0.1.0` tag；当前不得提前标记 release。

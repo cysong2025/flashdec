@@ -164,7 +164,7 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 阶段 6：端到端 Workload 与系统指标
 
-状态：首轮 quick/full 已完成；12/12 full rows 通过 invariant，等待 3-trial 稳定性复验后冻结结论。
+状态：正式 36 行 multi-trial 与 12-case profiler 已完成；所有 invariant/trajectory/range-count 校验通过。p50/p90/TPS 几何平均为 1.0668x/1.0317x/1.0811x，short-churn p50 与 p99 仍不稳定。
 
 目标：证明系统在动态请求负载下的性能和内存行为，而不只报告单 kernel latency。
 
@@ -216,6 +216,6 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 当前立即执行
 
-拉取最新 multi-trial/aggregator/profiler/release candidate，在 RTX 5070 上依次运行 focused tests、`--quick --trials 2`、正式 `--trials 3`、trial summarizer 和 mixed-steady quick profiler。数据回传并冻结结论后，在新的 WSL venv 执行 `docs/reproducibility.md` 全流程；所有 gate 通过前保持版本 `0.0.0`，不创建 tag。
+将正式 multi-trial/profiler summary 提交后，在新的 WSL 目录和 venv 执行 `docs/reproducibility.md` 的 editable install、focused/full regression 与 quick evidence。clean-install gate 通过前保持版本 `0.0.0`，不创建 tag；通过后发布 `v0.1.0`，再进入 R1-B Engine/Cache 集成。
 
 完成 `v0.1.0` 后不继续增加零散 kernel。Scheduler v2 的 R1-A 纯策略 planner 与 focused tests 已提前隔离实现；release gate 闭合后的下一条代码主线是 R1-B Engine/Cache 集成：`state_version`、scheduler-facing snapshot、decision apply 与 lifecycle commitment release。随后进入 R1-C，对比 `cancel_on_backpressure`、`greedy_step_only` 与 `lifetime_fifo_aging`，不能退化成只看本 step 空闲 block 的策略。Scheduler 验证完成后才按 `docs/design_multi_layer_kv_transaction.md` 实现 R2，不能只删除 `num_layers=1` 检查。

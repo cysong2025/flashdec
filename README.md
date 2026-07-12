@@ -13,7 +13,7 @@ FlashDec 是一个 12 周 AI Infra 工程项目，主题是 **单 GPU LLM decode
 
 ## 当前状态
 
-Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 fused append-only p50 几何平均为 `1.2226x`。Week 12 的首轮动态 workload 已完成 12/12 invariant 验证；fused complete-step p50/p90/tokens-s 几何平均为 `1.0537x/1.0588x/1.0674x`，但 p99 为 `0.9641x`，因此已进入多 trial 与交替 backend 顺序的稳定性验证。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 fused append-only p50 几何平均为 `1.2226x`。Week 12 已完成 `287 passed` 回归、36 行正式 multi-trial 与 12-case Engine profiler；fused complete-step p50/p90/tokens-s 几何平均为 `1.0668x/1.0317x/1.0811x`，但 short-churn p50 跨 trial 穿过 1.0，p99 仍需按场景报告范围。
 
 主要文档：
 
@@ -125,7 +125,7 @@ python -m pytest -vv \
 - 不包含 prefix cache、swap/offload、抢占、tensor/pipeline parallel 或多机。
 - CUDA extension 使用 lazy JIT，需要匹配 PyTorch CUDA build 的 Toolkit、NVCC、host compiler 和 Ninja。
 - macOS 工作区只能执行静态检查；正式 correctness/benchmark/profiling 以 RTX 5070 WSL 为准。
-- 当前 package version 仍为 `0.0.0`；multi-trial、profiler 和 clean-install gate 完成前不创建 `v0.1.0` tag。
+- 当前 package version 仍为 `0.0.0`；正式 multi-trial/profiler 已完成，clean-install gate、版本提交和 tag 完成前不发布 `v0.1.0`。
 
 ## 项目边界
 

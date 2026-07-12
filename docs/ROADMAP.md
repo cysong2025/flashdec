@@ -25,14 +25,14 @@ FlashDec 后续不再通过增加零散算子或重复参数 sweep 扩充内容�
 - PyTorch、独立 CUDA、fused CUDA 三条 RoPE/KV append 路径。
 - DecodeEngine 单 layer dynamic batch、append -> paged decode 与显式 backpressure。
 - 三类 synthetic workload 和首轮 complete-step benchmark。
-- 首轮 full workload 12/12 invariant 通过；fused p50 几何平均为 1.0537x，但 p99 尚不稳定。
+- 正式 36 行 multi-trial 与 12-case profiler 已在 commit `3708b87` 完成；fused p50/p90/TPS 几何平均为 1.0668x/1.0317x/1.0811x，short-churn p50 与 p99 仍不稳定。
 
 ### 当前代码暴露出的缺口
 
 | 缺口 | 当前证据 | 为什么值得做 |
 | --- | --- | --- |
-| 结果稳定性 | 已有 multi-trial 参数，但 3-trial CSV 尚未验证 | 单次 p99 和 short-churn 方向不稳定，不能冻结 release 结论 |
-| 阶段耗时归因 | workload 只有 complete-step wall-clock | 无法直接回答 append、attention、scheduler、allocator 各占多少 |
+| 结果稳定性 | 36 行正式 3-trial 已通过严格配对/invariant 校验 | short-churn p50 跨 1.0，p99 范围很宽，必须继续按场景报告 |
+| 阶段耗时归因 | 12-case profiler 已验证 Engine ranges 与 CUDA event | fusion 主要减少 append/launch/runtime 开销，attention device time 基本不变 |
 | 调度策略 | `admit()` 不预留 block；workload 在 backpressure 时取消最老请求 | 当前是压力测试策略，不是 block-aware continuous batching |
 | 多 layer 事务 | cache 存储有 layer 维度，但 runtime 强制 `num_layers=1` | 对多个 layer 逐次 append 会错误地重复推进 seq_len，需要真正事务语义 |
 | 共享前缀 | 每个请求独占所有 physical blocks | 无法研究重复 prompt 下的显存节省、refcount 和 eviction |
@@ -72,7 +72,7 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 目标：把首轮结论升级为 release 级证据。
 
-当前状态：聚合器、Markdown 输出和纯 Python 错误路径测试已实现，等待 RTX 5070 生成正式 36 行 CSV 后验证。
+当前状态：正式 36 行 RTX 5070 CSV 与聚合摘要已在 commit `3708b87` 验证完成；所有 pair trajectory、block accounting、seed/order 和 invariant 通过。
 
 工作内容：
 
@@ -96,7 +96,7 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 目标：解释 append-only 约 18.2% latency 降低为何只转化为 complete-step p50 约 5.1%。
 
-当前状态：可选 Engine ranges、动态 workload profiler、阶段文本/Markdown/Chrome trace 输出、Git commit provenance 和 12-case matrix/range-count validator 已实现；dependency-free helper tests 通过，等待 RTX 5070 验证正式 range 计数与 device time。
+当前状态：正式 12-case profiler 已在 commit `3708b87` 验证完成；matrix、CUDA event 与 range count 全部通过。Fusion 将 CUDA event 数减少 21.8%-45.6%，paged decode device time 基本不变。
 
 工作内容：
 
@@ -119,7 +119,7 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 ### R0.3 v0.1.0 可复现发布
 
-当前状态：reproducibility guide、Unreleased changelog、README quick start/support matrix、packaging extras、扩展环境检查、release checker，以及带 tracked-clean/CUDA/产物检查和 Windows 导出的 R0 phase orchestrator 已实现；clean WSL venv、正式 3-trial/profile 证据、版本升级和 tag 仍待完成。
+当前状态：reproducibility guide、release checker、R0 phase orchestrator、正式 3-trial/profile 证据均已完成；仅 clean WSL venv、版本升级和 tag 仍待完成。
 
 交付物：
 
@@ -362,12 +362,10 @@ capacity failure -> refcount and ownership unchanged
 
 ## 11. 当前立即执行顺序
 
-1. WSL 先验证 R1-A `tests/test_scheduler.py`，并完成现有 focused/full regression。
-2. RTX 5070 运行 `--quick --trials 2` 与正式 `--trials 3`，使用聚合器冻结 Week 12 p50/p90/p99 结论。
-3. 运行已实现的 complete-step profiler，完成 append/attention/runtime 阶段归因。
-4. 完成 clean-install、`v0.1.0` reproducibility 与 release。
-5. 实现 R1-B Engine/Cache snapshot、state version、decision apply 与 commitment lifecycle。
-6. 实现 R1-C 三策略 workload 对照和 boundary-deadlock 实验。
-7. Scheduler correctness/benchmark 冻结后，再按 R2 设计实现 multi-layer transaction；不并行启动 prefix。
+1. 在全新 WSL venv 完成 editable install、focused/full regression 与 quick workload。
+2. 提交版本 `0.1.0`、验证 release tag，闭合 R0。
+3. 实现 R1-B Engine/Cache snapshot、state version、decision apply 与 commitment lifecycle。
+4. 实现 R1-C 三策略 workload 对照和 boundary-deadlock 实验。
+5. Scheduler correctness/benchmark 冻结后，再按 R2 设计实现 multi-layer transaction；不并行启动 prefix。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。
