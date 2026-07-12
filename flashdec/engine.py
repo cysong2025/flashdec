@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Hashable
 
 
+PROFILE_RANGE_PREFLIGHT = "flashdec::engine_preflight"
+PROFILE_RANGE_APPEND = "flashdec::rope_kv_append"
+PROFILE_RANGE_DECODE = "flashdec::paged_decode"
+
+
 def _torch():
     import torch
 
@@ -45,6 +50,8 @@ class DecodeEngine:
     ``append_backend`` selects ``torch``, ``cuda``, or ``fused_cuda`` from the
     RoPE/KV data path. ``decode_backend='reference'`` keeps CPU and semantic
     tests available; ``'triton'`` uses the frozen paged decode kernel on CUDA.
+    ``profile_ranges=True`` adds optional PyTorch profiler ranges without
+    adding synchronization; it is disabled for normal execution/benchmarks.
     """
 
     WAITING = "waiting"
@@ -66,6 +73,7 @@ class DecodeEngine:
         sm_scale=None,
         num_warps=2,
         num_stages=None,
+        profile_ranges=False,
     ):
         from .cache import PagedKVCache
 
@@ -75,6 +83,8 @@ class DecodeEngine:
             raise ValueError("append_backend must be 'torch', 'cuda', or 'fused_cuda'")
         if decode_backend not in self._DECODE_BACKENDS:
             raise ValueError("decode_backend must be 'reference' or 'triton'")
+        if not isinstance(profile_ranges, bool):
+            raise ValueError("profile_ranges must be a bool")
 
         self.cache = cache
         self.append_backend = append_backend
@@ -82,6 +92,10 @@ class DecodeEngine:
         self.sm_scale = sm_scale
         self.num_warps = num_warps
         self.num_stages = num_stages
+        self.profile_ranges = profile_ranges
+        self._profile_range_factory = (
+            _torch().profiler.record_function if profile_ranges else None
+        )
         self._statuses: dict[Hashable, str] = {}
         self._completed_step_count = 0
         self._appended_token_count = 0
@@ -135,9 +149,16 @@ class DecodeEngine:
         without changing cache ownership, request seq_len, or lifecycle state.
         The supplied row order is preserved in all successful result tensors.
         """
-        ids = self._normalize_active_ids(request_ids)
-        self._validate_step_inputs(ids, q, k, v)
-        needed_new_blocks = self._needed_new_blocks(ids)
+        range_factory = self._profile_range_factory
+        if range_factory is None:
+            ids = self._normalize_active_ids(request_ids)
+            self._validate_step_inputs(ids, q, k, v)
+            needed_new_blocks = self._needed_new_blocks(ids)
+        else:
+            with range_factory(PROFILE_RANGE_PREFLIGHT):
+                ids = self._normalize_active_ids(request_ids)
+                self._validate_step_inputs(ids, q, k, v)
+                needed_new_blocks = self._needed_new_blocks(ids)
         if needed_new_blocks > self.cache.num_free_blocks:
             self._backpressure_count += 1
             return DecodeStepResult(
@@ -154,18 +175,42 @@ class DecodeEngine:
 
         from .rope import rope_paged_kv_append
 
-        append_result = rope_paged_kv_append(
-            self.cache,
-            layer_idx,
-            ids,
-            q,
-            k,
-            v,
-            rotary_dim=rotary_dim,
-            base=base,
-            append_backend=self.append_backend,
-        )
-        output = self._decode(append_result.q, append_result.block_tables, append_result.seq_lens)
+        if range_factory is None:
+            append_result = rope_paged_kv_append(
+                self.cache,
+                layer_idx,
+                ids,
+                q,
+                k,
+                v,
+                rotary_dim=rotary_dim,
+                base=base,
+                append_backend=self.append_backend,
+            )
+            output = self._decode(
+                append_result.q,
+                append_result.block_tables,
+                append_result.seq_lens,
+            )
+        else:
+            with range_factory(PROFILE_RANGE_APPEND):
+                append_result = rope_paged_kv_append(
+                    self.cache,
+                    layer_idx,
+                    ids,
+                    q,
+                    k,
+                    v,
+                    rotary_dim=rotary_dim,
+                    base=base,
+                    append_backend=self.append_backend,
+                )
+            with range_factory(PROFILE_RANGE_DECODE):
+                output = self._decode(
+                    append_result.q,
+                    append_result.block_tables,
+                    append_result.seq_lens,
+                )
         self._completed_step_count += 1
         self._appended_token_count += len(ids)
         return DecodeStepResult(

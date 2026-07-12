@@ -41,6 +41,9 @@ Dynamic DecodeEngine workload、端到端性能与 Paged KV runtime 可观测性
 - CSV 记录 trial、trial_count、backend_order 和 seed。
 - 新增 `summarize_decode_engine_trials.py`，只有通过完整矩阵、pair trajectory、block accounting、seed/order 和 invariant 校验后才输出聚合摘要。
 - 聚合摘要同时报告 per-trial ratio、跨 trial median/min/max/geometric mean，并将 p50 跨过 1.0 的场景标记为 `unstable_crosses_1`。
+- 新增 `DecodeEngine(profile_ranges=True)` 的 preflight/append/decode ranges；默认关闭且不增加 CUDA synchronization。
+- 新增 `profile_decode_engine.py`，用专用 Engine 包装 submit/admit/complete step/finish/cancel，并输出 stage CPU/device totals、CUDA event count、profile table、summary 和可选 Chrome trace。
+- profiler 结果只做归因；正式 latency 仍来自 non-instrumented multi-trial CSV。
 
 ## RTX 5070 下一步
 
@@ -57,6 +60,7 @@ python -m pytest -vv \
   tests/test_workload.py \
   tests/test_workload_benchmark.py \
   tests/test_decode_engine_trial_summary.py \
+  tests/test_profile_decode_engine.py \
   tests/test_decode_engine.py \
   tests/test_paged_cache.py \
   tests/test_public_api.py
@@ -75,6 +79,15 @@ python benchmarks/run_decode_engine_workload.py \
 python benchmarks/summarize_decode_engine_trials.py \
   --input benchmarks/results/week12_decode_engine_workload_trials3.csv \
   --output benchmarks/results/week12_decode_engine_workload_trials3_summary.md
+
+python benchmarks/profile_decode_engine.py \
+  --workload mixed_steady \
+  --dtype float16 \
+  --append-backends torch fused_cuda \
+  --quick \
+  --export-trace \
+  --output-dir benchmarks/profiles/week12_decode_engine_quick \
+  --summary-output benchmarks/results/week12_decode_engine_profile_quick_summary.md
 ```
 
 三 trial 数据回来后先由聚合器冻结稳定/不稳定结论，然后进入 complete-step profiler、`v0.1.0` reproducibility、CHANGELOG 和 release 文档。

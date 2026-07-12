@@ -35,6 +35,7 @@ benchmark 记录至少包含：
 - `run_rope_kv_append_bench.py`：Week 11 对比 `torch`、独立 `cuda` 与 `fused_cuda` 的 RoPE + paged KV append CUDA-event latency；计时前完成 cache prefill、extension preload 与 correctness 对齐。
 - `run_decode_engine_workload.py`：Week 12 动态 DecodeEngine workload；对比完整 step 的 `torch` 与 `fused_cuda` append path，输出 wall-clock p50/p90/p99、tokens/s、active batch、block allocator/reuse 和 backpressure 指标。
 - `summarize_decode_engine_trials.py`：严格验证 3-trial CSV 的 36 行矩阵、torch/fused 状态轨迹、block accounting、seed 和交替 backend 顺序，输出 per-trial ratio、跨 trial median/range/geometric mean 与稳定性方向。
+- `profile_decode_engine.py`：在独立 instrumented 模式下标记 request submit/admit、Engine step、preflight、RoPE/KV append、paged decode 和 finish/cancel，输出 CPU/device time、CUDA event count、PyTorch profiler table、可选 Chrome trace 与阶段摘要。
 
 当前通用 benchmark/profile 默认配置为 `block_size=32, num_warps=2`。FP16 的少数小 shape 可显式使用 `block_size=16` 对照。
 
@@ -110,3 +111,18 @@ python benchmarks/summarize_decode_engine_trials.py \
 ```
 
 聚合器默认要求 3 workloads x 2 dtypes x 2 backends x 3 trials。缺行、重复行、invariant failure、torch/fused lifecycle/allocator 轨迹不同、seed 不连续或 backend 顺序未交替都会直接失败，不生成可能误导的摘要。
+
+Complete-step profiler 快速验证：
+
+```bash
+python benchmarks/profile_decode_engine.py \
+  --workload mixed_steady \
+  --dtype float16 \
+  --append-backends torch fused_cuda \
+  --quick \
+  --export-trace \
+  --output-dir benchmarks/profiles/week12_decode_engine_quick \
+  --summary-output benchmarks/results/week12_decode_engine_profile_quick_summary.md
+```
+
+profiler 会先使用 disposable Engine 完成 JIT/warmup，再对新的同配置 Engine 记录 ranges。summary 中的 `engine_step` 是包含 preflight/append/decode 的 inclusive range，不能与子 range 相加；instrumented wall-clock 也不能替代 non-instrumented multi-trial CSV。

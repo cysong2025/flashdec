@@ -96,3 +96,31 @@ python benchmarks/run_decode_engine_workload.py \
 3. 使用同一 dtype/workload 的 `speedup_vs_torch_p50` 判断 fused 的端到端传递效率；不要把 p50 与不同 workload 的 p50 混合比较。
 4. `p99` 应与 `p50/p90` 一起看。短负载本身噪声较大；只有跨 workload、重复运行方向一致才做默认路径结论。
 5. 记录至少一个负结果：若 append-only fused 更快但 complete-step speedup 接近 1，说明 attention、allocator 或 Python/synchronization 已成为主导。这个结论同样是 AI Infra 项目的有效交付。
+
+## Complete-step 阶段归因
+
+正式 latency 仍由 non-instrumented workload CSV 给出；阶段归因单独使用：
+
+```bash
+python benchmarks/profile_decode_engine.py \
+  --workload mixed_steady \
+  --dtype float16 \
+  --append-backends torch fused_cuda \
+  --quick \
+  --export-trace \
+  --output-dir benchmarks/profiles/week12_decode_engine_quick \
+  --summary-output benchmarks/results/week12_decode_engine_profile_quick_summary.md
+```
+
+显式 ranges：
+
+```text
+request_submit / request_admit
+engine_step (inclusive)
+  engine_preflight
+  rope_kv_append
+  paged_decode
+request_finish / request_cancel
+```
+
+`rope_kv_append` 包含 Python allocator/metadata 与所选 append backend；`engine_step` 包含三个内部 range。PyTorch profiler 的 nested CPU/device totals 可能重叠，不能直接相加。Q/K/V generation 和 prompt prefill 会出现在全局 profiler 中，但刻意放在命名 Engine ranges 之外。

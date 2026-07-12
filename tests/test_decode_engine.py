@@ -9,7 +9,14 @@ from torch.utils.cpp_extension import CUDA_HOME
 
 import flashdec
 from flashdec.cache import PagedKVCache
-from flashdec.engine import AdmissionResult, DecodeEngine, DecodeStepResult
+from flashdec.engine import (
+    AdmissionResult,
+    DecodeEngine,
+    DecodeStepResult,
+    PROFILE_RANGE_APPEND,
+    PROFILE_RANGE_DECODE,
+    PROFILE_RANGE_PREFLIGHT,
+)
 from flashdec.paged_reference import paged_decode_attention_ref
 from flashdec.rope import rope_paged_kv_append_ref
 
@@ -166,6 +173,31 @@ def test_decode_engine_rejects_invalid_lifecycle_transitions():
         engine.add_request("waiting")
     with pytest.raises(ValueError, match="unique"):
         engine.admit(["waiting", "waiting"])
+
+
+def test_decode_engine_optional_profile_ranges_preserve_cpu_reference_step():
+    engine = DecodeEngine(_make_cache(), profile_ranges=True)
+    engine.add_request(1)
+    engine.admit([1])
+    q, k, v = _step_inputs(1)
+
+    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as prof:
+        result = engine.step(q, k, v)
+
+    keys = {event.key for event in prof.key_averages()}
+    assert result.status == DecodeEngine.STEP_OK
+    assert {
+        PROFILE_RANGE_PREFLIGHT,
+        PROFILE_RANGE_APPEND,
+        PROFILE_RANGE_DECODE,
+    } <= keys
+    assert engine.profile_ranges is True
+    assert engine.validate_invariants()
+
+
+def test_decode_engine_rejects_non_bool_profile_ranges():
+    with pytest.raises(ValueError, match="profile_ranges"):
+        DecodeEngine(_make_cache(), profile_ranges="yes")
 
 
 @pytest.mark.skipif(not HAS_CUDA_TOOLCHAIN, reason=CUDA_TOOLCHAIN_REASON)
