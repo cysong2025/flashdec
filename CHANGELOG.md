@@ -15,6 +15,7 @@
 - multi-trial backend-order 交替、严格 trial CSV validator 和跨 trial stability summary。
 - 可选 DecodeEngine profiler ranges、阶段 CPU/device totals、CUDA event count、Chrome trace，以及正式 12-case matrix/range-count validator。
 - `scripts/check_release.py` release artifact/version/Git gate checker。
+- `scripts/run_r0_validation.py` 分阶段验证编排器：CUDA/tracked-clean 预检、产物检查、dry-run 和 WSL 到 Windows 导出。
 - Scheduler v2 设计规格与 R1-A 纯 Python planner：lifetime block commitment、logical/physical capacity 分离、FIFO + aging、公平 runnable batch、结构化 decision 和 dependency-free focused tests。
 - Multi-layer KV Token Transaction 设计规格：committed/pending seq_len、shared location、逐层执行、batch commit/abort 和 rollback invariant。
 

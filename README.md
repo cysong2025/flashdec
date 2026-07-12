@@ -65,12 +65,13 @@ python -m pip install -e ".[dev,cuda-extension]"
 
 python scripts/check_env.py
 python scripts/check_release.py
+python scripts/run_r0_validation.py --phase all --dry-run
 ```
 
 CPU/reference focused 验证：
 
 ```bash
-python -m unittest discover -s tests -p 'test_scheduler.py' -v
+python scripts/run_r0_validation.py --phase local
 
 python -m pytest -q \
   tests/test_decode_reference.py \
@@ -97,7 +98,7 @@ python -m pytest -vv \
   tests/test_public_api.py
 ```
 
-完整的 clean-install、full regression、36-row multi-trial 和 12-case validated profiler 命令见 [reproducibility guide](docs/reproducibility.md)。
+完整的 clean-install、full regression、36-row multi-trial、12-case validated profiler 和分阶段 Windows 导出命令见 [reproducibility guide](docs/reproducibility.md)。
 
 ## 支持矩阵
 

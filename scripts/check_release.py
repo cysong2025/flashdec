@@ -28,10 +28,12 @@ REQUIRED_PATHS = (
     "benchmarks/profile_decode_engine.py",
     "scripts/check_env.py",
     "scripts/check_release.py",
+    "scripts/run_r0_validation.py",
     "tests/test_paged_cache.py",
     "tests/test_decode_engine.py",
     "tests/test_workload.py",
     "tests/test_scheduler.py",
+    "tests/test_r0_validation.py",
     "tests/test_release_check.py",
 )
 

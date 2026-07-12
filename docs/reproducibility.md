@@ -71,6 +71,46 @@ git rev-parse --short HEAD
 
 `MAX_JOBS=1` 仅限制首次 extension JIT build 的并行编译资源，不是 CUDA kernel 的 block/warp 参数。
 
+## R0 分阶段编排器
+
+手工命令仍保留在后续章节作为唯一计时边界说明；实际执行时推荐由 dependency-free 编排器保证顺序、tracked-clean/CUDA 预检、产物存在性和 Windows 导出。
+
+先确认完整命令，不执行 GPU 工作：
+
+```bash
+python scripts/run_r0_validation.py \
+  --phase all \
+  --dry-run \
+  --export-dir /mnt/c/Users/user/flashdec_results
+```
+
+分阶段正式执行：
+
+```bash
+python scripts/run_r0_validation.py \
+  --phase local \
+  --phase focused \
+  --phase full
+
+python scripts/run_r0_validation.py \
+  --phase trials-quick \
+  --phase profile-quick \
+  --export-dir /mnt/c/Users/user/flashdec_results
+
+python scripts/run_r0_validation.py \
+  --phase trials-formal \
+  --phase profile-formal \
+  --export-dir /mnt/c/Users/user/flashdec_results
+```
+
+`all` 等价于从 `local` 到 `profile-formal` 的全部 evidence phase，故意不包含 `release`。正式 summary 在 Mac 审核、提交并由 WSL 重新拉取后，才单独运行：
+
+```bash
+python scripts/run_r0_validation.py --phase release
+```
+
+`release` 同时启用 `--require-clean --require-evidence`，但不会修改版本或创建 tag。编排器只允许 `benchmarks/results/`、`benchmarks/profiles/` 下的 untracked result artifacts，并要求每一步实际更新目标文件；不允许 formal evidence 基于 tracked source diff 或 untracked source。`--allow-dirty` 仅供 non-formal 开发实验，formal phase 会拒绝该选项。若 WSL 留有即将被 Git 覆盖的正式 summary，先移动到已忽略的 `benchmarks/results/local_backups/`，再拉取 Mac 提交的版本。
+
 ## CPU/reference 验证层
 
 CPU/reference suite 不需要 NVIDIA GPU 或 CUDA Toolkit，但 Linux 环境仍需安装项目依赖：
@@ -81,6 +121,7 @@ Scheduler R1-A 没有 torch/pytest 依赖，可先在任意 Python 3.10+ 环境�
 python -m unittest discover -s tests -p 'test_scheduler.py' -v
 python -m unittest discover -s tests -p 'test_benchmark_helpers.py' -v
 python -m unittest discover -s tests -p 'test_profile_decode_engine.py' -v
+python -m unittest discover -s tests -p 'test_r0_validation.py' -v
 ```
 
 完整 CPU/reference suite：
@@ -97,6 +138,7 @@ python -m pytest -vv \
   tests/test_workload_benchmark.py \
   tests/test_decode_engine_trial_summary.py \
   tests/test_profile_decode_engine.py \
+  tests/test_r0_validation.py \
   tests/test_release_check.py
 ```
 

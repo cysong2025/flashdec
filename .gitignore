@@ -10,5 +10,8 @@ dist/
 *.egg-info/
 benchmarks/results/*.csv
 benchmarks/results/*.log
+benchmarks/results/*_quick_summary.md
+benchmarks/results/*_smoke.md
+benchmarks/results/local_backups/
 benchmarks/profiles/
 .DS_Store
