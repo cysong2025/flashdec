@@ -122,60 +122,63 @@ class PagedKVCache:
         Returns:
             A padded block table tensor for the provided request ids.
         """
-        layer_idx = self._validate_layer_idx(layer_idx)
-        ids = self._normalize_request_ids(request_ids)
-        if not ids:
-            raise ValueError("request_ids must be non-empty")
-        if len(set(ids)) != len(ids):
-            raise ValueError("request_ids must be unique within one append call")
-
-        if k.dim() == 2 and len(ids) == 1:
-            k = k.unsqueeze(0)
-        if v.dim() == 2 and len(ids) == 1:
-            v = v.unsqueeze(0)
-        if k.dim() != 3 or v.dim() != 3:
-            raise ValueError("k and v must have shape [num_requests, num_kv_heads, head_dim]")
-        if k.shape != v.shape:
-            raise ValueError("k and v must have the same shape")
-        if k.shape != (len(ids), self.num_kv_heads, self.head_dim):
-            raise ValueError("k and v shapes must match request count, num_kv_heads, and head_dim")
-        if k.device != self.device or v.device != self.device:
-            raise ValueError("k and v must be on the cache device")
-        if k.dtype != self.dtype or v.dtype != self.dtype:
-            raise ValueError("k and v must use the cache dtype")
-        if not k.is_floating_point() or not v.is_floating_point():
-            raise ValueError("k and v must be floating point tensors")
-
-        needed_new_blocks = 0
-        for request_id in ids:
-            state = self._requests.get(request_id)
-            if state is not None and state.status != self.ACTIVE:
-                raise RuntimeError(
-                    f"request_id {request_id!r} is {state.status} and cannot accept append"
-                )
-            if state is None:
-                state = _RequestState()
-            if state.seq_len % self.block_size == 0:
-                needed_new_blocks += 1
-        if needed_new_blocks > len(self._free_blocks):
-            self._capacity_failure_count += 1
-            raise RuntimeError("PagedKVCache is out of physical blocks")
-
-        for row, request_id in enumerate(ids):
-            self.add_request(request_id)
-            state = self._requests[request_id]
-            token_index = state.seq_len
-            logical_block = token_index // self.block_size
-            block_offset = token_index % self.block_size
-
-            if block_offset == 0:
-                state.block_ids.append(self._allocate_block())
-            physical_block = state.block_ids[logical_block]
-
+        layer_idx, ids, k, v = self._prepare_append_inputs(layer_idx, request_ids, k, v)
+        self._preflight_append(ids)
+        locations = self._allocate_append_locations(ids)
+        for row, (physical_block, block_offset) in enumerate(locations):
             self.k_cache[layer_idx, physical_block, :, block_offset, :] = k[row]
             self.v_cache[layer_idx, physical_block, :, block_offset, :] = v[row]
-            state.seq_len += 1
+        self._advance_request_lengths(ids)
+        return self.block_tables(ids)
 
+    def append_cuda(self, layer_idx, request_ids, k, v):
+        """Append one token per request through the native CUDA K/V write path.
+
+        Python retains ownership of request lifecycle, capacity preflight, and
+        physical block allocation. The JIT-built CUDA extension receives only
+        validated physical block ids/offsets and copies K/V values into the
+        token-major cache. This keeps allocator semantics identical to
+        :meth:`append` while isolating the native data-movement primitive.
+
+        This first native path supports CUDA cache tensors with FP16, BF16, or
+        FP32 dtype. It intentionally does not apply RoPE; callers can use the
+        PyTorch RoPE reference before appending until the fused path exists.
+        """
+        torch = _torch()
+        layer_idx, ids, k, v = self._prepare_append_inputs(layer_idx, request_ids, k, v)
+        if self.device.type != "cuda":
+            raise ValueError("append_cuda requires a CUDA-resident PagedKVCache")
+        if self.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+            raise ValueError("append_cuda supports cache dtype float16, bfloat16, or float32")
+        if not k.is_contiguous() or not v.is_contiguous():
+            raise ValueError("append_cuda requires contiguous k and v tensors")
+
+        # Build before mutating allocator state, so toolchain/build failures do
+        # not create requests or consume physical blocks.
+        from .cuda_kv_append import cuda_kv_append, load_cuda_kv_append_extension
+
+        load_cuda_kv_append_extension()
+        self._preflight_append(ids)
+        locations = self._allocate_append_locations(ids)
+        block_ids = torch.tensor(
+            [physical_block for physical_block, _ in locations],
+            device=self.device,
+            dtype=torch.int64,
+        )
+        block_offsets = torch.tensor(
+            [block_offset for _, block_offset in locations],
+            device=self.device,
+            dtype=torch.int64,
+        )
+        cuda_kv_append(
+            self.k_cache[layer_idx],
+            self.v_cache[layer_idx],
+            block_ids,
+            block_offsets,
+            k,
+            v,
+        )
+        self._advance_request_lengths(ids)
         return self.block_tables(ids)
 
     def finish_request(self, request_id):
@@ -358,6 +361,65 @@ class PagedKVCache:
     @property
     def num_used_blocks(self):
         return self.max_blocks - len(self._free_blocks)
+
+    def _prepare_append_inputs(self, layer_idx, request_ids, k, v):
+        layer_idx = self._validate_layer_idx(layer_idx)
+        ids = self._normalize_request_ids(request_ids)
+        if not ids:
+            raise ValueError("request_ids must be non-empty")
+        if len(set(ids)) != len(ids):
+            raise ValueError("request_ids must be unique within one append call")
+
+        if k.dim() == 2 and len(ids) == 1:
+            k = k.unsqueeze(0)
+        if v.dim() == 2 and len(ids) == 1:
+            v = v.unsqueeze(0)
+        if k.dim() != 3 or v.dim() != 3:
+            raise ValueError("k and v must have shape [num_requests, num_kv_heads, head_dim]")
+        if k.shape != v.shape:
+            raise ValueError("k and v must have the same shape")
+        if k.shape != (len(ids), self.num_kv_heads, self.head_dim):
+            raise ValueError("k and v shapes must match request count, num_kv_heads, and head_dim")
+        if k.device != self.device or v.device != self.device:
+            raise ValueError("k and v must be on the cache device")
+        if k.dtype != self.dtype or v.dtype != self.dtype:
+            raise ValueError("k and v must use the cache dtype")
+        if not k.is_floating_point() or not v.is_floating_point():
+            raise ValueError("k and v must be floating point tensors")
+        return layer_idx, ids, k, v
+
+    def _preflight_append(self, ids):
+        needed_new_blocks = 0
+        for request_id in ids:
+            state = self._requests.get(request_id)
+            if state is not None and state.status != self.ACTIVE:
+                raise RuntimeError(
+                    f"request_id {request_id!r} is {state.status} and cannot accept append"
+                )
+            if state is None:
+                state = _RequestState()
+            if state.seq_len % self.block_size == 0:
+                needed_new_blocks += 1
+        if needed_new_blocks > len(self._free_blocks):
+            self._capacity_failure_count += 1
+            raise RuntimeError("PagedKVCache is out of physical blocks")
+
+    def _allocate_append_locations(self, ids):
+        locations = []
+        for request_id in ids:
+            self.add_request(request_id)
+            state = self._requests[request_id]
+            token_index = state.seq_len
+            logical_block = token_index // self.block_size
+            block_offset = token_index % self.block_size
+            if block_offset == 0:
+                state.block_ids.append(self._allocate_block())
+            locations.append((state.block_ids[logical_block], block_offset))
+        return locations
+
+    def _advance_request_lengths(self, ids):
+        for request_id in ids:
+            self._requests[request_id].seq_len += 1
 
     def _allocate_block(self):
         if not self._free_blocks:

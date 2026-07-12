@@ -17,10 +17,17 @@ dependencies = [
   "tabulate",
 ]
 
+[project.optional-dependencies]
+cuda-extension = [
+  "ninja",
+]
+
 [tool.setuptools.packages.find]
 include = ["flashdec*"]
+
+[tool.setuptools.package-data]
+flashdec = ["csrc/*.cpp", "csrc/*.cu"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-

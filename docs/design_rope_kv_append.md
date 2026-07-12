@@ -88,7 +88,7 @@ capacity failure 由 PagedKVCache v2 在写入前统一检查，因此失败时�
 
 当前不支持：
 
-- CUDA KV append 或 fused RoPE kernel。
+- fused RoPE + KV append CUDA kernel。独立 CUDA KV append 已实现，正在等待 RTX 5070 JIT build 与 correctness 验证。
 - interleaved adjacent-pair RoPE。
 - RoPE scaling、YaRN 或 NTK-aware scaling。
 - 多 layer execution。
@@ -117,4 +117,4 @@ focused: 38 passed in 3.60s
 full:    186 passed in 4.96s
 ```
 
-PyTorch reference 语义已经固定。当前没有 `nvcc`，因此尚未构建 CUDA extension，也没有 CUDA KV append 性能结论。
+PyTorch reference 语义已经固定。独立 CUDA KV append 还没有上板结果，也没有性能结论；在其 correctness 稳定后，再实现并比较 fused RoPE + KV append。

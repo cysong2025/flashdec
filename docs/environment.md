@@ -127,6 +127,8 @@ not found
 
 ### Week 11 CUDA Extension 前置检查（2026-07-12）
 
+首次检查（安装 Toolkit 前）：
+
 ```text
 RoPE/KV append focused: 38 passed in 3.60s
 Full regression: 186 passed in 4.96s
@@ -136,7 +138,29 @@ PyTorch CUDA: 12.8
 CUDA_HOME: None
 ```
 
-结论：GPU runtime、PyTorch CUDA 和 Triton 均可用，但系统缺少 CUDA compiler/toolkit，因此当前只能运行预编译 PyTorch/Triton 路径，不能构建 C++/CUDA extension。WSL 中必须安装 toolkit-only package，不能安装 Linux NVIDIA driver。
+当时结论：GPU runtime、PyTorch CUDA 和 Triton 均可用，但系统缺少 CUDA compiler/toolkit，因此只能运行预编译 PyTorch/Triton 路径。WSL 中应安装 toolkit-only package，不能安装 Linux NVIDIA driver。
+
+### Week 11 CUDA Toolkit 已就绪（2026-07-12）
+
+```text
+nvcc path: /usr/local/cuda-12.8/bin/nvcc
+nvcc: CUDA compilation tools, release 12.8, V12.8.93
+PyTorch: 2.11.0+cu128
+PyTorch CUDA: 12.8
+CUDA_HOME: /usr/local/cuda-12.8
+Ninja: 1.13.0
+gcc/g++: 13.3.0
+```
+
+结论：CUDA extension 的编译前置条件已满足。每次新 shell 运行 native 测试前，在激活 `.venv` 后设置：
+
+```bash
+export CUDA_HOME=/usr/local/cuda-12.8
+export PATH="$CUDA_HOME/bin:$PATH"
+export MAX_JOBS=1
+```
+
+`MAX_JOBS=1` 是首次 JIT 编译的资源保护设置；不是 GPU kernel 的线程或 warp 配置。独立 CUDA KV append 还未上板构建，因此 native correctness 和性能数据仍待记录。
 
 ## Mac 开发与 RTX 5070 验证工作流
 

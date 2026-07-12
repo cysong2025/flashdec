@@ -71,11 +71,11 @@
 
 当前限制：
 
-- 目前只有 PyTorch reference，尚无 CUDA extension，也没有性能结论。
+- 已实现独立 CUDA KV append extension 和 `PagedKVCache.append_cuda()`，但还没有 RTX 5070 JIT/correctness/性能结论。
 - 只支持当前 PagedKVCache v2 的单 layer runtime。
 - 不包含 RoPE scaling、YaRN、NTK-aware scaling 或 interleaved-pair convention。
 - RTX 5070 focused 为 `38 passed in 3.60s`，完整回归为 `186 passed in 4.96s`。
-- native CUDA extension 当前受限于 `nvcc` 未安装、`CUDA_HOME=None`。
+- native extension 当前要求 CUDA-resident、contiguous FP16/BF16/FP32 token-major cache 与 K/V；Toolkit 前置检查已通过 `nvcc 12.8.93`、`CUDA_HOME=/usr/local/cuda-12.8` 和 Ninja 1.13.0。
 
 ## 已验证 Correctness
 

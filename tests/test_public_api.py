@@ -15,6 +15,11 @@ def test_paged_kv_cache_is_public_api():
     assert flashdec.PagedKVCache is PagedKVCache
 
 
+def test_cuda_kv_append_is_lazy_public_api():
+    assert callable(flashdec.cuda_kv_append)
+    assert callable(flashdec.load_cuda_kv_append_extension)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU is required for Triton kernel tests")
 def test_decode_public_api_matches_reference():
     q = torch.randn((1, 2, 64), device="cuda", dtype=torch.float16)

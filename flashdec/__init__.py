@@ -5,8 +5,10 @@ __all__ = [
     "RopeAppendResult",
     "__version__",
     "apply_rope",
+    "cuda_kv_append",
     "decode",
     "dense_decode_attention_ref",
+    "load_cuda_kv_append_extension",
     "paged_decode_attention",
     "paged_decode_attention_ref",
     "rope_paged_kv_append_ref",
@@ -27,6 +29,13 @@ def __getattr__(name):
             "RopeAppendResult": RopeAppendResult,
             "apply_rope": apply_rope,
             "rope_paged_kv_append_ref": rope_paged_kv_append_ref,
+        }[name]
+    if name in ("cuda_kv_append", "load_cuda_kv_append_extension"):
+        from .cuda_kv_append import cuda_kv_append, load_cuda_kv_append_extension
+
+        return {
+            "cuda_kv_append": cuda_kv_append,
+            "load_cuda_kv_append_extension": load_cuda_kv_append_extension,
         }[name]
     if name == "dense_decode_attention_ref":
         from .reference import dense_decode_attention_ref
