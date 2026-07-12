@@ -122,3 +122,7 @@ allocate/free/reuse      block_tables/seq_lens
 7. 新环境能够按文档复现 correctness 和 quick end-to-end benchmark。
 
 单个 kernel 更快、参数 sweep 更多，不能单独满足上述完成标准。
+
+## v0.1 之后的深化边界
+
+`v0.2` 的必做深化方向是 block-aware scheduler 与 multi-layer KV token transaction；它们分别补齐“谁能进入本轮 batch”和“一个 token 如何原子地更新所有 layer”两个当前核心缺口。Shared prefix blocks 与 FlashInfer/vLLM 有限对比属于 `v0.3` 选择项，不与 scheduler 同时展开。完整路线与验收门槛见 `docs/ROADMAP.md`。

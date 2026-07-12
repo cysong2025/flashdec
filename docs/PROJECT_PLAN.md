@@ -8,6 +8,8 @@
 >
 > 项目定位：公开、可复现的单 GPU LLM decode 执行与 KV Cache 管理项目。
 
+> Week 12 之后的 scheduler、multi-layer KV transaction、shared prefix 与公开基线路线见 `docs/ROADMAP.md`；本文件保留原始 12 周计划与验收基线。
+
 ## 1. 项目目标
 
 FlashDec 的目标是围绕 **LLM decode 阶段的执行路径、PagedAttention 与 Paged KV Cache** 做一个小而深的 AI Infra 项目。高性能算子是底层核心，但最终交付必须覆盖内存管理、请求生命周期、动态 batch 执行和端到端评测。

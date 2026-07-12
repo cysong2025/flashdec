@@ -17,6 +17,8 @@
 
 详细系统边界与完成标准见 `docs/AI_INFRA_SCOPE.md`。
 
+Week 12 之后的长期深化目标、阶段交付物与验收门槛见 `docs/ROADMAP.md`。后续优先顺序固定为：证据闭环 -> block-aware scheduler -> multi-layer KV transaction -> prefix/公开基线二选一。
+
 ## 阶段 1：最终 Kernel 基线
 
 状态：已完成。
@@ -215,3 +217,5 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 ## 当前立即执行
 
 拉取最新多 trial benchmark 改进，在 RTX 5070 上先运行 focused tests 与 `--quick --trials 2`，再运行正式 `--trials 3`。数据同步回 Mac 后聚合 trial 中位数/几何平均；若 p50/p90 稳定，再进入 `v0.1.0` reproducibility 与 release 文档。
+
+完成 `v0.1.0` 后不继续增加零散 kernel；下一条代码主线是 `flashdec/scheduler.py` 的 block-aware admission/runnable subset/fairness。Scheduler 验证完成后才开始 multi-layer KV token transaction。

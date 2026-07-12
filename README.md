@@ -20,6 +20,7 @@ Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 den
 - [12 周详细执行计划](docs/PROJECT_PLAN.md)
 - [AI Infra 项目定位](docs/AI_INFRA_SCOPE.md)
 - [接下来工作计划](docs/NEXT_STEPS.md)
+- [v0.1-v0.3 深度路线图](docs/ROADMAP.md)
 - [准备清单](docs/PREP_CHECKLIST.md)
 - [中文学习资料导航](docs/CHINESE_RESOURCES.md)
 - [环境记录](docs/environment.md)
