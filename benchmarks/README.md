@@ -36,6 +36,8 @@ benchmark 记录至少包含：
 - `run_decode_engine_workload.py`：Week 12 动态 DecodeEngine workload；对比完整 step 的 `torch` 与 `fused_cuda` append path，输出 wall-clock p50/p90/p99、tokens/s、active batch、block allocator/reuse 和 backpressure 指标。
 - `summarize_decode_engine_trials.py`：严格验证 3-trial CSV 的 36 行矩阵、torch/fused 状态轨迹、block accounting、seed 和交替 backend 顺序，输出 per-trial ratio、跨 trial median/range/geometric mean 与稳定性方向。
 - `profile_decode_engine.py`：在独立 instrumented 模式下标记 request submit/admit、Engine step、preflight、RoPE/KV append、paged decode 和 finish/cancel，输出 CPU/device time、CUDA event count、PyTorch profiler table、可选 Chrome trace 与阶段摘要。
+- `run_scheduler_workload.py`：在完全相同的有限 request trace 上比较 cancel-on-backpressure、greedy-step-only 和 lifetime FIFO + aging；输出完成率、强制取消、deadlock、有效 TPS、等待/公平性、commitment/physical block 和完整 step latency。
+- `summarize_scheduler_workload.py`：严格验证 36 行 scheduler case/dtype/policy/trial 矩阵、commit/device、seed、轮转执行顺序和策略特有的 progress invariant，再输出跨 trial 中位数摘要。
 
 当前通用 benchmark/profile 默认配置为 `block_size=32, num_warps=2`。FP16 的少数小 shape 可显式使用 `block_size=16` 对照。
 
@@ -126,3 +128,29 @@ python benchmarks/profile_decode_engine.py \
 ```
 
 profiler 会先使用 disposable Engine 完成 JIT/warmup，再对新的同配置 Engine 记录 ranges。summary 中的 `engine_step` 是包含 preflight/append/decode 的 inclusive range，不能与子 range 相加；instrumented wall-clock 也不能替代 non-instrumented multi-trial CSV。
+
+R1 Scheduler 三策略快速验证：
+
+```bash
+python benchmarks/run_scheduler_workload.py \
+  --case boundary_deadlock \
+  --dtype float16 \
+  --trials 1 \
+  --output benchmarks/results/r1_scheduler_workload_quick.csv
+```
+
+正式矩阵使用：
+
+```bash
+python benchmarks/run_scheduler_workload.py \
+  --case all \
+  --dtype both \
+  --trials 3 \
+  --output benchmarks/results/r1_scheduler_workload_trials3.csv
+
+python benchmarks/summarize_scheduler_workload.py \
+  --input benchmarks/results/r1_scheduler_workload_trials3.csv \
+  --output benchmarks/results/r1_scheduler_workload_trials3_summary.md
+```
+
+相邻 trial 会轮转策略执行顺序。聚合器严格要求 36 行完整矩阵和统一 commit/device，并验证 boundary case 的策略语义。`completed_tokens` 包含随后被取消请求已经执行的无效工作；`useful_tokens` 只统计最终完成请求，因此策略吞吐结论优先使用 `useful_tokens_per_second`。任何 `resource_deadlocks > 0` 的行都必须与完成率、取消数一起解释，不能只比较 p50。

@@ -13,7 +13,7 @@ FlashDec 是一个 12 周 AI Infra 工程项目，主题是 **单 GPU LLM decode
 
 ## 当前状态
 
-Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 fused append-only p50 几何平均为 `1.2226x`。Week 12 已完成 `287 passed` 回归、36 行正式 multi-trial 与 12-case Engine profiler；fused complete-step p50/p90/tokens-s 几何平均为 `1.0668x/1.0317x/1.0811x`，但 short-churn p50 跨 trial 穿过 1.0，p99 仍需按场景报告范围。R1-B 已进入 Engine/Cache 集成：scheduler-managed request、版本快照、原子 decision apply 和 commitment lifecycle 已实现，等待 WSL/RTX 回归。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 fused append-only p50 几何平均为 `1.2226x`。Week 12 已完成 `287 passed` 回归、36 行正式 multi-trial 与 12-case Engine profiler；fused complete-step p50/p90/tokens-s 几何平均为 `1.0668x/1.0317x/1.0811x`，但 short-churn p50 跨 trial 穿过 1.0，p99 仍需按场景报告范围。R1-B Engine/Cache 集成已通过 WSL `293 passed`；R1-C 三策略 trace-driven workload、deadlock 检测、系统指标和 RTX benchmark CLI 已实现，等待新一轮 WSL/RTX 验证。
 
 主要文档：
 
@@ -112,7 +112,7 @@ python -m pytest -vv \
 | Triton launch | num_warps 2/4/8、可选 num_stages | 2 warps、implicit stages |
 | KV runtime | allocate/free/reuse、finish/cancel、backpressure | 单 GPU、单 layer |
 | append backend | torch、独立 CUDA、fused CUDA | GPU Engine 显式 fused CUDA |
-| scheduler | lifetime commitment/FIFO + aging planner、Engine snapshot/decision apply | R1-B 已实现，等待 WSL/RTX 回归与 R1-C workload |
+| scheduler | cancel/greedy/lifetime 三策略、Engine decision apply、deadlock 检测 | R1-C 已实现，等待 WSL/RTX workload 证据 |
 | workload | short-churn、mixed-steady、long-pressure | wall-clock + memory/lifecycle metrics |
 | profiling | paged kernel、完整 Engine ranges、Chrome trace | instrumented 数据只做归因 |
 
@@ -120,7 +120,7 @@ python -m pytest -vv \
 
 - `v0.1.0` 固定为单 GPU、单 layer、每 request 每 step 一个 decode token。
 - Q/K/V 由调用方提供；不包含完整 Transformer forward、tokenizer、sampling 或网络服务。
-- Block-aware Scheduler v2 的 R1-B Engine/Cache 集成已实现但尚未完成 WSL/RTX 回归；当前压力 workload baseline 仍会显式记录 backpressure/cancellation，三策略对照留在 R1-C。
+- Block-aware Scheduler v2 的 R1-B 已通过 WSL 回归；R1-C 三策略 workload 已实现但尚未生成 RTX 对照数据，因此不能提前声明默认策略的吞吐或延迟优势。
 - Multi-layer KV Token Transaction 已冻结设计但尚未实现；当前 Cache/Engine 继续显式限制单 layer。
 - 不包含 prefix cache、swap/offload、抢占、tensor/pipeline parallel 或多机。
 - CUDA extension 使用 lazy JIT，需要匹配 PyTorch CUDA build 的 Toolkit、NVCC、host compiler 和 Ninja。

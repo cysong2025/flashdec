@@ -18,6 +18,7 @@
 - `scripts/run_r0_validation.py` 分阶段验证编排器：CUDA/tracked-clean 预检、产物检查、dry-run 和 WSL 到 Windows 导出。
 - Scheduler v2 设计规格与 R1-A 纯 Python planner：lifetime block commitment、logical/physical capacity 分离、FIFO + aging、公平 runnable batch、结构化 decision 和 dependency-free focused tests。
 - Scheduler R1-B Engine/Cache 集成：scheduler-managed request submission、Engine/Cache `state_version`、authoritative snapshot、stale/forged decision 原子拒绝、显式 rejection、initial-context seeding 和 commitment metrics。
+- Scheduler R1-C trace-driven workload：cancel/greedy/lifetime 三策略、boundary-deadlock 检测、等待/公平性/commitment/physical block 指标、执行 token 与有效 token 分离，以及 RTX benchmark CLI。
 - Multi-layer KV Token Transaction 设计规格：committed/pending seq_len、shared location、逐层执行、batch commit/abort 和 rollback invariant。
 
 ### Changed

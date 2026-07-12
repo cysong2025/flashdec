@@ -141,7 +141,7 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 优先级：P1，是 v0.2 的第一条核心深度主线。预计 2 个阶段周。
 
-当前状态：目标语义和实验边界已冻结；R1-A 纯 Python planner 与 dependency-free focused tests 已实现，R1-B Engine/Cache state version、snapshot、decision apply、rejection 和 commitment lifecycle 代码也已完成。Mac `unittest` 12/12 与静态门禁通过；WSL PyTorch/full regression、R1-C workload 和 RTX 5070 证据尚未完成。
+当前状态：R1-A planner 和 R1-B Engine/Cache 集成已实现，R1-B WSL full regression 为 `293 passed`。R1-C 三策略 trace-driven workload、boundary deadlock、系统指标、scheduled fused/Triton 测试和 benchmark CLI 已实现；新代码的 WSL/full regression 与 RTX 5070 策略数据尚未完成。
 
 ### 要回答的问题
 
@@ -362,8 +362,8 @@ capacity failure -> refcount and ownership unchanged
 
 ## 11. 当前立即执行顺序
 
-1. 在既有 WSL 环境验证 R1-B focused/full regression 与 RTX fused/Triton compatibility。
-2. 实现 R1-C 三策略 workload 对照和 boundary-deadlock 实验。
+1. 在既有 WSL 环境验证 R1-C focused/full regression 与 scheduled fused/Triton correctness。
+2. 运行 boundary-deadlock/finite-queue 的 FP16/BF16 三策略对照并冻结结论。
 3. Scheduler correctness/benchmark 冻结后，再按 R2 设计实现 multi-layer transaction；不并行启动 prefix。
 4. 全部功能完成后统一执行 clean-machine install、版本升级和 release tag。
 

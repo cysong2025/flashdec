@@ -12,6 +12,12 @@ __all__ = [
     "SchedulerDecision",
     "SchedulingSnapshot",
     "WaitingRequestMetadata",
+    "CANCEL_ON_BACKPRESSURE",
+    "GREEDY_STEP_ONLY",
+    "LIFETIME_FIFO_AGING",
+    "RequestArrival",
+    "SchedulerWorkloadConfig",
+    "SchedulerWorkloadResult",
     "RopeAppendResult",
     "WorkloadConfig",
     "WorkloadResult",
@@ -28,6 +34,8 @@ __all__ = [
     "rope_paged_kv_append",
     "rope_paged_kv_append_ref",
     "run_synthetic_workload",
+    "run_scheduler_workload",
+    "boundary_deadlock_arrivals",
 ]
 
 __version__ = "0.0.0"
@@ -81,6 +89,37 @@ def __getattr__(name):
             "WorkloadConfig": WorkloadConfig,
             "WorkloadResult": WorkloadResult,
             "run_synthetic_workload": run_synthetic_workload,
+        }[name]
+    if name in (
+        "RequestArrival",
+        "SchedulerWorkloadConfig",
+        "SchedulerWorkloadResult",
+        "CANCEL_ON_BACKPRESSURE",
+        "GREEDY_STEP_ONLY",
+        "LIFETIME_FIFO_AGING",
+        "boundary_deadlock_arrivals",
+        "run_scheduler_workload",
+    ):
+        from .scheduled_workload import (
+            CANCEL_ON_BACKPRESSURE,
+            GREEDY_STEP_ONLY,
+            LIFETIME_FIFO_AGING,
+            RequestArrival,
+            SchedulerWorkloadConfig,
+            SchedulerWorkloadResult,
+            boundary_deadlock_arrivals,
+            run_scheduler_workload,
+        )
+
+        return {
+            "CANCEL_ON_BACKPRESSURE": CANCEL_ON_BACKPRESSURE,
+            "GREEDY_STEP_ONLY": GREEDY_STEP_ONLY,
+            "LIFETIME_FIFO_AGING": LIFETIME_FIFO_AGING,
+            "RequestArrival": RequestArrival,
+            "SchedulerWorkloadConfig": SchedulerWorkloadConfig,
+            "SchedulerWorkloadResult": SchedulerWorkloadResult,
+            "boundary_deadlock_arrivals": boundary_deadlock_arrivals,
+            "run_scheduler_workload": run_scheduler_workload,
         }[name]
     if name in (
         "RopeAppendResult",

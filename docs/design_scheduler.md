@@ -331,6 +331,8 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 - 新增 boundary-deadlock workload 与 scheduler metrics。
 - CPU quick 验证生命周期轨迹，再在 RTX 5070 跑 FP16/BF16 正式矩阵。
 
+当前状态：trace-driven runner、三策略 event loop、确定性 deadlock cutoff、等待/服务公平性/commitment/physical block/有效 token 指标、CPU/PyTorch 对抗测试和 `run_scheduler_workload.py` 已实现。scheduled fused CUDA + Triton 数值对齐测试也已加入；所有 PyTorch/RTX 结果仍待 WSL 验证。
+
 ### R1-D：结论冻结
 
 - 所有 correctness/invariant 通过。
@@ -341,4 +343,4 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 
 ## 14. 当前状态
 
-本文已冻结 R1 的目标语义与实验边界，并完成 R1-A 纯策略层和 R1-B Engine/Cache 集成代码。R1-B 的 WSL/RTX 回归、R1-C workload policy 对照和 RTX 5070 数据尚未完成。R0 multi-trial/profile 证据已闭合；clean-machine install 按当前开发决策统一推迟到全部功能完成后的最终发布验证，版本继续保持 `0.0.0`。
+本文已冻结 R1 的目标语义与实验边界，完成 R1-A 纯策略层、R1-B Engine/Cache 集成并通过 WSL `293 passed`，也完成 R1-C 三策略 workload 代码。R1-C 的 CPU/PyTorch/full regression 与 RTX 5070 对照数据尚未完成，不能把实现状态写成性能结论。clean-machine install 统一推迟到全部功能完成后的最终发布验证，版本继续保持 `0.0.0`。

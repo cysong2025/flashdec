@@ -60,12 +60,14 @@ class R0ValidationOrchestratorTests(unittest.TestCase):
     def test_build_local_steps_uses_selected_python(self):
         steps = build_validation_steps("/venv/bin/python", ["local"])
 
-        self.assertEqual(len(steps), 4)
+        self.assertEqual(len(steps), 6)
         self.assertTrue(all(step.command[0] == "/venv/bin/python" for step in steps))
         self.assertEqual(
             [step.name for step in steps],
             [
                 "scheduler-unittest",
+                "scheduled-workload-config-unittest",
+                "scheduler-workload-summary-unittest",
                 "benchmark-helper-unittest",
                 "profile-helper-unittest",
                 "orchestrator-unittest",
