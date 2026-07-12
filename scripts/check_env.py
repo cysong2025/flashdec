@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib
+import os
 import platform
+import shutil
 import subprocess
 import sys
 
@@ -34,9 +36,16 @@ def main() -> None:
     print("FlashDec environment check")
     print("==========================")
     print(f"Python: {sys.version.split()[0]}")
+    print(f"Python executable: {sys.executable}")
     print(f"Platform: {platform.platform()}")
     print(f"PyTorch: {_module_version('torch')}")
     print(f"Triton: {_module_version('triton')}")
+    print(f"Ninja: {_module_version('ninja')}")
+    print(f"Git commit: {_run(['git', 'rev-parse', '--short', 'HEAD'])}")
+    git_status = _run(["git", "status", "--porcelain"])
+    print(f"Git worktree clean: {git_status == ''}")
+    print(f"CUDA_HOME env: {os.environ.get('CUDA_HOME')}")
+    print(f"nvcc path: {shutil.which('nvcc')}")
     print()
 
     try:
@@ -46,6 +55,12 @@ def main() -> None:
     else:
         print(f"CUDA available: {torch.cuda.is_available()}")
         print(f"PyTorch CUDA: {getattr(torch.version, 'cuda', None)}")
+        try:
+            from torch.utils.cpp_extension import CUDA_HOME
+        except Exception as exc:  # pragma: no cover - diagnostic script
+            print(f"PyTorch CUDA_HOME detection failed: {type(exc).__name__}: {exc}")
+        else:
+            print(f"PyTorch CUDA_HOME: {CUDA_HOME}")
         if torch.cuda.is_available():
             print(f"CUDA device count: {torch.cuda.device_count()}")
             for index in range(torch.cuda.device_count()):
@@ -70,4 +85,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

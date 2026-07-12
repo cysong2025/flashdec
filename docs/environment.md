@@ -160,7 +160,7 @@ export PATH="$CUDA_HOME/bin:$PATH"
 export MAX_JOBS=1
 ```
 
-`MAX_JOBS=1` 是首次 JIT 编译的资源保护设置；不是 GPU kernel 的线程或 warp 配置。独立 CUDA KV append 还未上板构建，因此 native correctness 和性能数据仍待记录。
+`MAX_JOBS=1` 是首次 JIT 编译的资源保护设置；不是 GPU kernel 的线程或 warp 配置。随后独立 CUDA KV append 已通过 focused `34 passed in 3.59s` / full `198 passed in 5.13s`；fused RoPE/KV append 已通过 focused `66 passed in 44.35s`（含首次 JIT）/ full `214 passed in 4.52s`。append-only full benchmark 的 fused p50 几何平均为 1.2226x vs torch。
 
 ## Mac 开发与 RTX 5070 验证工作流
 

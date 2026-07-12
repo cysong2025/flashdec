@@ -119,6 +119,8 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 ### R0.3 v0.1.0 可复现发布
 
+当前状态：reproducibility guide、Unreleased changelog、README quick start/support matrix、packaging extras、扩展环境检查和 release checker 已实现；clean WSL venv、正式 3-trial/profile 证据、版本升级和 tag 仍待完成。
+
 交付物：
 
 - `docs/reproducibility.md`。

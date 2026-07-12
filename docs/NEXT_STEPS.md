@@ -216,6 +216,6 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 当前立即执行
 
-拉取最新 multi-trial benchmark/aggregator，在 RTX 5070 上先运行包含 `tests/test_decode_engine_trial_summary.py` 的 focused tests 与 `--quick --trials 2`，再运行正式 `--trials 3`。数据同步回 Mac 后运行 `benchmarks/summarize_decode_engine_trials.py`；若 p50/p90 稳定，再进入 complete-step profiler 与 `v0.1.0` reproducibility。
+拉取最新 multi-trial/aggregator/profiler/release candidate，在 RTX 5070 上依次运行 focused tests、`--quick --trials 2`、正式 `--trials 3`、trial summarizer 和 mixed-steady quick profiler。数据回传并冻结结论后，在新的 WSL venv 执行 `docs/reproducibility.md` 全流程；所有 gate 通过前保持版本 `0.0.0`，不创建 tag。
 
 完成 `v0.1.0` 后不继续增加零散 kernel；下一条代码主线是 `flashdec/scheduler.py` 的 block-aware admission/runnable subset/fairness。Scheduler 验证完成后才开始 multi-layer KV token transaction。

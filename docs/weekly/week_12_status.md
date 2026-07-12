@@ -44,6 +44,9 @@ Dynamic DecodeEngine workload、端到端性能与 Paged KV runtime 可观测性
 - 新增 `DecodeEngine(profile_ranges=True)` 的 preflight/append/decode ranges；默认关闭且不增加 CUDA synchronization。
 - 新增 `profile_decode_engine.py`，用专用 Engine 包装 submit/admit/complete step/finish/cancel，并输出 stage CPU/device totals、CUDA event count、profile table、summary 和可选 Chrome trace。
 - profiler 结果只做归因；正式 latency 仍来自 non-instrumented multi-trial CSV。
+- 新增 `docs/reproducibility.md`、Unreleased `CHANGELOG.md`、README quick start/support matrix 和 `scripts/check_release.py`。
+- package 核心依赖精简为 torch/triton，pytest 与 Ninja 分别进入 `dev`/`cuda-extension` extras。
+- release candidate 文档/检查器已实现；clean WSL venv、版本 `0.1.0` 和 tag 明确保持 pending。
 
 ## RTX 5070 下一步
 
@@ -90,4 +93,12 @@ python benchmarks/profile_decode_engine.py \
   --summary-output benchmarks/results/week12_decode_engine_profile_quick_summary.md
 ```
 
-三 trial 数据回来后先由聚合器冻结稳定/不稳定结论，然后进入 complete-step profiler、`v0.1.0` reproducibility、CHANGELOG 和 release 文档。
+三 trial 数据回来后先由聚合器冻结稳定/不稳定结论，再结合 complete-step profiler 结果更新 performance summary，最后执行 clean WSL reproduction gate。
+
+release candidate 结构可先检查：
+
+```bash
+python scripts/check_release.py --require-clean
+```
+
+当前版本仍为 `0.0.0`；只有 clean-install、最新 GPU regression、multi-trial 和 profiler gate 均完成后才升级版本并创建 `v0.1.0` tag。

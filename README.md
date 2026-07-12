@@ -21,6 +21,8 @@ Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 den
 - [AI Infra 项目定位](docs/AI_INFRA_SCOPE.md)
 - [接下来工作计划](docs/NEXT_STEPS.md)
 - [v0.1-v0.3 深度路线图](docs/ROADMAP.md)
+- [可复现安装与验证](docs/reproducibility.md)
+- [版本变化记录](CHANGELOG.md)
 - [准备清单](docs/PREP_CHECKLIST.md)
 - [中文学习资料导航](docs/CHINESE_RESOURCES.md)
 - [环境记录](docs/environment.md)
@@ -45,6 +47,77 @@ Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 den
 - [动态 Workload 设计说明](docs/design_dynamic_workload.md)
 - [CUDA KV Append 设计说明](docs/design_cuda_kv_append.md)
 - [兼容性记录](docs/compatibility.md)
+
+## Quick start
+
+推荐环境是 Linux/WSL。创建独立环境并安装开发/native extras：
+
+```bash
+git clone https://github.com/cysong2025/flashdec.git
+cd flashdec
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e ".[dev,cuda-extension]"
+
+python scripts/check_env.py
+python scripts/check_release.py
+```
+
+CPU/reference focused 验证：
+
+```bash
+python -m pytest -q \
+  tests/test_decode_reference.py \
+  tests/test_paged_cache.py \
+  tests/test_rope_append.py \
+  tests/test_workload.py \
+  tests/test_decode_engine_trial_summary.py \
+  tests/test_profile_decode_engine.py
+```
+
+RTX 5070 native/Triton 验证前：
+
+```bash
+export CUDA_HOME=/usr/local/cuda-12.8
+export PATH="$CUDA_HOME/bin:$PATH"
+export MAX_JOBS=1
+
+python -m pytest -vv \
+  tests/test_cuda_kv_append.py \
+  tests/test_fused_rope_kv_append.py \
+  tests/test_paged_decode.py \
+  tests/test_decode_engine.py \
+  tests/test_public_api.py
+```
+
+完整的 clean-install、full regression、multi-trial 和 profiler 命令见 [reproducibility guide](docs/reproducibility.md)。
+
+## 支持矩阵
+
+| 层次 | 当前支持 | 当前默认/状态 |
+| --- | --- | --- |
+| dtype | FP16、BF16；部分 reference/native op 支持 FP32 | GPU decode 默认 FP16/BF16 |
+| head dim | 64、128 | benchmark 主线 128 |
+| attention heads | MHA、GQA、MQA | `num_q_heads % num_kv_heads == 0` |
+| KV layout | token-major、dim-major correctness | token-major 默认 |
+| block size | 8、16、32 | 32 默认 |
+| Triton launch | num_warps 2/4/8、可选 num_stages | 2 warps、implicit stages |
+| KV runtime | allocate/free/reuse、finish/cancel、backpressure | 单 GPU、单 layer |
+| append backend | torch、独立 CUDA、fused CUDA | GPU Engine 显式 fused CUDA |
+| workload | short-churn、mixed-steady、long-pressure | wall-clock + memory/lifecycle metrics |
+| profiling | paged kernel、完整 Engine ranges、Chrome trace | instrumented 数据只做归因 |
+
+## 当前限制
+
+- `v0.1.0` 固定为单 GPU、单 layer、每 request 每 step 一个 decode token。
+- Q/K/V 由调用方提供；不包含完整 Transformer forward、tokenizer、sampling 或网络服务。
+- 当前没有 block-aware continuous scheduler；压力 workload baseline 会显式记录 backpressure/cancellation。
+- 不包含 prefix cache、swap/offload、抢占、tensor/pipeline parallel 或多机。
+- CUDA extension 使用 lazy JIT，需要匹配 PyTorch CUDA build 的 Toolkit、NVCC、host compiler 和 Ninja。
+- macOS 工作区只能执行静态检查；正式 correctness/benchmark/profiling 以 RTX 5070 WSL 为准。
+- 当前 package version 仍为 `0.0.0`；multi-trial、profiler 和 clean-install gate 完成前不创建 `v0.1.0` tag。
 
 ## 项目边界
 

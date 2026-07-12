@@ -78,7 +78,7 @@
 - RTX 5070 focused 为 `38 passed in 3.60s`，完整回归为 `186 passed in 4.96s`。
 - native extension 当前要求 CUDA-resident、contiguous FP16/BF16/FP32 token-major cache 与 K/V；Toolkit 前置检查已通过 `nvcc 12.8.93`、`CUDA_HOME=/usr/local/cuda-12.8` 和 Ninja 1.13.0。
 - RoPE 的 `append_backend="cuda"` 集成已通过 RTX 5070 correctness（focused `56 passed in 3.85s`，full `204 passed in 4.47s`）；它不是 fused RoPE kernel，也没有性能结论。
-- `append_backend="fused_cuda"` 和低层 `flashdec.fused_rope_kv_append()` 已在 RTX 5070 通过 JIT/correctness（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）；当前支持 token-major contiguous FP16/BF16/FP32，尚无性能结论。
+- `append_backend="fused_cuda"` 和低层 `flashdec.fused_rope_kv_append()` 已在 RTX 5070 通过 JIT/correctness（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）；当前支持 token-major contiguous FP16/BF16/FP32。Week 11 append-only full benchmark 的 p50 几何平均为 1.2226x vs torch。
 
 ## DecodeEngine v1
 
@@ -88,8 +88,10 @@
 - admission、deterministic active request row order、single-token `step()`。
 - `torch`/`cuda`/`fused_cuda` append backend，以及 reference/Triton paged decode backend。
 - capacity 不足时返回 `DecodeStepResult(status="backpressure")`，不改变 KV ownership 或 seq_len。
+- short-churn、mixed-steady、long-pressure synthetic workload 与完整 step p50/p90/p99/TPS/memory metrics。
+- 可选 `profile_ranges=True` 的 preflight/append/decode 归因；默认关闭。
 
-当前限制：单 layer；Q/K/V 由调用方提供；没有 model forward、sampling、continuous scheduler 或 workload benchmark。GPU Engine correctness 仍待 RTX 5070 验证。
+当前限制：单 layer；Q/K/V 由调用方提供；没有 model forward、sampling、block-aware continuous scheduler、prefix cache 或网络服务。GPU Engine fused/Triton correctness 已由用户反馈通过；首轮 dynamic workload 12/12 rows 通过 invariant，3-trial 与 complete-step profiler 的最新代码仍待 RTX 5070 复验。
 
 ### Week 11 Native CUDA KV Append
 

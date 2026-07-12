@@ -11,13 +11,12 @@ requires-python = ">=3.10"
 dependencies = [
   "torch",
   "triton",
-  "pytest",
-  "pandas",
-  "matplotlib",
-  "tabulate",
 ]
 
 [project.optional-dependencies]
+dev = [
+  "pytest",
+]
 cuda-extension = [
   "ninja",
 ]
