@@ -1,8 +1,8 @@
-# DecodeEngine v1 设计说明
+# DecodeEngine v1 / Multi-layer Transaction 设计说明
 
 ## 目标
 
-`DecodeEngine` 是 FlashDec 从数据路径走向 AI Infra runtime 的第一层执行编排。它固定验证单 layer、单 token decode，不处理模型投影、采样、prefill 或网络服务。
+`DecodeEngine` 是 FlashDec 从数据路径走向 AI Infra runtime 的第一层执行编排。v1 固定验证 single-layer `step()`；R2-B 增加一个 token 跨多个 layer 的 sequential transaction API。两者都不处理模型投影、采样、完整 prefill 或网络服务。
 
 每一步把 active request rows 按固定顺序送入。默认 active batch 使用稳定的提交顺序；调用方显式传入 `request_ids` 时保留其 row order：
 
@@ -59,6 +59,21 @@ engine.finish_request("r1")
 
 `DecodeStepResult` 在成功时返回 output、pre-append positions、block tables 与 post-append seq lens。backpressure 时不返回 output，但包含 request ids、`needed_new_blocks`、`free_blocks` 和原因 `insufficient_physical_blocks`。
 
+R2-B multi-layer API：
+
+```python
+tx = engine.begin_step(request_ids)
+try:
+    layer0 = engine.step_layer(tx, 0, q0, k0, v0)
+    layer1 = engine.step_layer(tx, 1, q1, k1, v1)
+    result = engine.commit_step(tx)
+except Exception:
+    # step_layer 的数据路径异常已经自动 abort；调用方只需丢弃中间输出。
+    raise
+```
+
+调用方也可以在尚未发生 layer 错误时显式执行 `engine.abort_step(tx)`。每个 `step_layer()` 使用相同 physical block/offset，但读取对应 layer cache；attention 使用 pending `effective_seq_lens`，committed `seq_len` 只在 `commit_step()` 增长一次。
+
 ## Backpressure 与原子性
 
 Engine 在执行 RoPE/KV append 前根据每个 active request 的当前 `seq_len` 和 cache free block 数计算本轮所需的新 block。容量不足则返回 backpressure，不调用 cache append，因此不创建所有权、不增加 seq_len、不修改 lifecycle。
@@ -72,10 +87,11 @@ Engine 在执行 RoPE/KV append 前根据每个 active request 的当前 `seq_le
 
 ## 当前限制
 
-- 仅单 layer、每个 request 每 step 一 token。
+- single-layer `step()` 与 multi-layer sequential transaction 均为每个 request 每 step 一 token。
 - Q/K/V 由调用方提供；不执行模型 forward、sampling 或 prefill。
-- admission 不预留 physical block；资源不足在 `step()` 以 backpressure 表示。
-- 不实现 continuous batching scheduler、priority、preemption、prefix cache 或 CPU offload。
+- multi-layer prompt prefill 尚未实现。
+- multi-layer transaction 当前只支持 `append_backend="torch"`；CUDA/fused location-only write 属于 R2-C。
+- 不实现 priority、preemption、prefix cache 或 CPU offload。
 
 后续 Scheduler v2 不会让 Scheduler 直接持有 physical blocks，而是在 admission 时建立 lifetime logical commitment，再由 Cache 按 append 进度惰性分配。详细状态所有权、deadlock 反例与 stale-decision 语义见 `docs/design_scheduler.md`。
 
@@ -87,4 +103,4 @@ CPU/reference tests 覆盖动态 admission、batch row order、finish/cancel、b
 fused_cuda append + Triton paged decode == PyTorch paged reference
 ```
 
-验证命令将在 Engine 提交后记录到 Week 11 状态文档。
+R2-B 新增 2/4-layer per-layer reference、异常自动 rollback、scheduler/open transaction 互斥和单层 compatibility tests；RTX 5070 WSL 结果在验证后记录到 Week 13 状态文档。

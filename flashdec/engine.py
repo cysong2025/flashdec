@@ -1,4 +1,4 @@
-"""Single-layer dynamic decode execution engine for the FlashDec runtime."""
+"""Dynamic decode execution engine for the FlashDec runtime."""
 
 from __future__ import annotations
 
@@ -41,12 +41,50 @@ class DecodeStepResult:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class DecodeStepTransaction:
+    """Stable Engine handle for one open multi-layer token transaction."""
+
+    transaction_id: int
+    engine_version: int
+    request_ids: tuple[Hashable, ...]
+    positions: Any
+    physical_block_ids: Any
+    block_offsets: Any
+    block_tables: Any
+    effective_seq_lens: Any
+
+
+@dataclass(frozen=True)
+class DecodeLayerResult:
+    """Output of one layer inside an open decode token transaction."""
+
+    transaction_id: int
+    layer_idx: int
+    request_ids: tuple[Hashable, ...]
+    output: Any
+    positions: Any
+    block_tables: Any
+    effective_seq_lens: Any
+
+
+@dataclass
+class _EngineStepTransactionState:
+    handle: DecodeStepTransaction
+    cache_transaction: Any
+    needed_new_blocks: int
+    next_layer_idx: int = 0
+    last_output: Any | None = None
+    state: str = "open"
+
+
 class DecodeEngine:
     """Coordinate request lifecycle, RoPE/KV append, and paged decode.
 
-    The engine intentionally models one layer and one decode token per active
-    request on each call to :meth:`step`. Model projection, sampling, prefill,
-    and network serving remain outside this project boundary.
+    The transaction API models one decode token across sequential layers.
+    Model projection, sampling, full-model prefill, and network serving remain
+    outside this project boundary.  The original single-layer :meth:`step`
+    API remains available for compatibility.
 
     ``append_backend`` selects ``torch``, ``cuda``, or ``fused_cuda`` from the
     RoPE/KV data path. ``decode_backend='reference'`` keeps CPU and semantic
@@ -109,6 +147,9 @@ class DecodeEngine:
         self._stale_decision_count = 0
         self._applied_decision_count = 0
         self._pending_runnable_ids = None
+        self._open_step_transaction: _EngineStepTransactionState | None = None
+        self._transaction_layer_step_count = 0
+        self._transaction_abort_count = 0
 
     def add_request(self, request_id):
         """Submit a new request in ``waiting`` state without allocating KV memory."""
@@ -146,6 +187,7 @@ class DecodeEngine:
         return self._add_waiting_request(spec.request_id, spec=spec)
 
     def _add_waiting_request(self, request_id, spec):
+        self._require_no_open_step("submit a request")
         self._check_request_id(request_id)
         if request_id in self._statuses:
             raise RuntimeError(f"request_id {request_id!r} already exists in the DecodeEngine")
@@ -162,6 +204,7 @@ class DecodeEngine:
 
     def admit(self, request_ids=None):
         """Move waiting requests to active state without reserving physical blocks."""
+        self._require_no_open_step("admit requests")
         if self._scheduler_managed:
             raise RuntimeError("scheduler-managed engines require apply_scheduler_decision")
         ids = self._normalize_waiting_ids(request_ids)
@@ -196,6 +239,7 @@ class DecodeEngine:
 
         if not self._scheduler_managed:
             raise RuntimeError("scheduling_snapshot requires submit_request(RequestSpec)")
+        self._require_no_open_step("build a scheduling snapshot")
         self._require_cache_synchronized()
         if isinstance(logical_step, bool) or not isinstance(logical_step, int) or logical_step < 0:
             raise ValueError("logical_step must be a non-negative integer")
@@ -271,6 +315,7 @@ class DecodeEngine:
             raise TypeError("decision must be a SchedulerDecision")
         if not self._scheduler_managed:
             raise RuntimeError("apply_scheduler_decision requires scheduler-managed mode")
+        self._require_no_open_step("apply a scheduler decision")
         self._require_cache_synchronized(stale=True)
         if decision.snapshot_version != self._state_version:
             self._stale_decision_count += 1
@@ -349,6 +394,9 @@ class DecodeEngine:
         """Seed one scheduler-managed prompt token outside decode timing."""
         if not self._scheduler_managed:
             raise RuntimeError("prefill_request requires scheduler-managed mode")
+        self._require_no_open_step("prefill a request")
+        if self.cache.num_layers != 1:
+            raise RuntimeError("multi-layer prompt prefill is not implemented in R2-B")
         self._require_cache_synchronized()
         self._require_status(request_id, self.ACTIVE)
         spec = self._request_specs[request_id]
@@ -379,6 +427,166 @@ class DecodeEngine:
             result["spec"] = spec
         return result
 
+    def begin_step(self, request_ids=None):
+        """Begin one token transaction for a stable batch of active requests.
+
+        R2-B supports the readable PyTorch append path.  Native/fused
+        location-only transaction writes are added in R2-C; their existing
+        single-layer ``step()`` path remains unchanged until then.
+        """
+        self._require_no_open_step("begin another decode step")
+        self._require_cache_synchronized()
+        if self.append_backend != "torch":
+            raise RuntimeError(
+                "R2-B multi-layer transactions require append_backend='torch'"
+            )
+        ids = self._normalize_active_ids(request_ids)
+        self._validate_scheduler_runnable_ids(ids)
+        needed_new_blocks = self._needed_new_blocks(ids)
+        if needed_new_blocks > self.cache.num_free_blocks:
+            if self._scheduler_managed:
+                raise RuntimeError(
+                    "scheduler commitment invariant violated by physical backpressure"
+                )
+            self._backpressure_count += 1
+            raise RuntimeError("insufficient physical blocks to begin decode step")
+
+        cache_transaction = self.cache.begin_token(ids)
+        try:
+            handle = DecodeStepTransaction(
+                transaction_id=cache_transaction.transaction_id,
+                engine_version=self._state_version + 1,
+                request_ids=ids,
+                positions=cache_transaction.positions.clone(),
+                physical_block_ids=cache_transaction.physical_block_ids.clone(),
+                block_offsets=cache_transaction.block_offsets.clone(),
+                block_tables=cache_transaction.block_tables.clone(),
+                effective_seq_lens=cache_transaction.effective_seq_lens.clone(),
+            )
+        except Exception:
+            self.cache.abort_token(cache_transaction)
+            self._sync_cache_version()
+            self._bump_state_version()
+            raise
+        self._sync_cache_version()
+        self._bump_state_version()
+        self._open_step_transaction = _EngineStepTransactionState(
+            handle=handle,
+            cache_transaction=cache_transaction,
+            needed_new_blocks=needed_new_blocks,
+        )
+        return handle
+
+    def step_layer(
+        self,
+        transaction,
+        layer_idx,
+        q,
+        k,
+        v,
+        *,
+        rotary_dim=None,
+        base=10_000.0,
+    ):
+        """Run RoPE, reference transaction write, and paged decode for one layer.
+
+        Any input, write, or decode exception aborts the whole open token so
+        committed lengths and block ownership remain unchanged.
+        """
+        state = self._require_open_step(transaction)
+        try:
+            layer_idx = int(layer_idx)
+            if layer_idx != state.next_layer_idx:
+                raise RuntimeError(
+                    f"decode transaction requires layer {state.next_layer_idx}, "
+                    f"got layer {layer_idx}"
+                )
+            self._validate_step_inputs(state.handle.request_ids, q, k, v)
+            if k.dim() == 2:
+                k = k.unsqueeze(0)
+            if v.dim() == 2:
+                v = v.unsqueeze(0)
+
+            range_factory = self._profile_range_factory
+            if range_factory is None:
+                q_rotated, cache_view = self._write_transaction_layer(
+                    state,
+                    layer_idx,
+                    q,
+                    k,
+                    v,
+                    rotary_dim=rotary_dim,
+                    base=base,
+                )
+                output = self._decode(
+                    q_rotated,
+                    cache_view.block_tables,
+                    cache_view.effective_seq_lens,
+                    layer_idx=layer_idx,
+                )
+            else:
+                with range_factory(PROFILE_RANGE_APPEND):
+                    q_rotated, cache_view = self._write_transaction_layer(
+                        state,
+                        layer_idx,
+                        q,
+                        k,
+                        v,
+                        rotary_dim=rotary_dim,
+                        base=base,
+                    )
+                with range_factory(PROFILE_RANGE_DECODE):
+                    output = self._decode(
+                        q_rotated,
+                        cache_view.block_tables,
+                        cache_view.effective_seq_lens,
+                        layer_idx=layer_idx,
+                    )
+        except Exception:
+            self._abort_open_step_state(state)
+            raise
+
+        state.next_layer_idx += 1
+        state.last_output = output
+        self._transaction_layer_step_count += 1
+        return DecodeLayerResult(
+            transaction_id=state.handle.transaction_id,
+            layer_idx=layer_idx,
+            request_ids=state.handle.request_ids,
+            output=output,
+            positions=cache_view.positions,
+            block_tables=cache_view.block_tables,
+            effective_seq_lens=cache_view.effective_seq_lens,
+        )
+
+    def commit_step(self, transaction):
+        """Commit an open token after every cache layer has executed."""
+        state = self._require_open_step(transaction)
+        if state.next_layer_idx != self.cache.num_layers:
+            raise RuntimeError("cannot commit decode step before all layers are complete")
+        committed = self.cache.commit_token(state.cache_transaction)
+        state.state = "committed"
+        self._open_step_transaction = None
+        self._completed_step_count += 1
+        self._appended_token_count += len(state.handle.request_ids)
+        self._sync_cache_version()
+        self._bump_state_version()
+        return DecodeStepResult(
+            status=self.STEP_OK,
+            request_ids=state.handle.request_ids,
+            output=state.last_output,
+            positions=committed.positions,
+            block_tables=committed.block_tables,
+            seq_lens=self.cache.seq_lens_tensor(state.handle.request_ids),
+            needed_new_blocks=state.needed_new_blocks,
+            free_blocks=self.cache.num_free_blocks,
+        )
+
+    def abort_step(self, transaction):
+        """Explicitly abort one open token transaction."""
+        state = self._require_open_step(transaction)
+        return self._abort_open_step_state(state)
+
     def step(
         self,
         q,
@@ -395,6 +603,11 @@ class DecodeEngine:
         without changing cache ownership, request seq_len, or lifecycle state.
         The supplied row order is preserved in all successful result tensors.
         """
+        self._require_no_open_step("run the single-layer step wrapper")
+        if self.cache.num_layers != 1:
+            raise RuntimeError(
+                "multi-layer caches require begin_step/step_layer/commit_step"
+            )
         self._require_cache_synchronized()
         range_factory = self._profile_range_factory
         if range_factory is None:
@@ -406,11 +619,7 @@ class DecodeEngine:
                 ids = self._normalize_active_ids(request_ids)
                 self._validate_step_inputs(ids, q, k, v)
                 needed_new_blocks = self._needed_new_blocks(ids)
-        if self._scheduler_managed:
-            if self._pending_runnable_ids is None:
-                raise RuntimeError("scheduler-managed step requires an applied decision")
-            if ids != self._pending_runnable_ids:
-                raise RuntimeError("request_ids must match the applied scheduler runnable_ids")
+        self._validate_scheduler_runnable_ids(ids)
         if needed_new_blocks > self.cache.num_free_blocks:
             if self._scheduler_managed:
                 raise RuntimeError(
@@ -428,6 +637,21 @@ class DecodeEngine:
                 free_blocks=self.cache.num_free_blocks,
                 reason="insufficient_physical_blocks",
             )
+
+        if self.append_backend == "torch":
+            if int(layer_idx) != 0:
+                raise ValueError("single-layer step requires layer_idx=0")
+            transaction = self.begin_step(ids)
+            self.step_layer(
+                transaction,
+                0,
+                q,
+                k,
+                v,
+                rotary_dim=rotary_dim,
+                base=base,
+            )
+            return self.commit_step(transaction)
 
         from .rope import rope_paged_kv_append
 
@@ -484,6 +708,7 @@ class DecodeEngine:
 
     def finish_request(self, request_id):
         """Finish an active request and release its physical cache blocks."""
+        self._require_no_open_step("finish a request")
         self._require_cache_synchronized()
         self._require_status(request_id, self.ACTIVE)
         released = self.cache.finish_request(request_id)
@@ -494,6 +719,7 @@ class DecodeEngine:
 
     def cancel_request(self, request_id):
         """Cancel an active request and release its physical cache blocks."""
+        self._require_no_open_step("cancel a request")
         self._require_cache_synchronized()
         self._require_status(request_id, self.ACTIVE)
         released = self.cache.cancel_request(request_id)
@@ -524,6 +750,11 @@ class DecodeEngine:
             ),
             "stale_decision_count": self._stale_decision_count,
             "applied_decision_count": self._applied_decision_count,
+            "open_step_transaction_count": int(
+                self._open_step_transaction is not None
+            ),
+            "transaction_layer_step_count": self._transaction_layer_step_count,
+            "transaction_abort_count": self._transaction_abort_count,
             "append_backend": self.append_backend,
             "decode_backend": self.decode_backend,
             "cache": self.cache.metrics(),
@@ -533,6 +764,18 @@ class DecodeEngine:
         """Check that engine lifecycle state agrees with cache ownership state."""
         self._require_cache_synchronized()
         self.cache.validate_invariants()
+        if self._open_step_transaction is None:
+            if self.cache.has_open_transaction:
+                raise RuntimeError("cache has an open transaction not owned by DecodeEngine")
+        else:
+            state = self._open_step_transaction
+            if not self.cache.has_open_transaction:
+                raise RuntimeError("Engine transaction is open but cache transaction is not")
+            cache_view = self.cache.transaction_view(state.cache_transaction)
+            if cache_view.request_ids != state.handle.request_ids:
+                raise RuntimeError("Engine/cache transaction request rows diverged")
+            if cache_view.next_layer_idx != state.next_layer_idx:
+                raise RuntimeError("Engine/cache transaction layer progress diverged")
         for request_id, status in self._statuses.items():
             if status in (self.WAITING, self.REJECTED):
                 try:
@@ -582,6 +825,82 @@ class DecodeEngine:
             for request_id in self.active_request_ids()
         )
 
+    def _require_no_open_step(self, action):
+        if self._open_step_transaction is not None:
+            raise RuntimeError(
+                f"cannot {action} during an open decode step transaction"
+            )
+
+    def _require_open_step(self, transaction):
+        if not isinstance(transaction, DecodeStepTransaction):
+            raise TypeError("transaction must be a DecodeStepTransaction")
+        state = self._open_step_transaction
+        if state is None:
+            raise RuntimeError("DecodeEngine has no open decode step transaction")
+        handle = state.handle
+        if (
+            transaction.transaction_id != handle.transaction_id
+            or transaction.engine_version != handle.engine_version
+            or transaction.request_ids != handle.request_ids
+        ):
+            raise RuntimeError("stale or invalid DecodeEngine transaction handle")
+        if state.state != "open":
+            raise RuntimeError(f"decode step transaction is already {state.state}")
+        return state
+
+    def _validate_scheduler_runnable_ids(self, ids):
+        if not self._scheduler_managed:
+            return
+        if self._pending_runnable_ids is None:
+            raise RuntimeError("scheduler-managed step requires an applied decision")
+        if ids != self._pending_runnable_ids:
+            raise RuntimeError("request_ids must match the applied scheduler runnable_ids")
+
+    def _write_transaction_layer(
+        self,
+        state,
+        layer_idx,
+        q,
+        k,
+        v,
+        *,
+        rotary_dim,
+        base,
+    ):
+        from .rope import apply_rope
+
+        cache_view = self.cache.transaction_view(state.cache_transaction)
+        q_rotated = apply_rope(
+            q,
+            cache_view.positions,
+            rotary_dim=rotary_dim,
+            base=base,
+        )
+        k_rotated = apply_rope(
+            k,
+            cache_view.positions,
+            rotary_dim=rotary_dim,
+            base=base,
+        )
+        cache_view = self.cache.write_token_layer(
+            state.cache_transaction,
+            layer_idx,
+            k_rotated,
+            v,
+        )
+        return q_rotated, cache_view
+
+    def _abort_open_step_state(self, state):
+        if self._open_step_transaction is not state or state.state != "open":
+            raise RuntimeError("decode step transaction is not open")
+        aborted = self.cache.abort_token(state.cache_transaction)
+        state.state = "aborted"
+        self._open_step_transaction = None
+        self._transaction_abort_count += 1
+        self._sync_cache_version()
+        self._bump_state_version()
+        return aborted
+
     def _normalize_counter_mapping(self, values, request_ids, name):
         if values is None:
             values = {}
@@ -609,14 +928,17 @@ class DecodeEngine:
             raise ValueError(f"{name} must contain unique request ids")
         return ids
 
-    def _decode(self, q, block_tables, seq_lens):
+    def _decode(self, q, block_tables, seq_lens, layer_idx=0):
+        layer_idx = int(layer_idx)
+        if layer_idx < 0 or layer_idx >= self.cache.num_layers:
+            raise ValueError("layer_idx must be in [0, num_layers)")
         if self.decode_backend == "reference":
             from .paged_reference import paged_decode_attention_ref
 
             return paged_decode_attention_ref(
                 q,
-                self.cache.k_cache[0],
-                self.cache.v_cache[0],
+                self.cache.k_cache[layer_idx],
+                self.cache.v_cache[layer_idx],
                 block_tables,
                 seq_lens,
                 sm_scale=self.sm_scale,
@@ -626,8 +948,8 @@ class DecodeEngine:
 
         return paged_decode_attention(
             q,
-            self.cache.k_cache[0],
-            self.cache.v_cache[0],
+            self.cache.k_cache[layer_idx],
+            self.cache.v_cache[layer_idx],
             block_tables,
             seq_lens,
             sm_scale=self.sm_scale,

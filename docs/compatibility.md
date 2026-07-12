@@ -92,7 +92,7 @@
 - short-churn、mixed-steady、long-pressure synthetic workload 与完整 step p50/p90/p99/TPS/memory metrics。
 - 可选 `profile_ranges=True` 的 preflight/append/decode 归因；默认关闭。
 
-当前限制：DecodeEngine 仍为单 layer；Q/K/V 由调用方提供；没有 model forward、sampling、prefix cache 或网络服务。R1 block-aware scheduler 的 36 行 RTX 正式矩阵已完成；R2-A 仅完成 Cache reference transaction，Engine multi-layer API 仍待实现。
+当前限制：DecodeEngine 的 multi-layer reference transaction API 已实现但待 WSL 验证；multi-layer native/fused append、prompt prefill 与 workload 尚未实现。Q/K/V 由调用方提供；没有 model forward、sampling、prefix cache 或网络服务。R1 block-aware scheduler 的 36 行 RTX 正式矩阵与 R2-A Cache transaction 回归已完成。
 
 ### Week 11 Native CUDA KV Append
 

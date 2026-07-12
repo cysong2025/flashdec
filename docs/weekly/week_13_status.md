@@ -46,11 +46,25 @@ python benchmarks/summarize_scheduler_workload.py \
 ## 当前验证状态
 
 - Mac：`compileall` 与 `git diff --check` 通过。
-- Mac 未安装 PyTorch，因此不能把 transaction tensor tests 记录为已通过。
-- RTX 5070 WSL focused/full：待执行。
+- R2-A RTX 5070 WSL 完整回归：`313 passed, 20 subtests passed in 5.83s`。
+- R2-A 无 skipped、warning 或 failure。
+
+## R2-B 当前实现
+
+- `DecodeEngine.begin_step()` 固定本 token 的 request rows，并调用 Cache transaction 一次性预留位置。
+- `step_layer()` 按 layer 顺序执行 RoPE、reference transaction write 和对应 layer 的 paged decode。
+- `commit_step()` 在全部 layer 成功后提交，并只把 completed step/token counters 增加一次。
+- `step_layer()` 的输入、写入或 decode 异常会自动 abort 整个 token。
+- open transaction 期间禁止 submit/admit、scheduler snapshot/decision、prefill、finish/cancel 和另一条 `step()`。
+- scheduler-managed begin/commit/abort 都推进 Engine/Cache version，使旧 decision 明确 stale。
+- 单层 `append_backend="torch"` 的 `step()` 已包装为同一 transaction 语义；现有 CUDA/fused 单层 fast path 在 R2-C 前保持不变。
+- multi-layer transaction 当前明确要求 `append_backend="torch"`；native/fused location-only write 属于 R2-C。
+- 新增 2/4-layer per-layer reference、row order、自动 rollback、early commit、lifecycle/scheduler 互斥和单层兼容测试。
+
+R2-B 当前仅完成 Mac 静态与 dependency-free 验证，WSL PyTorch focused/full 待执行。
 
 ## 下一步
 
-1. 在 WSL 运行 `tests/test_multi_layer_transaction.py`、相关 Cache/Engine focused tests 和完整回归。
-2. 验证通过后实现 R2-B Engine sequential layer API。
+1. 在 WSL 运行 `tests/test_multi_layer_engine.py`、相关 Cache/Engine focused tests 和完整回归。
+2. 记录 R2-B pass/subtest/skip/warning 数量，不生成性能结论。
 3. R2-B 通过后才重构 fused CUDA 为 location-only write，不重新做已冻结 kernel 参数 sweep。
