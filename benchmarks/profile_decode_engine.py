@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import replace
 from datetime import datetime
+import math
 from pathlib import Path
 import sys
 
@@ -29,6 +30,7 @@ from flashdec.engine import (
     PROFILE_RANGE_DECODE,
     PROFILE_RANGE_PREFLIGHT,
 )
+from flashdec.benchmark import git_commit
 from flashdec.workload import run_synthetic_workload
 
 
@@ -48,6 +50,10 @@ PROFILE_RANGES = (
     PROFILE_RANGE_FINISH,
     PROFILE_RANGE_CANCEL,
 )
+
+
+class ProfileValidationError(ValueError):
+    """Raised when profiler rows cannot support stage-attribution evidence."""
 
 
 class _ProfiledDecodeEngine(DecodeEngine):
@@ -220,6 +226,9 @@ def _write_profile_text(
 
 
 def _write_summary(path, rows):
+    rows = list(rows)
+    if not rows:
+        raise ValueError("profile summary rows must be non-empty")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -227,14 +236,17 @@ def _write_summary(path, rows):
         "",
         "Instrumented wall-clock values are not release benchmark numbers. "
         "Nested CPU/device profiler totals are attribution evidence and must not be added blindly.",
+        f"Git commit: `{rows[0]['git_commit']}`.",
         "",
-        "| workload | dtype | append | steps | successful | backpressure | CUDA events | wall p50 ms | wall p99 ms | engine CPU ms | engine device ms | append device ms | decode device ms | profile | trace |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+        "| workload | dtype | append | steps | successful | backpressure | CUDA events | ranges step/preflight/append/decode | wall p50 ms | wall p99 ms | engine CPU ms | engine device ms | append device ms | decode device ms | profile | trace |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for row in rows:
         lines.append(
             "| {workload} | {dtype} | {append_backend} | {steps} | {successful_steps} | "
-            "{backpressure_steps} | {cuda_event_count} | {p50_ms:.6f} | {p99_ms:.6f} | "
+            "{backpressure_steps} | {cuda_event_count} | "
+            "{engine_count}/{preflight_count}/{append_count}/{decode_count} | "
+            "{p50_ms:.6f} | {p99_ms:.6f} | "
             "{engine_cpu_ms:.6f} | {engine_device_ms:.6f} | "
             "{append_device_ms:.6f} | {decode_device_ms:.6f} | {profile} | {trace} |".format(
                 **row
@@ -247,6 +259,7 @@ def _write_summary(path, rows):
             "",
             "- `engine_step` is an inclusive range containing preflight, append, and decode.",
             "- `rope_kv_append` includes Python allocator/metadata work plus the selected append backend.",
+            "- Matrix completeness, Git commit, CUDA event presence, and named-range counts were validated before this summary was written.",
             "- Q/K/V generation and prompt prefill are captured by the global profiler but intentionally outside named Engine ranges.",
             "- Final performance decisions remain based on non-instrumented multi-trial workload CSVs.",
             "",
@@ -255,7 +268,97 @@ def _write_summary(path, rows):
     path.write_text("\n".join(lines))
 
 
-def _metadata(torch, spec, dtype_name, append_backend, seed, quick):
+def _profile_int(row, field, *, minimum=0):
+    try:
+        value = int(row[field])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProfileValidationError(f"{field} must be an integer") from exc
+    if value < minimum:
+        raise ProfileValidationError(f"{field} must be >= {minimum}")
+    return value
+
+
+def _profile_positive_float(row, field):
+    try:
+        value = float(row[field])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProfileValidationError(f"{field} must be numeric") from exc
+    if not math.isfinite(value) or value <= 0.0:
+        raise ProfileValidationError(f"{field} must be positive and finite")
+    return value
+
+
+def validate_profile_rows(rows, expected_workloads, expected_dtypes, expected_backends):
+    """Validate profile matrix completeness and named-range execution counts."""
+    rows = list(rows)
+    expected_workloads = tuple(expected_workloads)
+    expected_dtypes = tuple(expected_dtypes)
+    expected_backends = tuple(expected_backends)
+    for name, values in (
+        ("expected_workloads", expected_workloads),
+        ("expected_dtypes", expected_dtypes),
+        ("expected_backends", expected_backends),
+    ):
+        if not values or len(set(values)) != len(values):
+            raise ProfileValidationError(f"{name} must be non-empty and unique")
+
+    expected_keys = {
+        (workload, dtype, backend)
+        for workload in expected_workloads
+        for dtype in expected_dtypes
+        for backend in expected_backends
+    }
+    indexed = {}
+    commits = set()
+    for row in rows:
+        try:
+            key = (row["workload"], row["dtype"], row["append_backend"])
+            commit = str(row["git_commit"]).strip()
+        except KeyError as exc:
+            raise ProfileValidationError(f"missing profile field: {exc.args[0]}") from exc
+        if key in indexed:
+            raise ProfileValidationError(f"duplicate profile row: {key}")
+        if not commit:
+            raise ProfileValidationError("git_commit must be non-empty")
+        indexed[key] = row
+        commits.add(commit)
+
+        steps = _profile_int(row, "steps", minimum=1)
+        successful = _profile_int(row, "successful_steps", minimum=1)
+        backpressure = _profile_int(row, "backpressure_steps")
+        engine_count = _profile_int(row, "engine_count", minimum=1)
+        preflight_count = _profile_int(row, "preflight_count", minimum=1)
+        append_count = _profile_int(row, "append_count", minimum=1)
+        decode_count = _profile_int(row, "decode_count", minimum=1)
+        _profile_int(row, "cuda_event_count", minimum=1)
+        _profile_positive_float(row, "p50_ms")
+        _profile_positive_float(row, "p99_ms")
+
+        if engine_count != steps:
+            raise ProfileValidationError(f"engine range count must equal steps: {key}")
+        if preflight_count != engine_count:
+            raise ProfileValidationError(f"preflight range count must equal engine count: {key}")
+        if successful + backpressure != engine_count:
+            raise ProfileValidationError(f"successful + backpressure must equal engine count: {key}")
+        if append_count != successful or decode_count != successful:
+            raise ProfileValidationError(
+                f"append/decode range counts must equal successful steps: {key}"
+            )
+    actual_keys = set(indexed)
+    if actual_keys != expected_keys:
+        missing = sorted(expected_keys - actual_keys)
+        unexpected = sorted(actual_keys - expected_keys)
+        raise ProfileValidationError(
+            f"profile matrix is incomplete; missing={missing}, unexpected={unexpected}"
+        )
+    if len(commits) != 1:
+        raise ProfileValidationError(
+            f"profile rows use inconsistent git commits: {sorted(commits)}"
+        )
+    return rows
+
+
+def _metadata(torch, spec, dtype_name, append_backend, seed, quick, commit):
     return {
         "date": datetime.now().isoformat(timespec="seconds"),
         "workload": spec.config.name,
@@ -265,6 +368,7 @@ def _metadata(torch, spec, dtype_name, append_backend, seed, quick):
         "device": torch.cuda.get_device_name(torch.cuda.current_device()),
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
+        "git_commit": commit,
         "num_q_heads": NUM_Q_HEADS,
         "num_kv_heads": NUM_KV_HEADS,
         "head_dim": HEAD_DIM,
@@ -332,6 +436,7 @@ def _profile_case(torch, args, spec, dtype_name, dtype, append_backend):
         append_backend,
         args.seed,
         args.quick,
+        args.git_commit,
     )
     _write_profile_text(
         profile_path,
@@ -353,6 +458,10 @@ def _profile_case(torch, args, spec, dtype_name, dtype, append_backend):
         "successful_steps": result.successful_steps,
         "backpressure_steps": result.backpressure_steps,
         "cuda_event_count": cuda_event_count,
+        "engine_count": engine_stage["count"],
+        "preflight_count": stages[PROFILE_RANGE_PREFLIGHT]["count"],
+        "append_count": append_stage["count"],
+        "decode_count": decode_stage["count"],
         "p50_ms": result.p50_ms,
         "p99_ms": result.p99_ms,
         "engine_cpu_ms": engine_stage["cpu_total_ms"],
@@ -361,6 +470,7 @@ def _profile_case(torch, args, spec, dtype_name, dtype, append_backend):
         "decode_device_ms": decode_stage["device_total_ms"],
         "profile": str(profile_path),
         "trace": str(trace_path) if trace_path is not None else "-",
+        "git_commit": args.git_commit,
     }
 
 
@@ -401,15 +511,14 @@ def main():
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required for DecodeEngine profiling")
     _preload_native_backends(args.append_backends)
+    args.git_commit = git_commit(PROJECT_ROOT)
     specs = _selected_workloads(args.workload)
     if args.quick:
         specs = [_quick_spec(spec) for spec in specs]
 
     summary_rows = []
-    requested_names = set(_dtype_names(args.dtype))
-    for dtype_name, dtype in _requested_dtypes(torch, args.dtype):
-        if dtype_name not in requested_names:
-            continue
+    dtype_pairs = _requested_dtypes(torch, args.dtype)
+    for dtype_name, dtype in dtype_pairs:
         for spec in specs:
             for append_backend in args.append_backends:
                 row = _profile_case(
@@ -425,6 +534,15 @@ def main():
                 if row["trace"] != "-":
                     print(f"Wrote {row['trace']}")
 
+    try:
+        validate_profile_rows(
+            summary_rows,
+            expected_workloads=[spec.config.name for spec in specs],
+            expected_dtypes=[name for name, _ in dtype_pairs],
+            expected_backends=args.append_backends,
+        )
+    except ProfileValidationError as exc:
+        raise SystemExit(f"invalid DecodeEngine profile evidence: {exc}") from exc
     _write_summary(args.summary_output, summary_rows)
     print(f"Wrote {args.summary_output}")
 

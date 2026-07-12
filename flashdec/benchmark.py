@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import statistics
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +32,24 @@ class BenchmarkResult:
         }
         row.update({key: str(value) for key, value in self.metadata.items()})
         return row
+
+
+def git_commit(root=None):
+    """Return the current short Git commit or fail before evidence is written."""
+    if root is None:
+        root = Path.cwd()
+    result = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=Path(root),
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    commit = result.stdout.strip()
+    if result.returncode != 0 or not commit:
+        raise RuntimeError("benchmark evidence requires a readable Git commit")
+    return commit
 
 
 def percentile(values, q):
@@ -114,4 +133,3 @@ def write_csv(results, path):
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
-

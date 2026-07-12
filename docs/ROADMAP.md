@@ -96,7 +96,7 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 目标：解释 append-only 约 18.2% latency 降低为何只转化为 complete-step p50 约 5.1%。
 
-当前状态：可选 Engine ranges、动态 workload profiler、阶段文本/Markdown/Chrome trace 输出和 CPU helper tests 已实现，等待 RTX 5070 验证 range 计数与 device time。
+当前状态：可选 Engine ranges、动态 workload profiler、阶段文本/Markdown/Chrome trace 输出、Git commit provenance 和 12-case matrix/range-count validator 已实现；dependency-free helper tests 通过，等待 RTX 5070 验证正式 range 计数与 device time。
 
 工作内容：
 

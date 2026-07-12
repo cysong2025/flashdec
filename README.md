@@ -97,7 +97,7 @@ python -m pytest -vv \
   tests/test_public_api.py
 ```
 
-完整的 clean-install、full regression、multi-trial 和 profiler 命令见 [reproducibility guide](docs/reproducibility.md)。
+完整的 clean-install、full regression、36-row multi-trial 和 12-case validated profiler 命令见 [reproducibility guide](docs/reproducibility.md)。
 
 ## 支持矩阵
 

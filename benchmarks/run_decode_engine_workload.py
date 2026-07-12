@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from flashdec.benchmark import BenchmarkResult, summarize_latencies, write_csv
+from flashdec.benchmark import BenchmarkResult, git_commit, summarize_latencies, write_csv
 from flashdec.workload import WorkloadConfig, run_synthetic_workload
 
 
@@ -132,6 +132,7 @@ def _metadata(
     trial,
     trial_seed,
     backend_order,
+    commit,
 ):
     metrics = result.engine_metrics
     cache = metrics["cache"]
@@ -145,6 +146,7 @@ def _metadata(
         "device": torch.cuda.get_device_name(torch.cuda.current_device()),
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
+        "git_commit": commit,
         "num_q_heads": NUM_Q_HEADS,
         "num_kv_heads": NUM_KV_HEADS,
         "head_dim": HEAD_DIM,
@@ -238,6 +240,7 @@ def _run_workload(
     trial,
     trial_seed,
     backend_order,
+    commit,
 ):
     engine = _make_engine(
         torch,
@@ -267,6 +270,7 @@ def _run_workload(
             trial,
             trial_seed,
             backend_order,
+            commit,
         ),
     )
 
@@ -304,6 +308,7 @@ def main():
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required for DecodeEngine workload benchmarks")
     _preload_native_backends(args.append_backends)
+    commit = git_commit(PROJECT_ROOT)
     specs = [WORKLOADS[args.workload]] if args.workload != "all" else list(WORKLOADS.values())
     if args.quick:
         specs = [_quick_spec(spec) for spec in specs]
@@ -326,6 +331,7 @@ def main():
                         trial,
                         trial_seed,
                         backend_order,
+                        commit,
                     )
                     for append_backend in backend_order
                 ]

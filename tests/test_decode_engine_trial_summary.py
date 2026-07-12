@@ -27,6 +27,7 @@ def _row(dtype, workload, trial, backend):
             "device": "NVIDIA GeForce RTX 5070",
             "torch": "2.11.0+cu128",
             "cuda": "12.8",
+            "git_commit": "abc1234",
             "num_q_heads": "32",
             "num_kv_heads": "8",
             "head_dim": "128",
@@ -115,6 +116,7 @@ def test_validate_and_aggregate_complete_trial_matrix():
     assert overall["tokens_per_second"] == pytest.approx(1.25)
     assert all(row["direction"] == "fused_faster" for row in aggregates)
     assert "Rows: 36; paired trials: 18" in markdown
+    assert "Git commit: `abc1234`" in markdown
     assert "fused_faster" in markdown
 
 

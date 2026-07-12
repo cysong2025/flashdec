@@ -79,6 +79,8 @@ Scheduler R1-A 没有 torch/pytest 依赖，可先在任意 Python 3.10+ 环境�
 
 ```bash
 python -m unittest discover -s tests -p 'test_scheduler.py' -v
+python -m unittest discover -s tests -p 'test_benchmark_helpers.py' -v
+python -m unittest discover -s tests -p 'test_profile_decode_engine.py' -v
 ```
 
 完整 CPU/reference suite：
@@ -156,7 +158,7 @@ python benchmarks/summarize_decode_engine_trials.py \
   --output benchmarks/results/week12_decode_engine_workload_trials3_summary.md
 ```
 
-正式矩阵必须是 3 workloads x 2 dtypes x 2 backends x 3 trials = 36 rows。validator 会拒绝缺行、重复行、invariant failure、block accounting failure、torch/fused trajectory drift、seed 不连续或 backend order 未交替。
+正式矩阵必须是 3 workloads x 2 dtypes x 2 backends x 3 trials = 36 rows。CSV 和 summary 必须记录同一个 Git commit；validator 会拒绝缺行、重复行、commit 不一致、invariant failure、block accounting failure、torch/fused trajectory drift、seed 不连续或 backend order 未交替。
 
 ## Instrumented complete-step profiler
 
@@ -174,6 +176,19 @@ python benchmarks/profile_decode_engine.py \
 ```
 
 Profiler ranges 会增加 CPU 开销；nested `engine_step` 与 append/decode device totals 也可能重叠。它们只用于解释性能组成，不能替换上一节 non-instrumented p50/p90/p99。
+
+quick range/trace 通过后，生成 release 要求的正式 12-case attribution matrix。正式矩阵不导出大体积 Chrome trace：
+
+```bash
+python benchmarks/profile_decode_engine.py \
+  --workload all \
+  --dtype both \
+  --append-backends torch fused_cuda \
+  --output-dir benchmarks/profiles/week12_decode_engine \
+  --summary-output benchmarks/results/week12_decode_engine_profile_summary.md
+```
+
+生成器会严格检查 3 workloads x 2 dtypes x 2 backends = 12 rows、统一 Git commit、CUDA event 非零，以及 `engine/preflight/append/decode` range count 与 successful/backpressure step 的对应关系。任一条件不满足时不接受该 summary 作为 release evidence。
 
 ## 结果文件与提交规则
 
@@ -224,7 +239,7 @@ python scripts/check_release.py --require-clean
 | Kernel/runtime historical correctness | 已完成 | Week 1-11 weekly docs 与结果摘要 |
 | 首轮 dynamic workload/invariant | 已完成 | `week12_decode_engine_workload_summary.md` |
 | Multi-trial runner/validator code | 已实现，待真实数据 | 36-row RTX CSV + generated summary |
-| Complete-step profiler code | 已实现，待上板 | profile summary + trace/range counts |
+| Complete-step profiler code | 已实现严格 12-case/range validator，待上板 | validated profile summary + quick trace |
 | Clean WSL editable install | 待执行 | 新 venv 命令、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

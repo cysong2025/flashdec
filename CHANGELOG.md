@@ -13,7 +13,7 @@
 - DecodeEngine waiting/active/finished/cancelled 状态、动态 active batch、append -> paged decode 和显式 backpressure。
 - short-churn、mixed-steady、long-pressure synthetic workloads 与 complete-step wall-clock 指标。
 - multi-trial backend-order 交替、严格 trial CSV validator 和跨 trial stability summary。
-- 可选 DecodeEngine profiler ranges、阶段 CPU/device totals、CUDA event count 和 Chrome trace。
+- 可选 DecodeEngine profiler ranges、阶段 CPU/device totals、CUDA event count、Chrome trace，以及正式 12-case matrix/range-count validator。
 - `scripts/check_release.py` release artifact/version/Git gate checker。
 - Scheduler v2 设计规格与 R1-A 纯 Python planner：lifetime block commitment、logical/physical capacity 分离、FIFO + aging、公平 runnable batch、结构化 decision 和 dependency-free focused tests。
 - Multi-layer KV Token Transaction 设计规格：committed/pending seq_len、shared location、逐层执行、batch commit/abort 和 rollback invariant。
@@ -23,6 +23,7 @@
 - 冻结通用 paged decode 配置为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
 - Python package 核心依赖只保留 torch/triton；pytest 移入 `dev` extra，Ninja 保留在 `cuda-extension` extra。
 - GPU Engine 明确使用 fused CUDA append policy；公开 reference API 默认仍保持 PyTorch 路径。
+- DecodeEngine workload CSV、multi-trial summary 和 profiler evidence 现在绑定生成时的 Git commit。
 
 ### Performance evidence
 
