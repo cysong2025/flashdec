@@ -4,7 +4,7 @@
 
 这一数据路径负责把一个 decode step 的新 Q/K/V 接入 PagedKVCache：先根据每个 request 的当前位置旋转 Q/K，再把 rotated K 和原始 V 写入 physical block，最后返回 paged attention 所需元数据。
 
-`rope_paged_kv_append_ref()` 是可读的 PyTorch reference，用来固定 CUDA extension 必须遵循的语义，不作为性能实现。正式接口 `rope_paged_kv_append()` 可以选择已验证的独立 CUDA K/V 写入路径，或选择待验证的 fused CUDA path。
+`rope_paged_kv_append_ref()` 是可读的 PyTorch reference，用来固定 CUDA extension 必须遵循的语义，不作为性能实现。正式接口 `rope_paged_kv_append()` 可以选择已验证的独立 CUDA K/V 写入路径或 fused CUDA path。
 
 ## 接口
 
@@ -93,7 +93,7 @@ capacity failure 由 PagedKVCache v2 在写入前统一检查，因此失败时�
 
 当前不支持：
 
-- `append_backend="cuda"` 只替换 rotated K/raw V 的写入，未消除 PyTorch RoPE kernel 或 K 的中间 tensor。`fused_cuda` 已实现为单 CUDA kernel，尚待 RTX 5070 correctness 和性能验证；详细映射见 [Fused RoPE + Paged KV Append 设计说明](design_fused_rope_kv_append.md)。
+- `append_backend="cuda"` 只替换 rotated K/raw V 的写入，未消除 PyTorch RoPE kernel 或 K 的中间 tensor。`fused_cuda` 已作为单 CUDA kernel 通过 RTX 5070 correctness，但仍待性能验证；详细映射见 [Fused RoPE + Paged KV Append 设计说明](design_fused_rope_kv_append.md)。
 - interleaved adjacent-pair RoPE。
 - RoPE scaling、YaRN 或 NTK-aware scaling。
 - 多 layer execution。
@@ -122,4 +122,4 @@ focused: 38 passed in 3.60s
 full:    186 passed in 4.96s
 ```
 
-独立 CUDA KV append 已在 RTX 5070 通过 JIT build 与 correctness（focused `34 passed in 3.59s`，full `198 passed in 5.13s`）。RoPE 的 `torch`/`cuda` 双 backend 集成也已通过（focused `56 passed in 3.85s`，full `204 passed in 4.47s`），覆盖 GQA、跨 block、FP16/BF16/FP32 对齐和 CPU error path。fused CUDA kernel 已实现，尚待 RTX 5070 验证；当前没有性能结论，只有三条路径的 correctness 都稳定后才开始性能比较。
+独立 CUDA KV append 已在 RTX 5070 通过 JIT build 与 correctness（focused `34 passed in 3.59s`，full `198 passed in 5.13s`）。RoPE 的 `torch`/`cuda` 双 backend 集成也已通过（focused `56 passed in 3.85s`，full `204 passed in 4.47s`），覆盖 GQA、跨 block、FP16/BF16/FP32 对齐和 CPU error path。fused CUDA kernel 也已通过（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）；当前没有性能结论，下一步开始三路径 CUDA-event 比较。

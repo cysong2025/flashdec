@@ -52,10 +52,10 @@ RoPE 采用既有 split-half convention。kernel 在 float 中计算 `sin/cos` �
 
 ## 当前验证状态
 
-实现已完成，尚待 RTX 5070 首次 JIT build 和 correctness。测试覆盖：
+RTX 5070 已完成首次 JIT build 和 correctness：focused `66 passed in 44.35s`，完整回归 `214 passed in 4.52s`。首次 focused 时间包含 fused extension 编译，不能用作性能数字。测试覆盖：
 
 - raw fused op 的 GQA、非连续 physical block、partial rotary 和 FP16/BF16/FP32。
 - `fused_cuda` 与 PyTorch reference 的 rotated Q、cache、block table、seq_lens、request state 和 metrics 对齐。
 - fused capacity failure atomicity 与 CPU cache error path。
 
-本阶段不写性能结论。correctness 通过后，才以 CUDA event 对比 `torch`、`cuda`、`fused_cuda` 三条路径。
+本阶段尚无性能结论。下一步以 CUDA event 对比 `torch`、`cuda`、`fused_cuda` 三条路径，且将 JIT build 和 cache prefill 排除在计时外。

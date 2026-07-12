@@ -62,7 +62,7 @@ allocate/free/reuse      block_tables/seq_lens
 
 这一层回答“一个 decode step 的状态如何从新 K/V 流入 attention”。计划使用 fused RoPE + paged KV append CUDA extension；若范围过大，先完成独立 CUDA KV append。
 
-当前 PyTorch RoPE + paged KV append reference 和统一返回接口已通过 RTX 5070 correctness。独立 CUDA KV append 的 JIT extension、raw op 与 runtime integration 也已通过 RTX 5070 验证（focused `34 passed in 3.59s`，full `198 passed in 5.13s`）；RoPE 的 `append_backend="cuda"` integration 已通过（focused `56 passed in 3.85s`，full `204 passed in 4.47s`）。fused RoPE + KV append 已实现，等待 GPU correctness；三路径 benchmark 仍待执行。
+当前 PyTorch RoPE + paged KV append reference 和统一返回接口已通过 RTX 5070 correctness。独立 CUDA KV append 的 JIT extension、raw op 与 runtime integration 也已通过 RTX 5070 验证（focused `34 passed in 3.59s`，full `198 passed in 5.13s`）；RoPE 的 `append_backend="cuda"` integration 已通过（focused `56 passed in 3.85s`，full `204 passed in 4.47s`）；fused RoPE + KV append 已通过（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）。三路径 benchmark 仍待执行。
 
 ### 4. 执行引擎层
 
@@ -104,7 +104,7 @@ allocate/free/reuse      block_tables/seq_lens
 | --- | --- | --- |
 | Reference / Kernel | 已完成主要 correctness、参数实验、最终 profiling 与配置冻结 | 仅在出现明确回归时重新进入 |
 | Paged KV Runtime | 已完成 request lifecycle、free/reuse、capacity atomicity、metrics 和 churn tests | 与 KV append/DecodeEngine 集成 |
-| Decode Data Path | PyTorch reference、独立 CUDA append 与 RoPE `cuda` integration 已通过 RTX correctness；fused kernel 已实现 | fused correctness、native path benchmark |
+| Decode Data Path | PyTorch reference、独立 CUDA append、RoPE `cuda` integration 与 fused kernel 已通过 RTX correctness | native path benchmark、complete decode-step integration |
 | Execution Engine | 未实现 | request state、batch builder、admission、step orchestration |
 | End-to-End Evaluation | 已有 kernel benchmark/profiler | 动态 workload、step latency、内存效率、p99 |
 | Reproducibility | 已有环境和实验记录 | 一键运行、干净环境验证、release |

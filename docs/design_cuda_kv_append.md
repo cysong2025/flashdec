@@ -91,4 +91,4 @@ extension 会在 allocator mutation 前完成 JIT build；因此工具链或编�
 
 ## 当前状态
 
-RTX 5070 已成功完成 JIT build 和完整 correctness。初次运行的 2 项公开 API namespace 失败已通过将内部模块改为 `_cuda_kv_append.py` 修复；修复后 focused 结果为 `34 passed in 3.59s`，完整回归为 `198 passed in 5.13s`。验证覆盖 raw slot 写入（FP16/BF16/FP32）、地址边界、runtime allocator 对齐、capacity atomicity 与既有 paged cache/decode 回归。fused RoPE + KV append 已在代码中实现，尚待单独 correctness；当前仍没有 native KV append 的性能结论，三路径验证稳定后才测量 launch 数和 latency。
+RTX 5070 已成功完成 JIT build 和完整 correctness。初次运行的 2 项公开 API namespace 失败已通过将内部模块改为 `_cuda_kv_append.py` 修复；修复后 focused 结果为 `34 passed in 3.59s`，完整回归为 `198 passed in 5.13s`。验证覆盖 raw slot 写入（FP16/BF16/FP32）、地址边界、runtime allocator 对齐、capacity atomicity 与既有 paged cache/decode 回归。fused RoPE + KV append 也已通过 correctness（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）；当前仍没有 native KV append 的性能结论，下一步测量三路径 launch 数和 latency。

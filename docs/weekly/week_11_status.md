@@ -16,7 +16,7 @@ RoPE + paged KV append 数据路径，以及后续 CUDA extension。
 
 ## 当前环境限制
 
-Codex macOS 环境没有 torch/pytest/CUDA，只能执行 AST、compileall 和静态检查。RTX 5070 WSL 已成功完成 native extension JIT build、focused correctness 和完整回归；性能 benchmark 仍待执行。
+Codex macOS 环境没有 torch/pytest/CUDA，只能执行 AST、compileall 和静态检查。RTX 5070 WSL 已成功完成三条 RoPE append 路径的 native extension JIT build、focused correctness 和完整回归；当前进入 CUDA-event benchmark。
 
 ## 需要在 RTX 5070 完成
 
@@ -132,9 +132,18 @@ focused: 56 passed in 3.85s
 full:    204 passed in 4.47s
 ```
 
-这确认普通 CUDA append 已正确接入 RoPE 数据路径；以下待验证项只针对新加入的 `fused_cuda` kernel。
+这确认普通 CUDA append 已正确接入 RoPE 数据路径；随后已完成 `fused_cuda` 的独立验证。
 
-## 本次待验证：RoPE 三路径集成与 fused kernel
+fused RoPE + KV append 验证结果：
+
+```text
+focused: 66 passed in 44.35s
+full:    214 passed in 4.52s
+```
+
+`44.35s` 包含 fused extension 的首次 JIT 编译；完整回归复用 build cache。结论：`torch`、`cuda`、`fused_cuda` 三条路径均已在 RTX 5070 correctness 通过。仍不能由 correctness 时间推导性能，必须使用 CUDA event 单独测量。
+
+## 三路径 benchmark（待执行）
 
 本次不改变 RoPE 数学或 CUDA kernel，而是新增正式接口：
 
@@ -146,12 +155,38 @@ flashdec.rope_paged_kv_append(..., append_backend="fused_cuda")
 
 `torch` 是默认值，和 `rope_paged_kv_append_ref()` 一致；`cuda` 仍用 PyTorch 计算 Q/K RoPE，只将 rotated K/raw V 写入切换到 `PagedKVCache.append_cuda()`；`fused_cuda` 用一个 native kernel 计算 rotated Q/K 并写入 K/V。新增测试要求 native 路径在 GQA、跨 block、FP16/BF16/FP32 下与 reference 对齐，并检查 unknown backend、CPU cache 和 fused capacity failure 时不发生 allocator mutation。
 
-这次只验证集成语义与 fused kernel correctness，不记录性能数字；三路径 benchmark 留到下一步。
+新增 `benchmarks/run_rope_kv_append_bench.py`，对如下完整 append GPU 路径计时：
+
+```text
+torch       : PyTorch RoPE + Python append
+cuda        : PyTorch RoPE + independent CUDA append
+fused_cuda  : fused CUDA RoPE + K/V append
+```
+
+每个 case 在计时前完成 cache prefill、extension preload 与 reference 对齐检查；CSV 的 CUDA-event latency 不包含 JIT build 和 prefill。它测量的是 GPU work，不包含 Python allocator 的 CPU wall-clock 开销。
+
+首次 quick：
+
+```bash
+python benchmarks/run_rope_kv_append_bench.py \
+  --quick \
+  --dtype both \
+  --output benchmarks/results/week11_rope_kv_append_quick.csv
+```
+
+quick 正常后执行完整三场景：
+
+```bash
+python benchmarks/run_rope_kv_append_bench.py \
+  --dtype both \
+  --output benchmarks/results/week11_rope_kv_append.csv
+```
 
 ## 下一步
 
-1. 在 RTX 5070 验证 RoPE 三路径和 fused kernel 的 focused/full correctness。
-2. 对比 PyTorch assignment、independent CUDA append 和 fused path 的 latency、launch 数与内存访问。
+1. 在 RTX 5070 执行 quick/full 三路径 benchmark，并同步 CSV。
+2. 根据 p50/p90、speedup、dtype 和 case 分析 fusion 是否真的减少 GPU work。
+3. 再进入 DecodeEngine，测量含 Python allocator/scheduler 的 complete decode-step wall-clock latency。
 
 官方参考：
 
