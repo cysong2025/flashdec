@@ -193,7 +193,7 @@ fused_cuda       : 1.2226x vs torch
 
 `fused_cuda` 在 6/6 个 full p50 case 更快，等价于约 18.2% latency 降低；large-batch BF16 的单 case speedup 为 1.4451x。独立 CUDA append 只在 large-batch 有收益，因此不作为 GPU Engine 的默认数据路径。完整表、命令和离群值说明见 [Week 11 benchmark 摘要](../../benchmarks/results/week11_rope_kv_append_summary.md)。
 
-## DecodeEngine v1（待验证）
+## DecodeEngine v1（已验证）
 
 新增 `flashdec.DecodeEngine`：
 
@@ -225,11 +225,13 @@ python -m pytest -vv \
 python -m pytest -vv
 ```
 
+RTX 5070 已反馈上述 focused/full regression 测试通过。此处不补写未单独记录的测试数量；后续 performance 结论只以 Week 12 workload CSV 为准。
+
 ## 下一步
 
-1. 在 RTX 5070 验证 DecodeEngine v1 的 CPU/reference 与 fused/Triton 动态 step。
-2. 实现 synthetic dynamic workload，测量含 Python allocator/scheduler 的 complete decode-step wall-clock latency。
-3. 报告 tokens/s、active batch、block utilization、fragmentation、reuse、backpressure 和 p90/p99。
+1. 运行 dynamic workload focused tests。
+2. 对 `short_churn`、`mixed_steady`、`long_pressure` 运行 quick/full wall-clock benchmark。
+3. 基于 CSV 报告 tokens/s、active batch、block utilization、fragmentation、reuse、backpressure 和 p50/p90/p99。
 
 官方参考：
 

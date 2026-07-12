@@ -6,6 +6,8 @@ __all__ = [
     "DecodeEngine",
     "DecodeStepResult",
     "RopeAppendResult",
+    "WorkloadConfig",
+    "WorkloadResult",
     "__version__",
     "apply_rope",
     "cuda_kv_append",
@@ -18,6 +20,7 @@ __all__ = [
     "paged_decode_attention_ref",
     "rope_paged_kv_append",
     "rope_paged_kv_append_ref",
+    "run_synthetic_workload",
 ]
 
 __version__ = "0.0.0"
@@ -36,6 +39,14 @@ def __getattr__(name):
         from .cache import PagedKVCache
 
         return PagedKVCache
+    if name in ("WorkloadConfig", "WorkloadResult", "run_synthetic_workload"):
+        from .workload import WorkloadConfig, WorkloadResult, run_synthetic_workload
+
+        return {
+            "WorkloadConfig": WorkloadConfig,
+            "WorkloadResult": WorkloadResult,
+            "run_synthetic_workload": run_synthetic_workload,
+        }[name]
     if name in (
         "RopeAppendResult",
         "apply_rope",

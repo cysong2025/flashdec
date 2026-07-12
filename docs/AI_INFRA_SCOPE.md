@@ -105,8 +105,8 @@ allocate/free/reuse      block_tables/seq_lens
 | Reference / Kernel | 已完成主要 correctness、参数实验、最终 profiling 与配置冻结 | 仅在出现明确回归时重新进入 |
 | Paged KV Runtime | 已完成 request lifecycle、free/reuse、capacity atomicity、metrics 和 churn tests | 与 KV append/DecodeEngine 集成 |
 | Decode Data Path | 三条路径已通过 RTX correctness；fused p50 几何平均 1.2226x vs torch | complete decode-step integration |
-| Execution Engine | DecodeEngine v1 已实现 | RTX correctness、动态 workload、backpressure/admission 指标 |
-| End-to-End Evaluation | 已有 kernel benchmark/profiler | 动态 workload、step latency、内存效率、p99 |
+| Execution Engine | DecodeEngine v1 已完成 CPU/reference 与 RTX fused/Triton correctness | dynamic workload 的实测结论 |
+| End-to-End Evaluation | dynamic workload runner 与 CSV schema 已实现 | RTX workload 数据、step latency/内存效率分析、端到端收益结论 |
 | Reproducibility | 已有环境和实验记录 | 一键运行、干净环境验证、release |
 
 ## v0.1.0 完成标准

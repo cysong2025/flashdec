@@ -136,7 +136,7 @@ request churn -> no leaked blocks
 
 ## 阶段 5：DecodeEngine 与动态 Batch
 
-状态：DecodeEngine v1 已实现，等待 RTX 5070 correctness。
+状态：已完成。DecodeEngine v1 的 CPU/reference 与 RTX 5070 fused/Triton correctness 已验证通过。
 
 目标：把 runtime 与 kernel 组织成可以多步运行的单 GPU decode execution engine。
 
@@ -162,11 +162,13 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 阶段 6：端到端 Workload 与系统指标
 
+状态：实现完成，等待 RTX 5070 quick/full workload 结果与分析摘要。
+
 目标：证明系统在动态请求负载下的性能和内存行为，而不只报告单 kernel latency。
 
 任务：
 
-1. 建立可复现 synthetic workload：arrival step、initial context、decode length、cancel probability。
+1. 建立可复现 synthetic workload：arrival step、initial context、decode length、deterministic cancel interval/probability。
 2. 同时报告：
    - kernel latency。
    - complete decode-step p50/p90/p99。
@@ -178,6 +180,14 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
    - mixed context / steady state。
    - long context / memory pressure。
 4. 分析 kernel 优化能否转化为 end-to-end 收益。
+
+当前实现：
+
+- `WorkloadConfig` 定义 deterministic arrival、最大 active batch、每请求 decode token budget、可选 prompt context/stagger，以及带 seed 的 cancel interval/probability 策略。
+- `run_synthetic_workload()` 执行 request submit/admit、完整 `DecodeEngine.step()`、finish/cancel 与 backpressure recovery；每个 measured step 使用 CUDA 同步后的 wall-clock。
+- prompt prefill 与随机 Q/K/V 生成明确排除在 decode-step latency 外；submit/admit、allocator、append、paged decode 与 post-step lifecycle 明确包含。
+- `short_churn`、`mixed_steady`、`long_pressure` 三个 workload 分别验证高 churn、mixed context 稳态和可恢复的 physical-block 压力。
+- CSV 同时记录 p50/p90/p99、tokens/s、active batch、block utilization/fragmentation、allocation/free/reuse、backpressure、seed、环境和冻结 kernel 配置。
 
 完成标准：
 
@@ -204,4 +214,4 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 当前立即执行
 
-PagedKVCache v2、RoPE + paged KV append reference 与独立 CUDA KV append 均已通过 RTX 5070 correctness。CUDA Toolkit 12.8、`nvcc`、`CUDA_HOME`、Ninja 与 host compiler 已确认；当前先验证 optional native append integration，再进入 RoPE fusion 和性能比较。
+先在 RTX 5070 上运行 workload focused tests 与 quick benchmark；确认 three workloads 的 invariants 和 CSV 均正常后，再执行完整 FP16/BF16 对比，并将 CSV 同步回 Mac 生成 Week 12 摘要。
