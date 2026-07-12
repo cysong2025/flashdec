@@ -39,6 +39,8 @@ Dynamic DecodeEngine workload、端到端性能与 Paged KV runtime 可观测性
 - 相邻 trial 反转 backend 顺序。
 - 每个 trial 使用递增 seed。
 - CSV 记录 trial、trial_count、backend_order 和 seed。
+- 新增 `summarize_decode_engine_trials.py`，只有通过完整矩阵、pair trajectory、block accounting、seed/order 和 invariant 校验后才输出聚合摘要。
+- 聚合摘要同时报告 per-trial ratio、跨 trial median/min/max/geometric mean，并将 p50 跨过 1.0 的场景标记为 `unstable_crosses_1`。
 
 ## RTX 5070 下一步
 
@@ -54,6 +56,7 @@ export MAX_JOBS=1
 python -m pytest -vv \
   tests/test_workload.py \
   tests/test_workload_benchmark.py \
+  tests/test_decode_engine_trial_summary.py \
   tests/test_decode_engine.py \
   tests/test_paged_cache.py \
   tests/test_public_api.py
@@ -68,6 +71,10 @@ python benchmarks/run_decode_engine_workload.py \
   --trials 3 \
   --dtype both \
   --output benchmarks/results/week12_decode_engine_workload_trials3.csv
+
+python benchmarks/summarize_decode_engine_trials.py \
+  --input benchmarks/results/week12_decode_engine_workload_trials3.csv \
+  --output benchmarks/results/week12_decode_engine_workload_trials3_summary.md
 ```
 
-三 trial 数据回来后，下一步是生成跨 trial 聚合表，然后进入 `v0.1.0` reproducibility、CHANGELOG 和 release 文档。
+三 trial 数据回来后先由聚合器冻结稳定/不稳定结论，然后进入 complete-step profiler、`v0.1.0` reproducibility、CHANGELOG 和 release 文档。

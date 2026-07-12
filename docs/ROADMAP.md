@@ -72,10 +72,12 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 目标：把首轮结论升级为 release 级证据。
 
+当前状态：聚合器、Markdown 输出和纯 Python 错误路径测试已实现，等待 RTX 5070 生成正式 36 行 CSV 后验证。
+
 工作内容：
 
 - 在 RTX 5070 完成 `--trials 3 --dtype both`。
-- 新增 `benchmarks/summarize_decode_engine_trials.py`：
+- 使用 `benchmarks/summarize_decode_engine_trials.py`：
   - 校验 workload/dtype/trial 的 torch/fused 严格配对。
   - 校验两条 backend 的 state/allocator 轨迹一致。
   - 输出每个 trial 的 p50/p90/p99/TPS ratio。
@@ -332,7 +334,7 @@ capacity failure -> refcount and ownership unchanged
 ## 11. 当前立即执行顺序
 
 1. RTX 5070 运行现有 `--quick --trials 2` 与正式 `--trials 3`。
-2. 实现 multi-trial 聚合器并冻结 Week 12 p50/p90/p99 结论。
+2. 运行 multi-trial 聚合器并冻结 Week 12 p50/p90/p99 结论。
 3. 实现 complete-step profiler，完成 append/attention/runtime 阶段归因。
 4. 完成 `v0.1.0` reproducibility 与 release。
 5. 开始 `flashdec/scheduler.py`，先做纯 CPU deterministic policy 和 tests。
