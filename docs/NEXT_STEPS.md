@@ -105,16 +105,15 @@ request churn -> no leaked blocks
 
 ## 阶段 4：RoPE + KV Append 数据路径
 
-状态：PyTorch reference 和组合接口、独立 CUDA KV append 均已通过 RTX 5070 correctness；可选 RoPE native append 集成已实现，等待 RTX 5070 correctness；native 性能比较与 RoPE fusion 尚未实现。
+状态：PyTorch reference、独立 CUDA KV append 和可选 RoPE `cuda` append 集成均已通过 RTX 5070 correctness；fused RoPE + KV append 已实现，等待 RTX 5070 correctness；native 性能比较尚未开始。
 
 目标：实现至少一条原生 CUDA 数据路径，并与 PagedKVCache v2 集成。
 
 任务：
 
 1. 保留 PyTorch RoPE + paged KV append reference 作为语义基线。
-2. 验证 `rope_paged_kv_append(..., append_backend="cuda")` 与 reference 对齐。
-3. 融合 RoPE + KV append。
-4. 对比分离 RoPE+append 与 fused op 的 latency、launch 数和内存访问。
+2. 验证 `rope_paged_kv_append(..., append_backend="fused_cuda")` 与 reference 对齐。
+3. 对比分离 RoPE+append 与 fused op 的 latency、launch 数和内存访问。
 
 当前实现：
 
@@ -126,7 +125,7 @@ request churn -> no leaked blocks
 - RTX 5070 focused：`38 passed in 3.60s`；完整回归：`186 passed in 4.96s`。
 - PyTorch 为 `2.11.0+cu128`，PyTorch CUDA 为 12.8；Toolkit 前置检查已通过：`nvcc 12.8.93`、`CUDA_HOME=/usr/local/cuda-12.8`、Ninja 1.13.0、GCC/G++ 13.3.0。
 - 已实现 lazy JIT `cuda_kv_append()` 与 `PagedKVCache.append_cuda()`；RTX 5070 focused 为 `34 passed in 3.59s`，完整回归为 `198 passed in 5.13s`。
-- 已实现 `rope_paged_kv_append(..., append_backend="torch" | "cuda")`，保留不变的 `rope_paged_kv_append_ref()`；双 backend GPU correctness 与 latency 结果待记录。
+- 已实现 `rope_paged_kv_append(..., append_backend="torch" | "cuda")`，并在 RTX 5070 通过 focused `56 passed in 3.85s` 与 full `204 passed in 4.47s`；`fused_cuda` GPU correctness 与三路径 latency 结果待记录。
 
 完成标准：
 

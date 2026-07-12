@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+import math
 from typing import Hashable
 
 
@@ -142,7 +143,8 @@ class PagedKVCache:
 
         This first native path supports CUDA cache tensors with FP16, BF16, or
         FP32 dtype. It intentionally does not apply RoPE; callers can use the
-        PyTorch RoPE reference before appending until the fused path exists.
+        PyTorch RoPE reference before appending, or ``append_fused_cuda`` for
+        the separate fused data path.
         """
         torch = _torch()
         layer_idx, ids, k, v = self._prepare_append_inputs(layer_idx, request_ids, k, v)
@@ -180,6 +182,86 @@ class PagedKVCache:
         )
         self._advance_request_lengths(ids)
         return self.block_tables(ids)
+
+    def append_fused_cuda(
+        self,
+        layer_idx,
+        request_ids,
+        q,
+        k,
+        v,
+        positions,
+        rotary_dim=None,
+        base=10_000.0,
+    ):
+        """Fuse split-half RoPE with K/V append while preserving allocator semantics.
+
+        This method is intentionally internal-runtime facing: callers provide
+        pre-append ``positions`` from :meth:`next_positions`, while the cache
+        retains capacity preflight, physical block allocation, and seq_len
+        mutation. It returns ``(rotated_q, block_tables)``.
+        """
+        torch = _torch()
+        layer_idx, ids, k, v = self._prepare_append_inputs(layer_idx, request_ids, k, v)
+        if self.device.type != "cuda":
+            raise ValueError("append_fused_cuda requires a CUDA-resident PagedKVCache")
+        if self.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+            raise ValueError("append_fused_cuda supports cache dtype float16, bfloat16, or float32")
+        if q.dim() != 3 or q.shape[0] != len(ids) or q.shape[1] <= 0 or q.shape[2] != self.head_dim:
+            raise ValueError("q shape must match request count and cache head_dim")
+        if q.device != self.device or q.dtype != self.dtype:
+            raise ValueError("q must use the cache device and dtype")
+        if positions.dim() != 1 or positions.numel() != len(ids):
+            raise ValueError("positions must have shape [num_requests]")
+        if positions.device != self.device or positions.dtype not in (torch.int32, torch.int64):
+            raise ValueError("positions must use int32/int64 on the cache device")
+        if bool(torch.any(positions < 0).item()):
+            raise ValueError("positions must be non-negative")
+        if rotary_dim is None:
+            rotary_dim = self.head_dim
+        if isinstance(rotary_dim, bool) or not isinstance(rotary_dim, int):
+            raise ValueError("rotary_dim must be an even integer")
+        if rotary_dim <= 0 or rotary_dim > self.head_dim or rotary_dim % 2 != 0:
+            raise ValueError("rotary_dim must be positive, even, and no larger than head_dim")
+        base = float(base)
+        if not math.isfinite(base) or base <= 0.0:
+            raise ValueError("base must be a positive finite number")
+        if not q.is_contiguous() or not k.is_contiguous() or not v.is_contiguous():
+            raise ValueError("append_fused_cuda requires contiguous q, k, and v tensors")
+
+        # Keep build/configuration errors before any allocator mutation.
+        from ._fused_rope_kv_append import (
+            fused_rope_kv_append,
+            load_fused_rope_kv_append_extension,
+        )
+
+        load_fused_rope_kv_append_extension()
+        self._preflight_append(ids)
+        locations = self._allocate_append_locations(ids)
+        block_ids = torch.tensor(
+            [physical_block for physical_block, _ in locations],
+            device=self.device,
+            dtype=torch.int64,
+        )
+        block_offsets = torch.tensor(
+            [block_offset for _, block_offset in locations],
+            device=self.device,
+            dtype=torch.int64,
+        )
+        q_rotated = fused_rope_kv_append(
+            q,
+            k,
+            v,
+            self.k_cache[layer_idx],
+            self.v_cache[layer_idx],
+            block_ids,
+            block_offsets,
+            positions,
+            rotary_dim=rotary_dim,
+            base=base,
+        )
+        self._advance_request_lengths(ids)
+        return q_rotated, self.block_tables(ids)
 
     def finish_request(self, request_id):
         """Mark an active request finished and release all owned blocks."""

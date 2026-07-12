@@ -135,8 +135,8 @@ def _rope_paged_kv_append(
     base,
     append_backend,
 ):
-    if append_backend not in ("torch", "cuda"):
-        raise ValueError("append_backend must be 'torch' or 'cuda'")
+    if append_backend not in ("torch", "cuda", "fused_cuda"):
+        raise ValueError("append_backend must be 'torch', 'cuda', or 'fused_cuda'")
 
     ids, k, v = _prepare_rope_paged_kv_append_inputs(
         cache,
@@ -147,12 +147,24 @@ def _rope_paged_kv_append(
     )
 
     positions = cache.next_positions(ids, device=cache.device)
-    q_rotated = apply_rope(q, positions, rotary_dim=rotary_dim, base=base)
-    k_rotated = apply_rope(k, positions, rotary_dim=rotary_dim, base=base)
-    if append_backend == "torch":
-        block_tables = cache.append(layer_idx, ids, k_rotated, v)
+    if append_backend == "fused_cuda":
+        q_rotated, block_tables = cache.append_fused_cuda(
+            layer_idx,
+            ids,
+            q,
+            k,
+            v,
+            positions,
+            rotary_dim=rotary_dim,
+            base=base,
+        )
     else:
-        block_tables = cache.append_cuda(layer_idx, ids, k_rotated, v)
+        q_rotated = apply_rope(q, positions, rotary_dim=rotary_dim, base=base)
+        k_rotated = apply_rope(k, positions, rotary_dim=rotary_dim, base=base)
+        if append_backend == "torch":
+            block_tables = cache.append(layer_idx, ids, k_rotated, v)
+        else:
+            block_tables = cache.append_cuda(layer_idx, ids, k_rotated, v)
     seq_lens = cache.seq_lens_tensor(ids)
     return RopeAppendResult(
         q=q_rotated,
@@ -206,9 +218,10 @@ def rope_paged_kv_append(
     ``append_backend='torch'`` is the default and follows the same path as
     :func:`rope_paged_kv_append_ref`. ``append_backend='cuda'`` keeps the
     PyTorch RoPE calculation but writes rotated K/raw V through
-    :meth:`PagedKVCache.append_cuda`. The latter is intentionally not a fused
-    RoPE kernel; it is the integration bridge used to compare semantics and,
-    later, end-to-end append cost.
+    :meth:`PagedKVCache.append_cuda`. ``append_backend='fused_cuda'`` rotates
+    Q/K and writes K/V through one native CUDA kernel. The fused backend is
+    CUDA-only and exists to compare end-to-end append cost against the two
+    readable baseline paths.
     """
     return _rope_paged_kv_append(
         cache,

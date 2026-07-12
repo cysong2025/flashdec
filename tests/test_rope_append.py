@@ -53,6 +53,16 @@ def _make_cache(
     )
 
 
+def _native_tolerance(append_backend, dtype):
+    if append_backend != "fused_cuda":
+        return 2e-3 if dtype in (torch.float16, torch.bfloat16) else 0.0
+    if dtype == torch.float32:
+        return 2e-5
+    if dtype == torch.float16:
+        return 3e-3
+    return 2e-2
+
+
 def test_rope_is_public_api():
     assert flashdec.RopeAppendResult is RopeAppendResult
     assert flashdec.apply_rope is apply_rope
@@ -188,8 +198,9 @@ def test_rope_paged_kv_append_default_backend_matches_reference():
 
 
 @pytest.mark.skipif(not HAS_CUDA_TOOLCHAIN, reason=CUDA_TOOLCHAIN_REASON)
+@pytest.mark.parametrize("append_backend", ["cuda", "fused_cuda"])
 @pytest.mark.parametrize("dtype", CUDA_DTYPES)
-def test_rope_paged_kv_append_cuda_matches_reference_for_gqa(dtype):
+def test_rope_paged_kv_append_native_backends_match_reference_for_gqa(dtype, append_backend):
     torch.manual_seed(233)
     reference_cache = _make_cache(
         block_size=2,
@@ -221,17 +232,17 @@ def test_rope_paged_kv_append_cuda_matches_reference_for_gqa(dtype):
             q,
             k,
             v,
-            append_backend="cuda",
+            append_backend=append_backend,
         )
 
-        tolerance = 2e-3 if dtype in (torch.float16, torch.bfloat16) else 0.0
+        tolerance = _native_tolerance(append_backend, dtype)
         torch.testing.assert_close(actual.q, expected.q, rtol=tolerance, atol=tolerance)
         torch.testing.assert_close(actual.positions, expected.positions)
         torch.testing.assert_close(actual.block_tables, expected.block_tables)
         torch.testing.assert_close(actual.seq_lens, expected.seq_lens)
 
     torch.cuda.synchronize()
-    tolerance = 2e-3 if dtype in (torch.float16, torch.bfloat16) else 0.0
+    tolerance = _native_tolerance(append_backend, dtype)
     torch.testing.assert_close(native_cache.k_cache, reference_cache.k_cache, rtol=tolerance, atol=tolerance)
     torch.testing.assert_close(native_cache.v_cache, reference_cache.v_cache, rtol=tolerance, atol=tolerance)
     assert native_cache.request_state(10) == reference_cache.request_state(10)
@@ -253,17 +264,36 @@ def test_rope_paged_kv_append_rejects_unknown_append_backend_without_mutation():
     assert cache.num_used_blocks == 0
 
 
-def test_rope_paged_kv_append_cuda_backend_rejects_cpu_cache_without_mutation():
+@pytest.mark.parametrize("append_backend", ["cuda", "fused_cuda"])
+def test_rope_paged_kv_append_native_backend_rejects_cpu_cache_without_mutation(append_backend):
     cache = _make_cache(device="cpu")
     q = torch.ones((1, 2, 4), device="cpu", dtype=torch.float32)
     k = torch.ones((1, 1, 4), device="cpu", dtype=torch.float32)
 
     with pytest.raises(ValueError, match="CUDA-resident"):
-        rope_paged_kv_append(cache, 0, [10], q, k, k, append_backend="cuda")
+        rope_paged_kv_append(cache, 0, [10], q, k, k, append_backend=append_backend)
 
     with pytest.raises(KeyError, match="unknown request_id"):
         cache.request_state(10)
     assert cache.num_used_blocks == 0
+
+
+@pytest.mark.skipif(not HAS_CUDA_TOOLCHAIN, reason=CUDA_TOOLCHAIN_REASON)
+def test_rope_paged_kv_append_fused_cuda_capacity_failure_keeps_allocator_state_atomic():
+    cache = _make_cache(block_size=1, max_blocks=1, dtype=torch.float16, device="cuda")
+    q = torch.ones((1, 2, 4), device="cuda", dtype=torch.float16)
+    k = torch.ones((1, 1, 4), device="cuda", dtype=torch.float16)
+    rope_paged_kv_append(cache, 0, [1], q, k, k, append_backend="fused_cuda")
+    before = cache.request_state(1)
+
+    with pytest.raises(RuntimeError, match="out of physical blocks"):
+        rope_paged_kv_append(cache, 0, [2], q, k, k, append_backend="fused_cuda")
+
+    assert cache.request_state(1) == before
+    with pytest.raises(KeyError, match="unknown request_id"):
+        cache.request_state(2)
+    assert cache.metrics()["capacity_failure_count"] == 1
+    assert cache.validate_invariants()
 
 
 def test_rope_paged_kv_append_capacity_failure_keeps_request_state_atomic():
