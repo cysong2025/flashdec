@@ -67,7 +67,7 @@ cache[block_ids[request], head, block_offsets[request], dim] = value[request, he
 
 - `flashdec/csrc/kv_append.cpp`：PyBind 与基本 tensor contract。
 - `flashdec/csrc/kv_append_kernel.cu`：CUDA kernel。
-- `flashdec/cuda_kv_append.py`：lazy loader、Python shape/dtype/device/bounds checks。
+- `flashdec/_cuda_kv_append.py`：内部 lazy loader、Python shape/dtype/device/bounds checks；下划线避免与公开函数 `flashdec.cuda_kv_append()` 发生模块名冲突。
 
 构建前必须在**同一个 WSL shell 和虚拟环境**中设置：
 
@@ -91,4 +91,4 @@ extension 会在 allocator mutation 前完成 JIT build；因此工具链或编�
 
 ## 当前状态
 
-实现和测试已提交到代码库，尚待 RTX 5070 首次 JIT build 与 correctness 验证。当前没有 native KV append 的性能结论；在 raw/runtime correctness 稳定后，才测量 PyTorch assignment、independent CUDA append 与后续 fused RoPE+append 的 launch 数和 latency。
+RTX 5070 已成功完成首次 JIT build。首轮 focused 测试的 raw slot 写入（FP16/BF16/FP32）、地址边界、runtime allocator 对齐、capacity atomicity 和既有 paged cache/decode 回归均通过（32 项）。其余 2 项只暴露了 Python 子模块名与公开函数同名的 API 冲突，不涉及 CUDA kernel；已通过将内部模块改为 `_cuda_kv_append.py` 修复，等待同一 focused 命令复跑确认。当前没有 native KV append 的性能结论；在 full correctness 稳定后，才测量 PyTorch assignment、independent CUDA append 与后续 fused RoPE+append 的 launch 数和 latency。

@@ -9,7 +9,7 @@ from torch.utils.cpp_extension import CUDA_HOME
 
 import flashdec
 from flashdec.cache import PagedKVCache
-from flashdec.cuda_kv_append import cuda_kv_append
+from flashdec._cuda_kv_append import cuda_kv_append
 
 
 HAS_CUDA_TOOLCHAIN = (

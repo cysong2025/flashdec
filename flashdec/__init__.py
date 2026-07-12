@@ -31,7 +31,7 @@ def __getattr__(name):
             "rope_paged_kv_append_ref": rope_paged_kv_append_ref,
         }[name]
     if name in ("cuda_kv_append", "load_cuda_kv_append_extension"):
-        from .cuda_kv_append import cuda_kv_append, load_cuda_kv_append_extension
+        from ._cuda_kv_append import cuda_kv_append, load_cuda_kv_append_extension
 
         return {
             "cuda_kv_append": cuda_kv_append,

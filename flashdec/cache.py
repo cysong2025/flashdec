@@ -155,7 +155,7 @@ class PagedKVCache:
 
         # Build before mutating allocator state, so toolchain/build failures do
         # not create requests or consume physical blocks.
-        from .cuda_kv_append import cuda_kv_append, load_cuda_kv_append_extension
+        from ._cuda_kv_append import cuda_kv_append, load_cuda_kv_append_extension
 
         load_cuda_kv_append_extension()
         self._preflight_append(ids)

@@ -1,4 +1,4 @@
-"""JIT-built CUDA K/V append primitive for the token-major PagedKVCache."""
+"""Internal JIT-built CUDA K/V append primitive for the token-major PagedKVCache."""
 
 from __future__ import annotations
 
