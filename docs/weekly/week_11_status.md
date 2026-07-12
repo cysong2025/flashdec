@@ -16,7 +16,7 @@ RoPE + paged KV append 数据路径，以及后续 CUDA extension。
 
 ## 当前环境限制
 
-Codex macOS 环境没有 torch/pytest/CUDA，只能执行 AST、compileall 和静态检查。RTX 5070 WSL 已成功完成 native extension 首次 JIT build；公开 API 修复后仍需复跑 focused/full correctness。所有性能结论仍为 pending。
+Codex macOS 环境没有 torch/pytest/CUDA，只能执行 AST、compileall 和静态检查。RTX 5070 WSL 已成功完成 native extension JIT build、focused correctness 和完整回归；性能 benchmark 仍待执行。
 
 ## 需要在 RTX 5070 完成
 
@@ -103,21 +103,29 @@ python -m pytest -vv
 
 第一次运行会在 PyTorch extension cache 中编译 CUDA 源码；后续同一环境、同一源码通常复用 build cache。需要记录 commit id、pytest 输出和任何 compiler traceback。
 
-## 首次 RTX 5070 上板结果（待 API 修复后复跑）
+## RTX 5070 上板结果
 
 首次 focused 命令共收集 34 项，用时 `44.20s`：
 
 - 32 项通过：CUDA extension 已完成 JIT build；FP16/BF16/FP32 raw physical slot 写入、out-of-range metadata、`append_cuda()` 与 Python allocator/cache 内容对齐、capacity atomicity，以及 paged cache/decode 回归均通过。
 - 2 项失败：`flashdec.cuda_kv_append` 被 Python 同名子模块覆盖成 module，导致公开函数 API 不是 callable。这是 Python package namespace 冲突，不是 CUDA 编译、kernel 映射或数值正确性问题。
 
-修复策略：将内部实现从 `flashdec/cuda_kv_append.py` 改为 `flashdec/_cuda_kv_append.py`，继续以 `flashdec.cuda_kv_append(...)` 暴露函数。修复提交后必须复跑同一 focused 命令和完整回归，才能把 native correctness 标记为通过。
+修复策略：将内部实现从 `flashdec/cuda_kv_append.py` 改为 `flashdec/_cuda_kv_append.py`，继续以 `flashdec.cuda_kv_append(...)` 暴露函数。
+
+修复后的最终验证：
+
+```text
+focused: 34 passed in 3.59s
+full:    198 passed in 5.13s
+```
+
+结论：独立 CUDA KV append 已在 RTX 5070 上完成 JIT 构建和 correctness。它与 Python allocator/reference 在测试覆盖的 FP16/BF16/FP32、跨 block 分配、physical slot 写入、capacity failure 和公开 API 语义上一致；这一结论不代表性能更快，性能比较仍待 benchmark。
 
 ## 下一步
 
-1. 在 RTX 5070 完成独立 CUDA KV append 的首次 JIT build、focused correctness 和 full regression。
-2. 记录 FP16/BF16/FP32 的 raw slot 与 runtime 对齐结果。
-3. 若正确性稳定，为 `rope_paged_kv_append_ref()` 增加可选 native append 路径或单独的 native API。
-4. 实现 fused RoPE + KV append，再比较 PyTorch assignment、independent CUDA append 和 fused path 的 latency/launch 数。
+1. 为 RoPE + paged KV append 增加可选 native append 路径，并保持现有 reference fallback。
+2. 实现 fused RoPE + KV append。
+3. 对比 PyTorch assignment、independent CUDA append 和 fused path 的 latency、launch 数与内存访问。
 
 官方参考：
 

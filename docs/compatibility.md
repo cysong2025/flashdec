@@ -71,11 +71,28 @@
 
 当前限制：
 
-- 已实现独立 CUDA KV append extension 和 `PagedKVCache.append_cuda()`，但还没有 RTX 5070 JIT/correctness/性能结论。
+- 独立 CUDA KV append extension 和 `PagedKVCache.append_cuda()` 已在 RTX 5070 通过 JIT build 与 correctness；focused 为 `34 passed in 3.59s`，完整回归为 `198 passed in 5.13s`。
 - 只支持当前 PagedKVCache v2 的单 layer runtime。
 - 不包含 RoPE scaling、YaRN、NTK-aware scaling 或 interleaved-pair convention。
 - RTX 5070 focused 为 `38 passed in 3.60s`，完整回归为 `186 passed in 4.96s`。
 - native extension 当前要求 CUDA-resident、contiguous FP16/BF16/FP32 token-major cache 与 K/V；Toolkit 前置检查已通过 `nvcc 12.8.93`、`CUDA_HOME=/usr/local/cuda-12.8` 和 Ninja 1.13.0。
+
+### Week 11 Native CUDA KV Append
+
+focused 验证：
+
+```bash
+python -m pytest -vv \
+  tests/test_cuda_kv_append.py \
+  tests/test_paged_cache.py \
+  tests/test_public_api.py
+```
+
+结果：`34 passed in 3.59s`。
+
+完整回归结果：`198 passed in 5.13s`。
+
+覆盖 FP16/BF16/FP32 raw physical slot 写入、block id/offset 边界检查、`append_cuda()` 与 Python allocator/cache 对齐、capacity failure atomicity、non-contiguous 输入拒绝与公开 API lazy import。尚未测量 native append 的性能。
 
 ## 已验证 Correctness
 
