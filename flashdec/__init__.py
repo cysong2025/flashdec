@@ -2,6 +2,9 @@
 
 __all__ = [
     "PagedKVCache",
+    "AdmissionResult",
+    "DecodeEngine",
+    "DecodeStepResult",
     "RopeAppendResult",
     "__version__",
     "apply_rope",
@@ -21,6 +24,14 @@ __version__ = "0.0.0"
 
 
 def __getattr__(name):
+    if name in ("AdmissionResult", "DecodeEngine", "DecodeStepResult"):
+        from .engine import AdmissionResult, DecodeEngine, DecodeStepResult
+
+        return {
+            "AdmissionResult": AdmissionResult,
+            "DecodeEngine": DecodeEngine,
+            "DecodeStepResult": DecodeStepResult,
+        }[name]
     if name == "PagedKVCache":
         from .cache import PagedKVCache
 

@@ -105,15 +105,15 @@ request churn -> no leaked blocks
 
 ## 阶段 4：RoPE + KV Append 数据路径
 
-状态：PyTorch reference、独立 CUDA KV append、可选 RoPE `cuda` append 与 fused RoPE + KV append 均已通过 RTX 5070 correctness；native 性能比较尚未开始。
+状态：三条 RoPE/KV append 路径均已通过 RTX 5070 correctness；full CUDA-event p50 几何平均显示 fused 为 `1.2226x` vs torch，独立 CUDA append 为 `0.9840x`，因此停止独立 append 微调。
 
 目标：实现至少一条原生 CUDA 数据路径，并与 PagedKVCache v2 集成。
 
 任务：
 
 1. 保留 PyTorch RoPE + paged KV append reference 作为语义基线。
-2. 运行 `benchmarks/run_rope_kv_append_bench.py`，对比三条路径的 CUDA-event latency。
-3. 根据 p50/p90 与 speedup 判断 fusion 是否减少 GPU work；之后再测包含 Python runtime 的 complete step。
+2. 保留公开 RoPE API 默认 `torch`，GPU Engine 显式使用 `fused_cuda`。
+3. 进入 DecodeEngine 与动态 batch 的 complete-step runtime。
 
 当前实现：
 
@@ -125,7 +125,8 @@ request churn -> no leaked blocks
 - RTX 5070 focused：`38 passed in 3.60s`；完整回归：`186 passed in 4.96s`。
 - PyTorch 为 `2.11.0+cu128`，PyTorch CUDA 为 12.8；Toolkit 前置检查已通过：`nvcc 12.8.93`、`CUDA_HOME=/usr/local/cuda-12.8`、Ninja 1.13.0、GCC/G++ 13.3.0。
 - 已实现 lazy JIT `cuda_kv_append()` 与 `PagedKVCache.append_cuda()`；RTX 5070 focused 为 `34 passed in 3.59s`，完整回归为 `198 passed in 5.13s`。
-- 已实现并验证 `rope_paged_kv_append(..., append_backend="torch" | "cuda" | "fused_cuda")`；fused focused 为 `66 passed in 44.35s`（含首次 JIT build），完整回归为 `214 passed in 4.52s`。三路径 GPU latency 结果待记录。
+- 已实现并验证 `rope_paged_kv_append(..., append_backend="torch" | "cuda" | "fused_cuda")`；fused focused 为 `66 passed in 44.35s`（含首次 JIT build），完整回归为 `214 passed in 4.52s`。
+- Week 11 full CUDA-event：fused 在 6/6 个 p50 case 胜出，几何平均 `1.2226x`（约 18.2% latency 降低）；独立 CUDA append 几何平均 `0.9840x`。详细表见 `benchmarks/results/week11_rope_kv_append_summary.md`。
 
 完成标准：
 
@@ -135,12 +136,14 @@ request churn -> no leaked blocks
 
 ## 阶段 5：DecodeEngine 与动态 Batch
 
+状态：DecodeEngine v1 已实现，等待 RTX 5070 correctness。
+
 目标：把 runtime 与 kernel 组织成可以多步运行的单 GPU decode execution engine。
 
 任务：
 
-1. 定义 request 状态：waiting、active、finished、cancelled。
-2. 实现 request admission 和 active batch builder。
+1. 定义并验证 request 状态：waiting、active、finished、cancelled。
+2. 验证 request admission 和 active batch builder。
 3. 每一步接收 active requests 的 Q/K/V，执行：
 
 ```text
@@ -148,7 +151,7 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 ```
 
 4. 支持不同 context 的请求在不同 step 加入和退出。
-5. cache capacity 不足时返回明确 backpressure/admission 结果。
+5. 验证 cache capacity 不足时返回明确 backpressure/admission 结果。
 6. 保证 batch row、request id、block table 和输出一一对应。
 
 完成标准：

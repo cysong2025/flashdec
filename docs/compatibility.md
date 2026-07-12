@@ -80,6 +80,17 @@
 - RoPE 的 `append_backend="cuda"` 集成已通过 RTX 5070 correctness（focused `56 passed in 3.85s`，full `204 passed in 4.47s`）；它不是 fused RoPE kernel，也没有性能结论。
 - `append_backend="fused_cuda"` 和低层 `flashdec.fused_rope_kv_append()` 已在 RTX 5070 通过 JIT/correctness（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）；当前支持 token-major contiguous FP16/BF16/FP32，尚无性能结论。
 
+## DecodeEngine v1
+
+`flashdec.DecodeEngine` 当前支持：
+
+- waiting/active/finished/cancelled request lifecycle。
+- admission、deterministic active request row order、single-token `step()`。
+- `torch`/`cuda`/`fused_cuda` append backend，以及 reference/Triton paged decode backend。
+- capacity 不足时返回 `DecodeStepResult(status="backpressure")`，不改变 KV ownership 或 seq_len。
+
+当前限制：单 layer；Q/K/V 由调用方提供；没有 model forward、sampling、continuous scheduler 或 workload benchmark。GPU Engine correctness 仍待 RTX 5070 验证。
+
 ### Week 11 Native CUDA KV Append
 
 focused 验证：

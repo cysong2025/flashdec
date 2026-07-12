@@ -143,7 +143,7 @@ full:    214 passed in 4.52s
 
 `44.35s` 包含 fused extension 的首次 JIT 编译；完整回归复用 build cache。结论：`torch`、`cuda`、`fused_cuda` 三条路径均已在 RTX 5070 correctness 通过。仍不能由 correctness 时间推导性能，必须使用 CUDA event 单独测量。
 
-## 三路径 benchmark（待执行）
+## 三路径 benchmark
 
 本次不改变 RoPE 数学或 CUDA kernel，而是新增正式接口：
 
@@ -182,11 +182,54 @@ python benchmarks/run_rope_kv_append_bench.py \
   --output benchmarks/results/week11_rope_kv_append.csv
 ```
 
+## 三路径 benchmark 结果
+
+完整实验使用 warmup 20、repeat 100，覆盖 default、large-batch、long-context 和 FP16/BF16。p50 几何平均：
+
+```text
+independent cuda : 0.9840x vs torch
+fused_cuda       : 1.2226x vs torch
+```
+
+`fused_cuda` 在 6/6 个 full p50 case 更快，等价于约 18.2% latency 降低；large-batch BF16 的单 case speedup 为 1.4451x。独立 CUDA append 只在 large-batch 有收益，因此不作为 GPU Engine 的默认数据路径。完整表、命令和离群值说明见 [Week 11 benchmark 摘要](../../benchmarks/results/week11_rope_kv_append_summary.md)。
+
+## DecodeEngine v1（待验证）
+
+新增 `flashdec.DecodeEngine`：
+
+- `waiting -> active -> finished/cancelled` request 状态机。
+- admission 后按稳定提交顺序构建默认 active batch；显式 request_ids 保留调用方 row order。
+- `step()` 执行 RoPE/KV append -> paged decode，返回 output、positions、block tables 和 seq lens。
+- capacity 不足返回 `status="backpressure"`，不改变 cache ownership 或 seq_len。
+- GPU policy 可显式使用 `append_backend="fused_cuda"` 与 `decode_backend="triton"`；默认保留 CPU/reference 路径。
+
+验证命令：
+
+```bash
+cd ~/work/flashdec
+git pull --ff-only origin main
+source .venv/bin/activate
+
+export CUDA_HOME=/usr/local/cuda-12.8
+export PATH="$CUDA_HOME/bin:$PATH"
+export MAX_JOBS=1
+
+python -m pytest -vv \
+  tests/test_decode_engine.py \
+  tests/test_rope_append.py \
+  tests/test_fused_rope_kv_append.py \
+  tests/test_paged_cache.py \
+  tests/test_paged_decode.py \
+  tests/test_public_api.py
+
+python -m pytest -vv
+```
+
 ## 下一步
 
-1. 在 RTX 5070 执行 quick/full 三路径 benchmark，并同步 CSV。
-2. 根据 p50/p90、speedup、dtype 和 case 分析 fusion 是否真的减少 GPU work。
-3. 再进入 DecodeEngine，测量含 Python allocator/scheduler 的 complete decode-step wall-clock latency。
+1. 在 RTX 5070 验证 DecodeEngine v1 的 CPU/reference 与 fused/Triton 动态 step。
+2. 实现 synthetic dynamic workload，测量含 Python allocator/scheduler 的 complete decode-step wall-clock latency。
+3. 报告 tokens/s、active batch、block utilization、fragmentation、reuse、backpressure 和 p90/p99。
 
 官方参考：
 
