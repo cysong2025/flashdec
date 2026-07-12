@@ -85,6 +85,13 @@ class RequestSpec:
 
 
 @dataclass(frozen=True)
+class WaitingRequestMetadata:
+    spec: RequestSpec
+    wait_steps: int = 0
+    skip_count: int = 0
+
+
+@dataclass(frozen=True)
 class SchedulerConfig:
     max_active_requests: int
     max_batch_requests: int
@@ -100,7 +107,7 @@ class SchedulingSnapshot:
     block_size: int
     max_blocks: int
     free_blocks: int
-    waiting: tuple[RequestSpec, ...]
+    waiting: tuple[WaitingRequestMetadata, ...]
     active: tuple[ActiveRequestMetadata, ...]
 
 
@@ -110,14 +117,17 @@ class SchedulerDecision:
     admit_ids: tuple[Hashable, ...]
     runnable_ids: tuple[Hashable, ...]
     deferred_ids: tuple[Hashable, ...]
+    waiting_ids: tuple[Hashable, ...]
+    rejected_ids: tuple[Hashable, ...]
     committed_blocks_before: int
     committed_blocks_after: int
     needed_physical_blocks_now: int
     free_blocks_before_step: int
+    drain_for_request_id: Hashable | None
     reasons: tuple[str, ...]
 ```
 
-`ActiveRequestMetadata` 至少包含 `request_id`、当前 `seq_len`、剩余 decode token、已持有 block、commitment、等待/跳过计数和稳定提交顺序。字段只描述调度所需元数据，不暴露 K/V tensor。
+`ActiveRequestMetadata` 至少包含 request spec、当前 `seq_len`、剩余 decode token、已持有 block、commitment 和 service-wait 计数。`deferred_ids` 只表示已 active 但本轮未运行的请求；未 admission 的请求由 `waiting_ids` 表示，永久无法放入 schedulable capacity 的请求由 `rejected_ids` 表示。字段只描述调度所需元数据，不暴露 K/V tensor。
 
 ## 5. 状态与所有权
 
@@ -285,6 +295,8 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 - 实现 commitment 计算、FIFO/aging admission、fair runnable selection。
 - 完成不依赖 torch/CUDA 的纯 Python tests。
 
+当前状态：已实现 `flashdec/scheduler.py` 和 `tests/test_scheduler.py`。planner 不依赖 torch，Mac 已通过 `compileall` 与直接 smoke/invariant 检查；正式 pytest 与完整回归等待 WSL 执行。
+
 ### R1-B：Engine/Cache 集成
 
 - 增加 `state_version` 和 scheduler-facing snapshot。
@@ -308,4 +320,4 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 
 ## 14. 当前状态
 
-本文冻结 R1 的目标语义与实验边界；`flashdec/scheduler.py`、Engine 集成、CPU tests 和 RTX 5070 数据尚未实现或验证。R0 的 multi-trial、complete-step profiler 和 clean-install/release gate 仍应先闭合，避免同时改变 performance baseline 与调度语义。
+本文已冻结 R1 的目标语义与实验边界，并完成隔离的 R1-A 纯策略层及测试代码。Engine `state_version`/snapshot/decision apply、workload policy 对照和 RTX 5070 数据尚未实现或验证。R0 的 multi-trial、complete-step profiler 和 clean-install/release gate 仍应先闭合，再接入 R1-B，避免同时改变 performance baseline 与调度语义。

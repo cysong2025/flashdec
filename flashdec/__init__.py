@@ -5,6 +5,13 @@ __all__ = [
     "AdmissionResult",
     "DecodeEngine",
     "DecodeStepResult",
+    "ActiveRequestMetadata",
+    "BlockAwareScheduler",
+    "RequestSpec",
+    "SchedulerConfig",
+    "SchedulerDecision",
+    "SchedulingSnapshot",
+    "WaitingRequestMetadata",
     "RopeAppendResult",
     "WorkloadConfig",
     "WorkloadResult",
@@ -39,6 +46,34 @@ def __getattr__(name):
         from .cache import PagedKVCache
 
         return PagedKVCache
+    if name in (
+        "ActiveRequestMetadata",
+        "BlockAwareScheduler",
+        "RequestSpec",
+        "SchedulerConfig",
+        "SchedulerDecision",
+        "SchedulingSnapshot",
+        "WaitingRequestMetadata",
+    ):
+        from .scheduler import (
+            ActiveRequestMetadata,
+            BlockAwareScheduler,
+            RequestSpec,
+            SchedulerConfig,
+            SchedulerDecision,
+            SchedulingSnapshot,
+            WaitingRequestMetadata,
+        )
+
+        return {
+            "ActiveRequestMetadata": ActiveRequestMetadata,
+            "BlockAwareScheduler": BlockAwareScheduler,
+            "RequestSpec": RequestSpec,
+            "SchedulerConfig": SchedulerConfig,
+            "SchedulerDecision": SchedulerDecision,
+            "SchedulingSnapshot": SchedulingSnapshot,
+            "WaitingRequestMetadata": WaitingRequestMetadata,
+        }[name]
     if name in ("WorkloadConfig", "WorkloadResult", "run_synthetic_workload"):
         from .workload import WorkloadConfig, WorkloadResult, run_synthetic_workload
 

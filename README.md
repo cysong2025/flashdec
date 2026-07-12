@@ -73,6 +73,7 @@ python -m pytest -q \
   tests/test_decode_reference.py \
   tests/test_paged_cache.py \
   tests/test_rope_append.py \
+  tests/test_scheduler.py \
   tests/test_workload.py \
   tests/test_decode_engine_trial_summary.py \
   tests/test_profile_decode_engine.py
@@ -107,6 +108,7 @@ python -m pytest -vv \
 | Triton launch | num_warps 2/4/8、可选 num_stages | 2 warps、implicit stages |
 | KV runtime | allocate/free/reuse、finish/cancel、backpressure | 单 GPU、单 layer |
 | append backend | torch、独立 CUDA、fused CUDA | GPU Engine 显式 fused CUDA |
+| scheduler | lifetime commitment/FIFO + aging 纯策略 planner | R1-A preview，尚未接入 Engine |
 | workload | short-churn、mixed-steady、long-pressure | wall-clock + memory/lifecycle metrics |
 | profiling | paged kernel、完整 Engine ranges、Chrome trace | instrumented 数据只做归因 |
 
@@ -114,7 +116,7 @@ python -m pytest -vv \
 
 - `v0.1.0` 固定为单 GPU、单 layer、每 request 每 step 一个 decode token。
 - Q/K/V 由调用方提供；不包含完整 Transformer forward、tokenizer、sampling 或网络服务。
-- Block-aware Scheduler v2 已冻结设计但尚未实现；当前压力 workload baseline 仍会显式记录 backpressure/cancellation。
+- Block-aware Scheduler v2 的 R1-A 纯策略 planner 已实现但尚未接入 Engine；当前压力 workload baseline 仍会显式记录 backpressure/cancellation。
 - 不包含 prefix cache、swap/offload、抢占、tensor/pipeline parallel 或多机。
 - CUDA extension 使用 lazy JIT，需要匹配 PyTorch CUDA build 的 Toolkit、NVCC、host compiler 和 Ninja。
 - macOS 工作区只能执行静态检查；正式 correctness/benchmark/profiling 以 RTX 5070 WSL 为准。

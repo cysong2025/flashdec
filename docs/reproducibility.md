@@ -82,6 +82,7 @@ python -m pytest -vv \
   tests/test_decode_reference.py \
   tests/test_paged_cache.py \
   tests/test_rope_append.py \
+  tests/test_scheduler.py \
   tests/test_workload.py \
   tests/test_workload_benchmark.py \
   tests/test_decode_engine_trial_summary.py \

@@ -16,9 +16,11 @@ REQUIRED_PATHS = (
     "flashdec/__init__.py",
     "flashdec/cache.py",
     "flashdec/engine.py",
+    "flashdec/scheduler.py",
     "flashdec/workload.py",
     "docs/AI_INFRA_SCOPE.md",
     "docs/ROADMAP.md",
+    "docs/design_scheduler.md",
     "docs/reproducibility.md",
     "benchmarks/run_decode_engine_workload.py",
     "benchmarks/summarize_decode_engine_trials.py",
@@ -28,6 +30,7 @@ REQUIRED_PATHS = (
     "tests/test_paged_cache.py",
     "tests/test_decode_engine.py",
     "tests/test_workload.py",
+    "tests/test_scheduler.py",
     "tests/test_release_check.py",
 )
 
