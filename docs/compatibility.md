@@ -68,6 +68,7 @@
 - Q 和 K 旋转，V 保持不变。
 - rotated K 写入 token-major paged cache，并返回 block tables/seq_lens。
 - block 边界分配、capacity failure 原子性和 terminal request 检查。
+- `rope_paged_kv_append(..., append_backend="torch" | "cuda")`：默认 `torch` 与 reference 一致；`cuda` 使用 PyTorch RoPE 加 `PagedKVCache.append_cuda()`。
 
 当前限制：
 
@@ -76,6 +77,7 @@
 - 不包含 RoPE scaling、YaRN、NTK-aware scaling 或 interleaved-pair convention。
 - RTX 5070 focused 为 `38 passed in 3.60s`，完整回归为 `186 passed in 4.96s`。
 - native extension 当前要求 CUDA-resident、contiguous FP16/BF16/FP32 token-major cache 与 K/V；Toolkit 前置检查已通过 `nvcc 12.8.93`、`CUDA_HOME=/usr/local/cuda-12.8` 和 Ninja 1.13.0。
+- RoPE 的 `append_backend="cuda"` 集成尚待 RTX 5070 correctness；它不是 fused RoPE kernel，也没有性能结论。
 
 ### Week 11 Native CUDA KV Append
 

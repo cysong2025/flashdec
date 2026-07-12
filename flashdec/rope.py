@@ -85,21 +85,14 @@ def apply_rope(x, positions, rotary_dim=None, base=10_000.0):
     return torch.cat((rotated, x[..., rotary_dim:]), dim=-1)
 
 
-def rope_paged_kv_append_ref(
+def _prepare_rope_paged_kv_append_inputs(
     cache,
-    layer_idx,
     request_ids,
     q,
     k,
     v,
-    rotary_dim=None,
-    base=10_000.0,
 ):
-    """Rotate Q/K at pre-append positions, then append rotated K and raw V.
-
-    This is the semantic baseline for the future CUDA data path. It returns
-    rotated Q plus the metadata needed by paged decode attention.
-    """
+    """Validate and normalize one RoPE + paged append input batch."""
     from .cache import PagedKVCache
 
     if not isinstance(cache, PagedKVCache):
@@ -128,14 +121,103 @@ def rope_paged_kv_append_ref(
     if q.dtype != cache.dtype or k.dtype != cache.dtype or v.dtype != cache.dtype:
         raise ValueError("q, k, and v must use the cache dtype")
 
+    return ids, k, v
+
+
+def _rope_paged_kv_append(
+    cache,
+    layer_idx,
+    request_ids,
+    q,
+    k,
+    v,
+    rotary_dim,
+    base,
+    append_backend,
+):
+    if append_backend not in ("torch", "cuda"):
+        raise ValueError("append_backend must be 'torch' or 'cuda'")
+
+    ids, k, v = _prepare_rope_paged_kv_append_inputs(
+        cache,
+        request_ids,
+        q,
+        k,
+        v,
+    )
+
     positions = cache.next_positions(ids, device=cache.device)
     q_rotated = apply_rope(q, positions, rotary_dim=rotary_dim, base=base)
     k_rotated = apply_rope(k, positions, rotary_dim=rotary_dim, base=base)
-    block_tables = cache.append(layer_idx, ids, k_rotated, v)
+    if append_backend == "torch":
+        block_tables = cache.append(layer_idx, ids, k_rotated, v)
+    else:
+        block_tables = cache.append_cuda(layer_idx, ids, k_rotated, v)
     seq_lens = cache.seq_lens_tensor(ids)
     return RopeAppendResult(
         q=q_rotated,
         positions=positions,
         block_tables=block_tables,
         seq_lens=seq_lens,
+    )
+
+
+def rope_paged_kv_append_ref(
+    cache,
+    layer_idx,
+    request_ids,
+    q,
+    k,
+    v,
+    rotary_dim=None,
+    base=10_000.0,
+):
+    """PyTorch reference: rotate Q/K, then append rotated K and raw V.
+
+    This function permanently selects the ordinary PyTorch ``cache.append``
+    path. It is the semantic baseline for the optional native append path.
+    """
+    return _rope_paged_kv_append(
+        cache,
+        layer_idx,
+        request_ids,
+        q,
+        k,
+        v,
+        rotary_dim,
+        base,
+        append_backend="torch",
+    )
+
+
+def rope_paged_kv_append(
+    cache,
+    layer_idx,
+    request_ids,
+    q,
+    k,
+    v,
+    rotary_dim=None,
+    base=10_000.0,
+    append_backend="torch",
+):
+    """Rotate Q/K and append K/V through a selectable append backend.
+
+    ``append_backend='torch'`` is the default and follows the same path as
+    :func:`rope_paged_kv_append_ref`. ``append_backend='cuda'`` keeps the
+    PyTorch RoPE calculation but writes rotated K/raw V through
+    :meth:`PagedKVCache.append_cuda`. The latter is intentionally not a fused
+    RoPE kernel; it is the integration bridge used to compare semantics and,
+    later, end-to-end append cost.
+    """
+    return _rope_paged_kv_append(
+        cache,
+        layer_idx,
+        request_ids,
+        q,
+        k,
+        v,
+        rotary_dim,
+        base,
+        append_backend=append_backend,
     )

@@ -4,12 +4,12 @@
 
 这一数据路径负责把一个 decode step 的新 Q/K/V 接入 PagedKVCache：先根据每个 request 的当前位置旋转 Q/K，再把 rotated K 和原始 V 写入 physical block，最后返回 paged attention 所需元数据。
 
-当前实现是可读的 PyTorch reference，用来固定 CUDA extension 必须遵循的语义，不作为性能实现。
+`rope_paged_kv_append_ref()` 是可读的 PyTorch reference，用来固定 CUDA extension 必须遵循的语义，不作为性能实现。正式接口 `rope_paged_kv_append()` 可以选择已验证的独立 CUDA K/V 写入路径；RoPE 本身在本阶段仍由 PyTorch 计算。
 
 ## 接口
 
 ```python
-result = flashdec.rope_paged_kv_append_ref(
+result = flashdec.rope_paged_kv_append(
     cache=cache,
     layer_idx=0,
     request_ids=request_ids,
@@ -18,6 +18,7 @@ result = flashdec.rope_paged_kv_append_ref(
     v=v,  # [num_requests, num_kv_heads, head_dim]
     rotary_dim=head_dim,
     base=10_000.0,
+    append_backend="cuda",  # "torch"（默认）或 "cuda"
 )
 
 out = flashdec.decode(
@@ -35,6 +36,8 @@ out = flashdec.decode(
 - `positions`：append 前 position，用于 debug 和 CUDA 对齐。
 - `block_tables`：本次 request rows 的 logical-to-physical block table。
 - `seq_lens`：append 后长度，可直接用于 attention。
+
+`rope_paged_kv_append_ref()` 保持为固定的 `append_backend="torch"` 语义基线；它不因默认 backend 或后续性能实验而改变。
 
 ## Position 语义
 
@@ -75,12 +78,13 @@ read pre-append positions
         +-> apply RoPE to Q
         +-> apply RoPE to K
         |
-PagedKVCache.append(rotated K, raw V)
+torch backend: PagedKVCache.append(rotated K, raw V)
+cuda backend:  PagedKVCache.append_cuda(rotated K, raw V)
         |
 return rotated Q + block_tables + post-append seq_lens
 ```
 
-capacity failure 由 PagedKVCache v2 在写入前统一检查，因此失败时不会创建新 request、分配 block 或增长已有 seq_len。RoPE 可能已经生成临时 tensor，但 cache 状态保持不变。
+capacity failure 由 PagedKVCache v2 在写入前统一检查，因此失败时不会创建新 request、分配 block 或增长已有 seq_len。`append_backend="cuda"` 会先完成 native extension 的 lazy load，再进入 allocator；因此 toolchain/build error 也不会改变 cache state。两种 backend 都可能先生成 RoPE 临时 tensor，但 cache 状态保持不变。
 
 ## 当前支持与限制
 
@@ -88,7 +92,7 @@ capacity failure 由 PagedKVCache v2 在写入前统一检查，因此失败时�
 
 当前不支持：
 
-- fused RoPE + KV append CUDA kernel。独立 CUDA KV append 已实现，正在等待 RTX 5070 JIT build 与 correctness 验证。
+- fused RoPE + KV append CUDA kernel。`append_backend="cuda"` 只替换 rotated K/raw V 的写入，未消除 PyTorch RoPE kernel 或 K 的中间 tensor。
 - interleaved adjacent-pair RoPE。
 - RoPE scaling、YaRN 或 NTK-aware scaling。
 - 多 layer execution。
@@ -110,11 +114,11 @@ focused 通过后执行：
 python -m pytest -vv
 ```
 
-RTX 5070 验证结果：
+PyTorch reference 的 RTX 5070 验证结果：
 
 ```text
 focused: 38 passed in 3.60s
 full:    186 passed in 4.96s
 ```
 
-PyTorch reference 语义已经固定。独立 CUDA KV append 还没有上板结果，也没有性能结论；在其 correctness 稳定后，再实现并比较 fused RoPE + KV append。
+独立 CUDA KV append 已在 RTX 5070 通过 JIT build 与 correctness（focused `34 passed in 3.59s`，full `198 passed in 5.13s`）。本次双 backend 集成新增 GQA、跨 block、FP16/BF16/FP32 对齐和 CPU error-path 测试，等待 RTX 5070 验证。当前没有性能结论；在该集成正确性稳定后，再实现并比较 fused RoPE + KV append。

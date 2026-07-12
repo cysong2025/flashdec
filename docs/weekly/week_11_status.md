@@ -79,6 +79,7 @@ Toolkit 使用 WSL 的 toolkit-only 安装方式；不要在 WSL 安装 `cuda`�
 - 新增 `PagedKVCache.append_cuda()`：保留 Python allocator/lifecycle/capacity 语义，仅将 K/V slot 写入交给 CUDA。
 - 新增 raw op、runtime 对齐、capacity atomicity、contiguity 错误路径测试。
 - 首次 native path 只做 K/V copy，不融合 RoPE；这是为了先建立可解释的 reference/native 对照。
+- 新增 `rope_paged_kv_append(..., append_backend="torch" | "cuda")`；reference API 保持固定 PyTorch append，正式接口才可选择已验证的 CUDA K/V 写入。
 
 上板命令：
 
@@ -93,6 +94,7 @@ export MAX_JOBS=1
 export FLASHDEC_CUDA_VERBOSE=1
 
 python -m pytest -vv \
+  tests/test_rope_append.py \
   tests/test_cuda_kv_append.py \
   tests/test_paged_cache.py \
   tests/test_public_api.py
@@ -121,9 +123,22 @@ full:    198 passed in 5.13s
 
 结论：独立 CUDA KV append 已在 RTX 5070 上完成 JIT 构建和 correctness。它与 Python allocator/reference 在测试覆盖的 FP16/BF16/FP32、跨 block 分配、physical slot 写入、capacity failure 和公开 API 语义上一致；这一结论不代表性能更快，性能比较仍待 benchmark。
 
+## 本次待验证：RoPE 双 backend 集成
+
+本次不改变 RoPE 数学或 CUDA kernel，而是新增正式接口：
+
+```python
+flashdec.rope_paged_kv_append(..., append_backend="torch")
+flashdec.rope_paged_kv_append(..., append_backend="cuda")
+```
+
+`torch` 是默认值，和 `rope_paged_kv_append_ref()` 一致；`cuda` 仍用 PyTorch 计算 Q/K RoPE，只将 rotated K/raw V 写入切换到 `PagedKVCache.append_cuda()`。新增测试要求两条路径在 GQA、跨 block、FP16/BF16/FP32 下对齐，并检查 unknown backend 与 CPU cache 使用 CUDA backend 时不发生 allocator mutation。
+
+这次只验证集成语义，不记录性能数字；native append/fused RoPE 的 benchmark 留到下一步。
+
 ## 下一步
 
-1. 为 RoPE + paged KV append 增加可选 native append 路径，并保持现有 reference fallback。
+1. 在 RTX 5070 验证 RoPE 双 backend focused/full correctness。
 2. 实现 fused RoPE + KV append。
 3. 对比 PyTorch assignment、independent CUDA append 和 fused path 的 latency、launch 数与内存访问。
 

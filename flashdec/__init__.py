@@ -11,6 +11,7 @@ __all__ = [
     "load_cuda_kv_append_extension",
     "paged_decode_attention",
     "paged_decode_attention_ref",
+    "rope_paged_kv_append",
     "rope_paged_kv_append_ref",
 ]
 
@@ -22,12 +23,23 @@ def __getattr__(name):
         from .cache import PagedKVCache
 
         return PagedKVCache
-    if name in ("RopeAppendResult", "apply_rope", "rope_paged_kv_append_ref"):
-        from .rope import RopeAppendResult, apply_rope, rope_paged_kv_append_ref
+    if name in (
+        "RopeAppendResult",
+        "apply_rope",
+        "rope_paged_kv_append",
+        "rope_paged_kv_append_ref",
+    ):
+        from .rope import (
+            RopeAppendResult,
+            apply_rope,
+            rope_paged_kv_append,
+            rope_paged_kv_append_ref,
+        )
 
         return {
             "RopeAppendResult": RopeAppendResult,
             "apply_rope": apply_rope,
+            "rope_paged_kv_append": rope_paged_kv_append,
             "rope_paged_kv_append_ref": rope_paged_kv_append_ref,
         }[name]
     if name in ("cuda_kv_append", "load_cuda_kv_append_extension"):
