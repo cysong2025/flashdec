@@ -20,6 +20,7 @@ REQUIRED_PATHS = (
     "flashdec/workload.py",
     "docs/AI_INFRA_SCOPE.md",
     "docs/ROADMAP.md",
+    "docs/design_multi_layer_kv_transaction.md",
     "docs/design_scheduler.md",
     "docs/reproducibility.md",
     "benchmarks/run_decode_engine_workload.py",

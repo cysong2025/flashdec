@@ -103,7 +103,7 @@ allocate/free/reuse      block_tables/seq_lens
 | 层次 | 当前状态 | 主要缺口 |
 | --- | --- | --- |
 | Reference / Kernel | 已完成主要 correctness、参数实验、最终 profiling 与配置冻结 | 仅在出现明确回归时重新进入 |
-| Paged KV Runtime | 已完成 request lifecycle、free/reuse、capacity atomicity、metrics、churn tests 和 Engine 集成 | Scheduler commitment 与 multi-layer transaction |
+| Paged KV Runtime | 已完成 request lifecycle、free/reuse、capacity atomicity、metrics、churn tests 和 Engine 集成；multi-layer transaction 语义已设计 | transaction begin/write/commit/abort、rollback 与 RTX 实测 |
 | Decode Data Path | 三条路径已通过 RTX correctness；已接入完整 Engine，fused p50 几何平均 1.2226x vs torch | complete-step 阶段耗时归因 |
 | Execution Engine | DecodeEngine v1 已完成 CPU/reference 与 RTX fused/Triton correctness；Scheduler R1-A 纯策略 planner 已实现 | Engine snapshot/decision apply、lifecycle commitment 与 workload 实测 |
 | End-to-End Evaluation | 首轮 12-case workload/invariant/内存分析已完成；p50 几何平均 1.0537x | 3-trial 尾延迟稳定性、release 级结论 |

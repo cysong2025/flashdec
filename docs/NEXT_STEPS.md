@@ -218,4 +218,4 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 拉取最新 multi-trial/aggregator/profiler/release candidate，在 RTX 5070 上依次运行 focused tests、`--quick --trials 2`、正式 `--trials 3`、trial summarizer 和 mixed-steady quick profiler。数据回传并冻结结论后，在新的 WSL venv 执行 `docs/reproducibility.md` 全流程；所有 gate 通过前保持版本 `0.0.0`，不创建 tag。
 
-完成 `v0.1.0` 后不继续增加零散 kernel。Scheduler v2 的 R1-A 纯策略 planner 与 focused tests 已提前隔离实现；release gate 闭合后的下一条代码主线是 R1-B Engine/Cache 集成：`state_version`、scheduler-facing snapshot、decision apply 与 lifecycle commitment release。随后进入 R1-C，对比 `cancel_on_backpressure`、`greedy_step_only` 与 `lifetime_fifo_aging`，不能退化成只看本 step 空闲 block 的策略。Scheduler 验证完成后才开始 multi-layer KV token transaction。
+完成 `v0.1.0` 后不继续增加零散 kernel。Scheduler v2 的 R1-A 纯策略 planner 与 focused tests 已提前隔离实现；release gate 闭合后的下一条代码主线是 R1-B Engine/Cache 集成：`state_version`、scheduler-facing snapshot、decision apply 与 lifecycle commitment release。随后进入 R1-C，对比 `cancel_on_backpressure`、`greedy_step_only` 与 `lifetime_fifo_aging`，不能退化成只看本 step 空闲 block 的策略。Scheduler 验证完成后才按 `docs/design_multi_layer_kv_transaction.md` 实现 R2，不能只删除 `num_layers=1` 检查。

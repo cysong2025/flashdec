@@ -225,6 +225,8 @@ request larger than schedulable capacity -> explicit rejection
 
 优先级：P1，是 v0.2 的第二条核心深度主线。预计 2 个阶段周。
 
+当前状态：状态机、committed/pending seq_len、shared location、abort rollback、sequential layer Engine API、测试和 benchmark 边界已在 `docs/design_multi_layer_kv_transaction.md` 冻结；代码与 RTX 5070 证据尚未开始。
+
 ### 要回答的问题
 
 真实 Transformer 的一个 token 会为所有 layer 写入 K/V，但 request seq_len 只能增加一次。当前逐 layer 调用 `append()` 会错误地多次推进 seq_len，因此不能通过删除 `num_layers=1` 检查来解决。
@@ -244,13 +246,16 @@ exception before commit
   -> seq_len and ownership remain unchanged
 ```
 
+open transaction 中 committed `seq_len` 保持不变，各 layer attention 使用 `effective_seq_len = committed_seq_len + 1`。已经写入 committed length 之外的 partial bytes 在 abort 后保持不可见，无需做昂贵清零。
+
 ### 工作内容
 
 - `KVAppendTransaction` 或等价内部对象。
 - block location 对所有 layer 一致，K/V storage 仍保留 layer 维度。
+- 第一版 Cache 同时只允许一个 open batch transaction，所有 request 一起 commit/abort。
 - PyTorch multi-layer append reference。
 - CUDA 路径第一版允许每 layer 一个 fused launch，但 allocator/preflight/commit 只执行一次。
-- DecodeEngine 增加明确的 multi-layer API；保留单 layer compatibility wrapper。
+- DecodeEngine 增加 sequential `begin_step/step_layer/commit_step` API；保留单 layer compatibility wrapper。
 - metrics 增加 reserved/active bytes，并区分 logical blocks 与跨 layer 实际字节。
 
 ### 核心测试
@@ -357,11 +362,12 @@ capacity failure -> refcount and ownership unchanged
 
 ## 11. 当前立即执行顺序
 
-1. RTX 5070 运行现有 `--quick --trials 2` 与正式 `--trials 3`。
-2. 运行 multi-trial 聚合器并冻结 Week 12 p50/p90/p99 结论。
-3. 实现 complete-step profiler，完成 append/attention/runtime 阶段归因。
-4. 完成 `v0.1.0` reproducibility 与 release。
-5. 开始 `flashdec/scheduler.py`，先做纯 CPU deterministic policy 和 tests。
-6. scheduler correctness 完成后再接 GPU workload，不并行启动 multi-layer/prefix。
+1. WSL 先验证 R1-A `tests/test_scheduler.py`，并完成现有 focused/full regression。
+2. RTX 5070 运行 `--quick --trials 2` 与正式 `--trials 3`，使用聚合器冻结 Week 12 p50/p90/p99 结论。
+3. 运行已实现的 complete-step profiler，完成 append/attention/runtime 阶段归因。
+4. 完成 clean-install、`v0.1.0` reproducibility 与 release。
+5. 实现 R1-B Engine/Cache snapshot、state version、decision apply 与 commitment lifecycle。
+6. 实现 R1-C 三策略 workload 对照和 boundary-deadlock 实验。
+7. Scheduler correctness/benchmark 冻结后，再按 R2 设计实现 multi-layer transaction；不并行启动 prefix。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

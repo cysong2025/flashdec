@@ -16,6 +16,7 @@
 - 可选 DecodeEngine profiler ranges、阶段 CPU/device totals、CUDA event count 和 Chrome trace。
 - `scripts/check_release.py` release artifact/version/Git gate checker。
 - Scheduler v2 设计规格与 R1-A 纯 Python planner：lifetime block commitment、logical/physical capacity 分离、FIFO + aging、公平 runnable batch 与结构化 decision。
+- Multi-layer KV Token Transaction 设计规格：committed/pending seq_len、shared location、逐层执行、batch commit/abort 和 rollback invariant。
 
 ### Changed
 
