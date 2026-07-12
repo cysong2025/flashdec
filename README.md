@@ -13,7 +13,7 @@ FlashDec 是一个 12 周 AI Infra 工程项目，主题是 **单 GPU LLM decode
 
 ## 当前状态
 
-Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 PyTorch RoPE + paged KV append focused 为 `38 passed in 3.60s`，完整回归为 `186 passed in 4.96s`；独立 CUDA KV append 为 `34 passed in 3.59s` / `198 passed in 5.13s`，RoPE `torch`/`cuda` 集成为 `56 passed in 3.85s` / `204 passed in 4.47s`，fused 路径为 `66 passed in 44.35s` / `214 passed in 4.52s`。三路径 p50 几何平均表明 fused 为 `1.2226x`。DecodeEngine v1 已完成 RTX 5070 correctness；当前进入 Week 12 动态 workload 端到端评测层。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 fused append-only p50 几何平均为 `1.2226x`。Week 12 的首轮动态 workload 已完成 12/12 invariant 验证；fused complete-step p50/p90/tokens-s 几何平均为 `1.0537x/1.0588x/1.0674x`，但 p99 为 `0.9641x`，因此已进入多 trial 与交替 backend 顺序的稳定性验证。
 
 主要文档：
 
@@ -34,6 +34,7 @@ Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 den
 - [Week 9 状态记录](docs/weekly/week_9_status.md)
 - [Week 10 状态记录](docs/weekly/week_10_status.md)
 - [Week 11 状态记录](docs/weekly/week_11_status.md)
+- [Week 12 状态记录](docs/weekly/week_12_status.md)
 - [性能实验记录](docs/perf_experiments.md)
 - [性能报告](docs/performance_report.md)
 - [Paged KV Cache 设计说明](docs/design_paged_kv.md)

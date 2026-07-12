@@ -122,7 +122,17 @@ def _preload_native_backends(append_backends):
         load_cuda_kv_append_extension()
 
 
-def _metadata(torch, result, args, dtype_name, spec, append_backend):
+def _metadata(
+    torch,
+    result,
+    args,
+    dtype_name,
+    spec,
+    append_backend,
+    trial,
+    trial_seed,
+    backend_order,
+):
     metrics = result.engine_metrics
     cache = metrics["cache"]
     return {
@@ -150,6 +160,9 @@ def _metadata(torch, result, args, dtype_name, spec, append_backend):
         "cancel_interval": spec.config.cancel_interval,
         "cancel_probability": spec.config.cancel_probability,
         "max_blocks": spec.max_blocks,
+        "trial": trial,
+        "trial_count": args.trials,
+        "backend_order": "->".join(backend_order),
         "p99_ms": f"{result.p99_ms:.6f}",
         "tokens_per_second": f"{result.tokens_per_second:.3f}",
         "mean_active_batch": f"{result.mean_active_batch:.3f}",
@@ -175,7 +188,7 @@ def _metadata(torch, result, args, dtype_name, spec, append_backend):
             "wall-clock submission/admission + Engine.step + finish/cancel; "
             "excludes Q/K/V generation, prompt prefill, warmup, and JIT build"
         ),
-        "seed": args.seed,
+        "seed": trial_seed,
     }
 
 
@@ -204,7 +217,28 @@ def _quick_spec(spec):
     return replace(spec, config=replace(spec.config, steps=steps))
 
 
-def _run_workload(torch, args, dtype_name, dtype, spec, append_backend):
+def _trial_append_backends(append_backends, trial_index):
+    """Alternate execution order to reduce fixed backend-order bias."""
+    trial_index = int(trial_index)
+    if trial_index < 0:
+        raise ValueError("trial_index must be non-negative")
+    ordered = list(append_backends)
+    if trial_index % 2:
+        ordered.reverse()
+    return ordered
+
+
+def _run_workload(
+    torch,
+    args,
+    dtype_name,
+    dtype,
+    spec,
+    append_backend,
+    trial,
+    trial_seed,
+    backend_order,
+):
     engine = _make_engine(
         torch,
         dtype,
@@ -218,12 +252,22 @@ def _run_workload(torch, args, dtype_name, dtype, spec, append_backend):
         spec.config,
         num_q_heads=NUM_Q_HEADS,
         warmup_steps=args.warmup_steps,
-        seed=args.seed,
+        seed=trial_seed,
     )
     return summarize_latencies(
         name="decode_engine_workload",
         latencies_ms=result.latencies_ms,
-        metadata=_metadata(torch, result, args, dtype_name, spec, append_backend),
+        metadata=_metadata(
+            torch,
+            result,
+            args,
+            dtype_name,
+            spec,
+            append_backend,
+            trial,
+            trial_seed,
+            backend_order,
+        ),
     )
 
 
@@ -241,6 +285,7 @@ def parse_args():
     parser.add_argument("--decode-backend", choices=["triton"], default="triton")
     parser.add_argument("--num-warps", type=int, choices=[2], default=2)
     parser.add_argument("--warmup-steps", type=int, default=5)
+    parser.add_argument("--trials", type=int, default=1, help="Repeat each paired workload; adjacent trials reverse backend order.")
     parser.add_argument("--seed", type=int, default=431)
     parser.add_argument("--quick", action="store_true", help="Shorten every workload while preserving pressure boundaries.")
     parser.add_argument("--output", default="benchmarks/results/week12_decode_engine_workload.csv")
@@ -249,8 +294,10 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.warmup_steps < 0:
-        raise SystemExit("warmup-steps must be non-negative")
+    if args.warmup_steps < 0 or args.trials <= 0:
+        raise SystemExit("warmup-steps must be non-negative and trials must be positive")
+    if len(set(args.append_backends)) != len(args.append_backends):
+        raise SystemExit("append-backends must be unique")
 
     import torch
 
@@ -264,15 +311,34 @@ def main():
     results = []
     for dtype_name, dtype in _requested_dtypes(torch, args.dtype):
         for spec in specs:
-            per_backend = [
-                _run_workload(torch, args, dtype_name, dtype, spec, append_backend)
-                for append_backend in args.append_backends
-            ]
-            torch_result = next((item for item in per_backend if item.metadata["append_backend"] == "torch"), None)
-            if torch_result is None:
-                results.extend(per_backend)
-            else:
-                results.extend(_with_speedup(item, torch_result.p50_ms) for item in per_backend)
+            for trial_index in range(args.trials):
+                trial = trial_index + 1
+                trial_seed = args.seed + trial_index
+                backend_order = _trial_append_backends(args.append_backends, trial_index)
+                per_backend = [
+                    _run_workload(
+                        torch,
+                        args,
+                        dtype_name,
+                        dtype,
+                        spec,
+                        append_backend,
+                        trial,
+                        trial_seed,
+                        backend_order,
+                    )
+                    for append_backend in backend_order
+                ]
+                torch_result = next(
+                    (item for item in per_backend if item.metadata["append_backend"] == "torch"),
+                    None,
+                )
+                if torch_result is None:
+                    results.extend(per_backend)
+                else:
+                    results.extend(
+                        _with_speedup(item, torch_result.p50_ms) for item in per_backend
+                    )
 
     write_csv(results, args.output)
     for result in results:

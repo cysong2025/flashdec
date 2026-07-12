@@ -80,11 +80,14 @@ quick 成功后运行完整实验：
 
 ```bash
 python benchmarks/run_decode_engine_workload.py \
+  --trials 3 \
   --dtype both \
-  --output benchmarks/results/week12_decode_engine_workload.csv
+  --output benchmarks/results/week12_decode_engine_workload_trials3.csv
 ```
 
 默认同时测试 `append_backend=torch` 和 `append_backend=fused_cuda`，decode 固定为已冻结的 Triton `block_size=32, num_warps=2`。如果只定位 fused GPU path，可添加 `--append-backends fused_cuda`；此时 CSV 不会包含相对 torch 的 speedup。
+
+正式结果使用 `--trials 3`。trial 1/3 按命令行 backend 顺序执行，trial 2 反转顺序；seed 从基础值逐 trial 加一。CSV 明确记录 `trial`、`trial_count`、`backend_order` 和实际 seed，避免固定执行顺序或单一输入样本主导结论。
 
 ## 结果解释规则
 

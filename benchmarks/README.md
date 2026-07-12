@@ -76,6 +76,7 @@ python benchmarks/run_num_stages_sweep.py \
 - `results/week9_summary.md`：paged decode profiler 与 CUDA event 摘要。
 - `results/week9_final_default_summary.md`：token-major、block32、2 warps 的 FP16/BF16 四场景最终 profiling 摘要。
 - `results/week10_num_stages_summary.md`：`default/1/2/3/4` staging full sweep、几何平均和最终冻结决策。
+- `results/week12_decode_engine_workload_summary.md`：动态 runtime 首轮 full workload 的 complete-step latency、吞吐、allocator/backpressure 指标和多 trial 后续方法。
 
 Week 12 dynamic runtime 快速验证：
 
@@ -87,3 +88,14 @@ python benchmarks/run_decode_engine_workload.py \
 ```
 
 完整运行使用 `--workload all`（默认）、`warmup_steps=5`，并默认比较 `torch` 与 `fused_cuda` append。计时是完整 runtime 的 wall-clock，包含 submit/admit、`Engine.step` 和 finish/cancel；它不能与 Week 11 的 append-only CUDA-event 数字直接比较。
+
+为减少尾延迟噪声和固定执行顺序偏差，正式结论使用：
+
+```bash
+python benchmarks/run_decode_engine_workload.py \
+  --trials 3 \
+  --dtype both \
+  --output benchmarks/results/week12_decode_engine_workload_trials3.csv
+```
+
+相邻 trial 会反转 append backend 顺序，并使用 `seed + trial_index`；CSV 的 `trial`、`trial_count`、`backend_order` 和 `seed` 可用于严格配对。

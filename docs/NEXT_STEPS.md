@@ -162,7 +162,7 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 阶段 6：端到端 Workload 与系统指标
 
-状态：实现完成，等待 RTX 5070 quick/full workload 结果与分析摘要。
+状态：首轮 quick/full 已完成；12/12 full rows 通过 invariant，等待 3-trial 稳定性复验后冻结结论。
 
 目标：证明系统在动态请求负载下的性能和内存行为，而不只报告单 kernel latency。
 
@@ -214,4 +214,4 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 ## 当前立即执行
 
-先在 RTX 5070 上运行 workload focused tests 与 quick benchmark；确认 three workloads 的 invariants 和 CSV 均正常后，再执行完整 FP16/BF16 对比，并将 CSV 同步回 Mac 生成 Week 12 摘要。
+拉取最新多 trial benchmark 改进，在 RTX 5070 上先运行 focused tests 与 `--quick --trials 2`，再运行正式 `--trials 3`。数据同步回 Mac 后聚合 trial 中位数/几何平均；若 p50/p90 稳定，再进入 `v0.1.0` reproducibility 与 release 文档。
