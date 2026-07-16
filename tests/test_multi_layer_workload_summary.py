@@ -130,9 +130,22 @@ class MultiLayerWorkloadSummaryTests(unittest.TestCase):
         self.assertEqual(len(aggregates), 2)
         self.assertAlmostEqual(overall["p50"], 1.25)
         self.assertAlmostEqual(overall["profile_cuda_events"], 4.0)
+        self.assertAlmostEqual(
+            aggregates[0]["absolute"]["torch"][
+                "profile_append_device_ms_per_layer"
+            ],
+            0.4,
+        )
+        self.assertAlmostEqual(
+            aggregates[0]["absolute"]["fused_cuda"]["p50_ms"],
+            3.2,
+        )
         self.assertIn("Rows: 12; paired trials: 6", markdown)
         self.assertIn("attribution-only", markdown)
         self.assertIn("fused_faster", markdown)
+        self.assertIn("Absolute Attribution Medians", markdown)
+        self.assertIn("0.400000", markdown)
+        self.assertIn("0.200000", markdown)
 
     def test_rejects_incomplete_matrix(self):
         with self.assertRaisesRegex(MultiLayerValidationError, "incomplete"):

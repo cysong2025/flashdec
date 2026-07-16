@@ -189,4 +189,4 @@ python benchmarks/summarize_multi_layer_trials.py \
   --output benchmarks/results/r2_multi_layer_engine_trials3_summary.md
 ```
 
-正式矩阵共 `12 cases x 2 dtypes x 2 backends x 3 trials = 144 rows`。输入生成、context seed、JIT build、profiler probe 和 rollback probe 均排除在正式 complete-token latency 外；profiler 字段只做 append/decode/launch 归因，rollback latency 不混入正常吞吐。
+正式矩阵共 `12 cases x 2 dtypes x 2 backends x 3 trials = 144 rows`。输入生成、context seed、JIT build、profiler probe 和 rollback probe 均排除在正式 complete-token latency 外；profiler 字段只做 append/decode/launch 归因，rollback latency 不混入正常吞吐。Summary 同时报告 ratio 与 torch/fused 绝对 attribution median，任何低于 1 的 ratio 都必须结合绝对时间解释。

@@ -411,6 +411,30 @@ def aggregate(pairs):
                     }
                     for metric, metric_values in values.items()
                 },
+                "absolute": {
+                    backend: {
+                        field: statistics.median(
+                            _float(
+                                pair.torch_row
+                                if backend == "torch"
+                                else pair.fused_row,
+                                field,
+                                allow_zero=field == "rollback_p50_ms",
+                            )
+                            for pair in group
+                        )
+                        for field in (
+                            "p50_ms",
+                            "profile_append_device_ms_per_layer",
+                            "profile_decode_device_ms_per_layer",
+                            "profile_cuda_event_count",
+                            "begin_host_mean_ms",
+                            "commit_host_mean_ms",
+                            "rollback_p50_ms",
+                        )
+                    }
+                    for backend in REQUIRED_BACKENDS
+                },
             }
         )
     overall = {
@@ -461,6 +485,32 @@ def render_markdown(input_path, pairs, aggregates, overall):
     lines.extend(
         [
             "",
+            "## Absolute Attribution Medians",
+            "",
+            "| dtype | case | backend | token p50 ms | append device ms/layer | decode device ms/layer | CUDA events | begin host ms | commit host ms | rollback p50 ms |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in aggregates:
+        for backend in REQUIRED_BACKENDS:
+            absolute = row["absolute"][backend]
+            rollback = (
+                "N/A"
+                if absolute["rollback_p50_ms"] == 0.0
+                else f"{absolute['rollback_p50_ms']:.6f}"
+            )
+            lines.append(
+                f"| {row['dtype']} | {row['case']} | {backend} | "
+                f"{absolute['p50_ms']:.6f} | "
+                f"{absolute['profile_append_device_ms_per_layer']:.6f} | "
+                f"{absolute['profile_decode_device_ms_per_layer']:.6f} | "
+                f"{absolute['profile_cuda_event_count']:.0f} | "
+                f"{absolute['begin_host_mean_ms']:.6f} | "
+                f"{absolute['commit_host_mean_ms']:.6f} | {rollback} |"
+            )
+    lines.extend(
+        [
+            "",
             "## Overall Geometric Mean",
             "",
             "| metric | fused vs torch |",
@@ -479,6 +529,7 @@ def render_markdown(input_path, pairs, aggregates, overall):
             "## Interpretation",
             "",
             "- `unstable_crosses_1` means p50 crosses 1 across trials; do not claim a stable backend win.",
+            "- A ratio below 1 means fused is worse for that metric; inspect the absolute attribution table before explaining why.",
             "- p99 must be reported with its range.",
             "- Profiler device totals and event counts explain launch/stage behavior but are not release latency.",
             "- Rollback latency remains an error-path metric and is not mixed into normal throughput.",
