@@ -62,8 +62,8 @@ python benchmarks/summarize_scheduler_workload.py \
 - `step_layer()` 的输入、写入或 decode 异常会自动 abort 整个 token。
 - open transaction 期间禁止 submit/admit、scheduler snapshot/decision、prefill、finish/cancel 和另一条 `step()`。
 - scheduler-managed begin/commit/abort 都推进 Engine/Cache version，使旧 decision 明确 stale。
-- 单层 `append_backend="torch"` 的 `step()` 已包装为同一 transaction 语义；现有 CUDA/fused 单层 fast path 在 R2-C 前保持不变。
-- multi-layer transaction 当前明确要求 `append_backend="torch"`；native/fused location-only write 属于 R2-C。
+- 单层 `append_backend="torch"` 的 `step()` 已包装为同一 transaction 语义；现有 CUDA/fused 单层 fast path 保持兼容。
+- R2-B 验证时 multi-layer transaction 固定使用 `append_backend="torch"`；R2-C 在同一 transaction 语义上增加 fused CUDA location-only write。
 - 新增 2/4-layer per-layer reference、row order、自动 rollback、early commit、lifecycle/scheduler 互斥和单层兼容测试。
 
 R2-B 已完成 RTX 5070 WSL focused/full correctness，冻结 sequential layer API、异常 rollback、scheduler/open transaction 互斥和单层 compatibility 结论。本轮 pytest 总耗时只作为工程回归记录，不生成性能结论。
@@ -76,10 +76,14 @@ R2-B 已完成 RTX 5070 WSL focused/full correctness，冻结 sequential layer A
 - `DecodeEngine.begin_step()` 现在允许 `append_backend="fused_cuda"`；`step_layer()` 复用同一 transaction 执行 fused RoPE/KV write，再调用 reference 或 Triton paged decode。
 - 原有单层 fused `DecodeEngine.step()` fast path 未修改；非 fused 的独立 CUDA append 仍不进入 multi-layer transaction。
 - 新增 GPU tests 覆盖 2-layer、两个连续 token、position 1、partial RoPE、GQA、FP16/BF16、fused CUDA + Triton 对齐，以及第二层输入失败后的 block rollback。
-- Mac `compileall` 与 `git diff --check` 已通过；当前没有本机 torch/CUDA，不能生成 GPU correctness 结论。
+- Mac `compileall` 与 `git diff --check` 通过。
+- R2-C 验证 commit：`6afc89f`。
+- R2-C RTX 5070 focused：`131 passed in 6.21s`。
+- R2-C RTX 5070 完整回归：`326 passed, 20 subtests passed in 6.23s`。
+- focused/full 摘要均无 skipped、warning 或 failure；R2-C correctness 验收完成。pytest 总耗时仅作为工程回归记录，不形成性能结论。
 
 ## 下一步
 
-1. 在 RTX 5070 运行 R2-C focused tests，记录 FP16/BF16、Triton、rollback 和 single-layer compatibility 结果。
-2. focused 通过后运行完整回归；只有两者都通过才把 R2-C 标记为完成。
-3. R2-C 冻结后进入 R2-D multi-layer workload；不重新做已冻结 kernel 参数 sweep，也不并行启动 shared prefix。
+1. 进入 R2-D multi-layer workload，固定 layer 数、dtype、batch/context、trial/seed 和计时边界。
+2. 分离 complete-token latency、per-layer device time、allocator/preflight/commit overhead，并记录 KV bytes、launch 和 rollback 指标。
+3. 完成 R2-D 后执行 clean-machine install、版本升级和 release tag；不重新做已冻结 kernel 参数 sweep，也不并行启动 shared prefix。

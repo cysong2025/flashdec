@@ -103,4 +103,4 @@ CPU/reference tests 覆盖动态 admission、batch row order、finish/cancel、b
 fused_cuda append + Triton paged decode == PyTorch paged reference
 ```
 
-R2-B 新增 2/4-layer per-layer reference、异常自动 rollback、scheduler/open transaction 互斥和单层 compatibility tests；commit `a009b45` 已在 RTX 5070 WSL 通过 focused `71 passed, 8 subtests passed` 和完整回归 `322 passed, 20 subtests passed`。R2-C 新增 fused CUDA location-only sequential path 与 2-layer FP16/BF16、GQA、Triton、rollback tests，当前等待 RTX 验证；详细状态见 Week 13 文档。
+R2-B 新增 2/4-layer per-layer reference、异常自动 rollback、scheduler/open transaction 互斥和单层 compatibility tests；commit `a009b45` 已在 RTX 5070 WSL 通过 focused `71 passed, 8 subtests passed` 和完整回归 `322 passed, 20 subtests passed`。R2-C fused CUDA location-only sequential path 已在 commit `6afc89f` 通过 focused `131 passed` 和完整回归 `326 passed, 20 subtests passed`，覆盖 2-layer FP16/BF16、GQA、Triton 与 rollback；详细状态见 Week 13 文档。
