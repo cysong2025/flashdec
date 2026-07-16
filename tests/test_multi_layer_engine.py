@@ -1,11 +1,13 @@
 """DecodeEngine coverage for sequential multi-layer token transactions."""
 
 from dataclasses import replace
+import shutil
 
 import pytest
 
 
 torch = pytest.importorskip("torch")
+from torch.utils.cpp_extension import CUDA_HOME
 
 import flashdec
 from flashdec.cache import PagedKVCache
@@ -18,6 +20,17 @@ from flashdec.engine import (
 from flashdec.paged_reference import paged_decode_attention_ref
 from flashdec.rope import apply_rope
 from flashdec.scheduler import BlockAwareScheduler, RequestSpec, SchedulerConfig
+
+
+HAS_CUDA_TOOLCHAIN = (
+    torch.cuda.is_available() and CUDA_HOME is not None and shutil.which("nvcc") is not None
+)
+CUDA_TOOLCHAIN_REASON = (
+    "CUDA GPU, CUDA_HOME, and nvcc are required for fused multi-layer tests"
+)
+CUDA_DTYPES = [torch.float16]
+if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+    CUDA_DTYPES.append(torch.bfloat16)
 
 
 def _cache(num_layers=2, block_size=2, max_blocks=4):
@@ -38,6 +51,32 @@ def _inputs(batch_size, seed):
     k = torch.randn((batch_size, 1, 4), dtype=torch.float32)
     v = torch.randn_like(k)
     return q, k, v
+
+
+def _cuda_cache(dtype):
+    return PagedKVCache(
+        num_layers=2,
+        num_kv_heads=2,
+        head_dim=64,
+        block_size=32,
+        max_blocks=4,
+        dtype=dtype,
+        device="cuda",
+    )
+
+
+def _cuda_inputs(batch_size, dtype, seed):
+    torch.manual_seed(seed)
+    q = torch.randn((batch_size, 4, 64), device="cuda", dtype=dtype)
+    k = torch.randn((batch_size, 2, 64), device="cuda", dtype=dtype)
+    v = torch.randn_like(k)
+    return q, k, v
+
+
+def _cuda_tolerances(dtype):
+    if dtype == torch.float16:
+        return 2e-2, 2e-2, 3e-3, 3e-3
+    return 4e-2, 4e-2, 2e-2, 2e-2
 
 
 @pytest.mark.parametrize("num_layers", [2, 4])
@@ -201,12 +240,31 @@ def test_scheduler_cannot_replan_during_open_engine_transaction():
     assert engine.validate_invariants()
 
 
-def test_multi_layer_engine_requires_reference_transaction_append_backend():
+def test_multi_layer_fused_backend_cpu_failure_automatically_aborts_transaction():
     engine = DecodeEngine(_cache(num_layers=2), append_backend="fused_cuda")
     engine.add_request(1)
     engine.admit()
+    transaction = engine.begin_step([1])
+    q, k, v = _inputs(1, 621)
 
-    with pytest.raises(RuntimeError, match="append_backend='torch'"):
+    with pytest.raises(ValueError, match="CUDA-resident"):
+        engine.step_layer(transaction, 0, q, k, v)
+    assert engine.cache.num_used_blocks == 0
+    assert engine.cache.request_state(1)["seq_len"] == 0
+    assert engine.metrics()["transaction_abort_count"] == 1
+    assert engine.metrics()["open_step_transaction_count"] == 0
+    assert engine.validate_invariants()
+
+
+def test_multi_layer_engine_rejects_unfused_cuda_transaction_backend():
+    engine = DecodeEngine(_cache(num_layers=2), append_backend="cuda")
+    engine.add_request(1)
+    engine.admit()
+
+    with pytest.raises(
+        RuntimeError,
+        match="append_backend='torch' or 'fused_cuda'",
+    ):
         engine.begin_step([1])
     assert engine.cache.num_used_blocks == 0
     assert engine.validate_invariants()
@@ -224,4 +282,128 @@ def test_single_layer_step_remains_compatible_through_transaction_wrapper():
     assert result.seq_lens.tolist() == [1]
     assert engine.cache.metrics()["transaction_commit_count"] == 1
     assert engine.metrics()["completed_step_count"] == 1
+    assert engine.validate_invariants()
+
+
+@pytest.mark.skipif(not HAS_CUDA_TOOLCHAIN, reason=CUDA_TOOLCHAIN_REASON)
+@pytest.mark.parametrize("dtype", CUDA_DTYPES)
+def test_multi_layer_fused_cuda_triton_matches_torch_reference(dtype):
+    pytest.importorskip("triton")
+    fused_engine = DecodeEngine(
+        _cuda_cache(dtype),
+        append_backend="fused_cuda",
+        decode_backend="triton",
+        num_warps=2,
+    )
+    reference_engine = DecodeEngine(
+        _cuda_cache(dtype),
+        append_backend="torch",
+        decode_backend="reference",
+    )
+    for engine in (fused_engine, reference_engine):
+        engine.add_request(10)
+        engine.add_request(20)
+        engine.admit()
+
+    output_rtol, output_atol, cache_rtol, cache_atol = _cuda_tolerances(dtype)
+    for step_idx in range(2):
+        fused_transaction = fused_engine.begin_step([20, 10])
+        reference_transaction = reference_engine.begin_step([20, 10])
+        assert fused_transaction.positions.tolist() == [step_idx, step_idx]
+        torch.testing.assert_close(
+            fused_transaction.physical_block_ids,
+            reference_transaction.physical_block_ids,
+        )
+        torch.testing.assert_close(
+            fused_transaction.block_offsets,
+            reference_transaction.block_offsets,
+        )
+
+        for layer_idx in range(2):
+            q, k, v = _cuda_inputs(
+                2,
+                dtype,
+                seed=701 + step_idx * 10 + layer_idx,
+            )
+            fused_result = fused_engine.step_layer(
+                fused_transaction,
+                layer_idx,
+                q,
+                k,
+                v,
+                rotary_dim=32,
+            )
+            reference_result = reference_engine.step_layer(
+                reference_transaction,
+                layer_idx,
+                q,
+                k,
+                v,
+                rotary_dim=32,
+            )
+            torch.cuda.synchronize()
+
+            torch.testing.assert_close(
+                fused_result.output,
+                reference_result.output,
+                rtol=output_rtol,
+                atol=output_atol,
+            )
+            torch.testing.assert_close(
+                fused_engine.cache.k_cache[layer_idx],
+                reference_engine.cache.k_cache[layer_idx],
+                rtol=cache_rtol,
+                atol=cache_atol,
+            )
+            torch.testing.assert_close(
+                fused_engine.cache.v_cache[layer_idx],
+                reference_engine.cache.v_cache[layer_idx],
+                rtol=0.0,
+                atol=0.0,
+            )
+            assert fused_engine.cache.seq_lens_tensor([20, 10]).tolist() == [
+                step_idx,
+                step_idx,
+            ]
+
+        fused_commit = fused_engine.commit_step(fused_transaction)
+        reference_commit = reference_engine.commit_step(reference_transaction)
+        assert fused_commit.seq_lens.tolist() == [step_idx + 1, step_idx + 1]
+        torch.testing.assert_close(fused_commit.seq_lens, reference_commit.seq_lens)
+
+    assert fused_engine.cache.metrics()["transaction_layer_write_count"] == 4
+    assert fused_engine.metrics()["transaction_layer_step_count"] == 4
+    assert fused_engine.validate_invariants()
+    assert reference_engine.validate_invariants()
+
+
+@pytest.mark.skipif(not HAS_CUDA_TOOLCHAIN, reason=CUDA_TOOLCHAIN_REASON)
+def test_multi_layer_fused_cuda_write_failure_rolls_back_reserved_block():
+    engine = DecodeEngine(
+        _cuda_cache(torch.float16),
+        append_backend="fused_cuda",
+        decode_backend="reference",
+    )
+    engine.add_request("request")
+    engine.admit()
+    transaction = engine.begin_step(["request"])
+    q, k, v = _cuda_inputs(1, torch.float16, seed=731)
+    engine.step_layer(transaction, 0, q, k, v)
+    bad_k = torch.randn(
+        (1, 64, 2),
+        device="cuda",
+        dtype=torch.float16,
+    ).transpose(1, 2)
+    assert bad_k.shape == k.shape
+    assert not bad_k.is_contiguous()
+
+    with pytest.raises(ValueError, match="contiguous"):
+        engine.step_layer(transaction, 1, q, bad_k, v)
+
+    assert engine.cache.request_state("request")["seq_len"] == 0
+    assert engine.cache.request_block_ids("request") == ()
+    assert engine.cache.num_used_blocks == 0
+    assert engine.cache.metrics()["transaction_rollback_block_count"] == 1
+    assert engine.cache.metrics()["transaction_layer_write_count"] == 1
+    assert engine.metrics()["transaction_abort_count"] == 1
     assert engine.validate_invariants()

@@ -430,15 +430,15 @@ class DecodeEngine:
     def begin_step(self, request_ids=None):
         """Begin one token transaction for a stable batch of active requests.
 
-        R2-B supports the readable PyTorch append path.  Native/fused
-        location-only transaction writes are added in R2-C; their existing
-        single-layer ``step()`` path remains unchanged until then.
+        The readable PyTorch path and the fused CUDA location-only path share
+        the same Cache transaction allocator.  The existing single-layer
+        native/fused ``step()`` fast paths remain available for compatibility.
         """
         self._require_no_open_step("begin another decode step")
         self._require_cache_synchronized()
-        if self.append_backend != "torch":
+        if self.append_backend not in ("torch", "fused_cuda"):
             raise RuntimeError(
-                "R2-B multi-layer transactions require append_backend='torch'"
+                "multi-layer transactions require append_backend='torch' or 'fused_cuda'"
             )
         ids = self._normalize_active_ids(request_ids)
         self._validate_scheduler_runnable_ids(ids)
@@ -488,7 +488,7 @@ class DecodeEngine:
         rotary_dim=None,
         base=10_000.0,
     ):
-        """Run RoPE, reference transaction write, and paged decode for one layer.
+        """Run RoPE/KV write and paged decode for one transaction layer.
 
         Any input, write, or decode exception aborts the whole open token so
         committed lengths and block ownership remain unchanged.
@@ -867,6 +867,17 @@ class DecodeEngine:
         rotary_dim,
         base,
     ):
+        if self.append_backend == "fused_cuda":
+            return self.cache.write_token_layer_fused_cuda(
+                state.cache_transaction,
+                layer_idx,
+                q,
+                k,
+                v,
+                rotary_dim=rotary_dim,
+                base=base,
+            )
+
         from .rope import apply_rope
 
         cache_view = self.cache.transaction_view(state.cache_transaction)

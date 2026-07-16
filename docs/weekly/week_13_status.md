@@ -68,8 +68,18 @@ python benchmarks/summarize_scheduler_workload.py \
 
 R2-B 已完成 RTX 5070 WSL focused/full correctness，冻结 sequential layer API、异常 rollback、scheduler/open transaction 互斥和单层 compatibility 结论。本轮 pytest 总耗时只作为工程回归记录，不生成性能结论。
 
+## R2-C 当前实现
+
+- 复用已有 fused RoPE + KV append CUDA primitive；该 primitive 原本就只消费调用方提供的 physical block ids/offsets，不持有 allocator 或 request lifecycle。
+- `PagedKVCache.write_token_layer_fused_cuda()` 使用 `begin_token()` 已预留的共享位置写入指定 layer，kernel 成功返回后才推进 transaction `next_layer_idx`。
+- allocator、boundary block rollback、committed `seq_len` 和 transaction commit/abort 仍完全由 Python Cache transaction 管理。
+- `DecodeEngine.begin_step()` 现在允许 `append_backend="fused_cuda"`；`step_layer()` 复用同一 transaction 执行 fused RoPE/KV write，再调用 reference 或 Triton paged decode。
+- 原有单层 fused `DecodeEngine.step()` fast path 未修改；非 fused 的独立 CUDA append 仍不进入 multi-layer transaction。
+- 新增 GPU tests 覆盖 2-layer、两个连续 token、position 1、partial RoPE、GQA、FP16/BF16、fused CUDA + Triton 对齐，以及第二层输入失败后的 block rollback。
+- Mac `compileall` 与 `git diff --check` 已通过；当前没有本机 torch/CUDA，不能生成 GPU correctness 结论。
+
 ## 下一步
 
-1. 实现 R2-C fused CUDA location-only write：native kernel 接收 transaction 已预留的 block ids/offsets，不自行推进 allocator 或 `seq_len`。
-2. 在 RTX 5070 完成至少 2-layer FP16/BF16 fused CUDA + Triton correctness，并验证失败 rollback 与单层 fast path 无回归。
-3. R2-C 通过后进入 R2-D multi-layer workload；不重新做已冻结 kernel 参数 sweep，也不并行启动 shared prefix。
+1. 在 RTX 5070 运行 R2-C focused tests，记录 FP16/BF16、Triton、rollback 和 single-layer compatibility 结果。
+2. focused 通过后运行完整回归；只有两者都通过才把 R2-C 标记为完成。
+3. R2-C 冻结后进入 R2-D multi-layer workload；不重新做已冻结 kernel 参数 sweep，也不并行启动 shared prefix。

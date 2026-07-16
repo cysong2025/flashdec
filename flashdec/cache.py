@@ -388,16 +388,12 @@ class PagedKVCache:
         """Write one layer at the locations reserved by ``begin_token``."""
         state = self._require_open_transaction(transaction)
         try:
-            layer_idx = self._validate_layer_idx(layer_idx)
-            if layer_idx != state.next_layer_idx:
-                raise RuntimeError(
-                    f"transaction requires layer {state.next_layer_idx}, got layer {layer_idx}"
-                )
-            _, ids, k, v = self._prepare_append_inputs(
-                layer_idx, state.request_ids, k, v
+            layer_idx, k, v = self._prepare_transaction_layer_write(
+                state,
+                layer_idx,
+                k,
+                v,
             )
-            if tuple(ids) != state.request_ids:
-                raise RuntimeError("transaction request order changed unexpectedly")
 
             for row, (physical_block, block_offset) in enumerate(state.locations):
                 self.k_cache[layer_idx, physical_block, :, block_offset, :] = k[row]
@@ -405,10 +401,77 @@ class PagedKVCache:
         except Exception:
             self._transaction_failure_count += 1
             raise
-        state.written_layers.add(layer_idx)
-        state.next_layer_idx += 1
-        self._transaction_layer_write_count += 1
-        return self._transaction_view(state)
+        return self._record_transaction_layer_write(state, layer_idx)
+
+    def write_token_layer_fused_cuda(
+        self,
+        transaction,
+        layer_idx,
+        q,
+        k,
+        v,
+        *,
+        rotary_dim=None,
+        base=10_000.0,
+    ):
+        """Run fused RoPE + K/V write at transaction-reserved locations.
+
+        The transaction remains the sole owner of allocation, rollback, and
+        committed sequence-length mutation.  The CUDA primitive receives only
+        the already reserved physical block ids/offsets and writes one layer;
+        it does not allocate blocks or publish the token.
+        """
+        state = self._require_open_transaction(transaction)
+        try:
+            torch = _torch()
+            layer_idx, k, v = self._prepare_transaction_layer_write(
+                state,
+                layer_idx,
+                k,
+                v,
+            )
+            if self.device.type != "cuda":
+                raise ValueError(
+                    "write_token_layer_fused_cuda requires a CUDA-resident PagedKVCache"
+                )
+            if self.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+                raise ValueError(
+                    "write_token_layer_fused_cuda supports float16, bfloat16, or float32"
+                )
+            if q.dim() != 3 or q.shape[0] != len(state.request_ids):
+                raise ValueError(
+                    "q shape must match transaction request count and cache head_dim"
+                )
+            if q.shape[1] <= 0 or q.shape[2] != self.head_dim:
+                raise ValueError(
+                    "q shape must match transaction request count and cache head_dim"
+                )
+            if q.device != self.device or q.dtype != self.dtype:
+                raise ValueError("q must use the cache device and dtype")
+            if not q.is_contiguous() or not k.is_contiguous() or not v.is_contiguous():
+                raise ValueError(
+                    "write_token_layer_fused_cuda requires contiguous q, k, and v tensors"
+                )
+
+            from ._fused_rope_kv_append import fused_rope_kv_append
+
+            view = self._transaction_view(state)
+            q_rotated = fused_rope_kv_append(
+                q,
+                k,
+                v,
+                self.k_cache[layer_idx],
+                self.v_cache[layer_idx],
+                view.physical_block_ids,
+                view.block_offsets,
+                view.positions,
+                rotary_dim=rotary_dim,
+                base=base,
+            )
+        except Exception:
+            self._transaction_failure_count += 1
+            raise
+        return q_rotated, self._record_transaction_layer_write(state, layer_idx)
 
     def commit_token(self, transaction):
         """Publish one token after every layer has been written successfully."""
@@ -803,6 +866,28 @@ class PagedKVCache:
         if not k.is_floating_point() or not v.is_floating_point():
             raise ValueError("k and v must be floating point tensors")
         return layer_idx, ids, k, v
+
+    def _prepare_transaction_layer_write(self, state, layer_idx, k, v):
+        layer_idx = self._validate_layer_idx(layer_idx)
+        if layer_idx != state.next_layer_idx:
+            raise RuntimeError(
+                f"transaction requires layer {state.next_layer_idx}, got layer {layer_idx}"
+            )
+        _, ids, k, v = self._prepare_append_inputs(
+            layer_idx,
+            state.request_ids,
+            k,
+            v,
+        )
+        if tuple(ids) != state.request_ids:
+            raise RuntimeError("transaction request order changed unexpectedly")
+        return layer_idx, k, v
+
+    def _record_transaction_layer_write(self, state, layer_idx):
+        state.written_layers.add(layer_idx)
+        state.next_layer_idx += 1
+        self._transaction_layer_write_count += 1
+        return self._transaction_view(state)
 
     def _preflight_append(self, ids):
         needed_new_blocks = 0

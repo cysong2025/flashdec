@@ -21,6 +21,7 @@
 - Scheduler R1-C trace-driven workload：cancel/greedy/lifetime 三策略、boundary-deadlock 检测、等待/公平性/commitment/physical block 指标、执行 token 与有效 token 分离，以及 RTX benchmark CLI。
 - Multi-layer KV Token Transaction 设计规格：committed/pending seq_len、shared location、逐层执行、batch commit/abort 和 rollback invariant。
 - Multi-layer Cache transaction 与 DecodeEngine sequential layer API：2/4-layer shared location、单次 seq_len commit、异常自动 rollback、scheduler transaction 互斥和单层 compatibility wrapper。
+- R2-C fused CUDA location-only transaction write：复用 transaction 预留的 block ids/offsets，保持 allocator、rollback 和 committed seq_len 由 Cache transaction 唯一管理，并增加 2-layer FP16/BF16、GQA、Triton 与失败回滚测试。
 
 ### Changed
 

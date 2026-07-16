@@ -463,4 +463,4 @@ finish after commit -> releases block once for all layer storage
 
 ## 17. 当前状态
 
-本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。R2-A Cache reference transaction 已通过 WSL `313 passed, 20 subtests passed` 完整回归；R2-B Engine sequential layer API、异常自动 abort、scheduler 互斥与单层 compatibility wrapper 已在 commit `a009b45` 通过 RTX 5070 focused `71 passed, 8 subtests passed` 和完整回归 `322 passed, 20 subtests passed`。CUDA location-only write、multi-layer workload 和 RTX 5070 多层数据路径证据仍未实现，因此不能把 R2 视为整体完成。
+本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。R2-A Cache reference transaction 已通过 WSL `313 passed, 20 subtests passed` 完整回归；R2-B Engine sequential layer API、异常自动 abort、scheduler 互斥与单层 compatibility wrapper 已在 commit `a009b45` 通过 RTX 5070 focused `71 passed, 8 subtests passed` 和完整回归 `322 passed, 20 subtests passed`。R2-C 已实现 fused CUDA location-only transaction write：native primitive 只消费 transaction 预留的 block ids/offsets，allocator、rollback 和 `seq_len` 仍由 Cache transaction 管理；2-layer FP16/BF16、GQA、Triton 与 rollback tests 已加入，等待 RTX 5070 验证。multi-layer workload 尚未实现，因此不能把 R2 视为整体完成。

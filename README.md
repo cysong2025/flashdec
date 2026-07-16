@@ -114,7 +114,7 @@ python -m pytest -vv \
 | KV runtime | allocate/free/reuse、finish/cancel、backpressure | 单 GPU、单 layer |
 | append backend | torch、独立 CUDA、fused CUDA | GPU Engine 显式 fused CUDA |
 | scheduler | cancel/greedy/lifetime 三策略、Engine decision apply、deadlock 检测 | R1 RTX 36 行正式证据已完成 |
-| multi-layer KV | Cache transaction + Engine sequential layer API | R2-A/R2-B 已通过 WSL；R2-C fused CUDA 待实现 |
+| multi-layer KV | Cache transaction + Engine sequential layer API + fused location-only write | R2-A/R2-B 已通过 WSL；R2-C 待 RTX 验证 |
 | workload | short-churn、mixed-steady、long-pressure | wall-clock + memory/lifecycle metrics |
 | profiling | paged kernel、完整 Engine ranges、Chrome trace | instrumented 数据只做归因 |
 
@@ -123,7 +123,7 @@ python -m pytest -vv \
 - `v0.1.0` 固定为单 GPU、单 layer、每 request 每 step 一个 decode token。
 - Q/K/V 由调用方提供；不包含完整 Transformer forward、tokenizer、sampling 或网络服务。
 - Block-aware Scheduler v2 已通过正式 RTX 策略 workload；默认策略的结论是进展与资源安全，不声明所有普通场景下都更快。
-- Multi-layer KV Token Transaction 已完成 Cache reference 与 Engine sequential layer API；fused CUDA location-only write、multi-layer workload 和 RTX 多层数据路径证据仍未完成。
+- Multi-layer KV Token Transaction 已完成 Cache reference、Engine sequential layer API 和 fused CUDA location-only write 代码；R2-C RTX correctness 与 multi-layer workload 仍未完成。
 - 不包含 prefix cache、swap/offload、抢占、tensor/pipeline parallel 或多机。
 - CUDA extension 使用 lazy JIT，需要匹配 PyTorch CUDA build 的 Toolkit、NVCC、host compiler 和 Ninja。
 - macOS 工作区只能执行静态检查；正式 correctness/benchmark/profiling 以 RTX 5070 WSL 为准。
