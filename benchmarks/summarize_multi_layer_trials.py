@@ -66,8 +66,7 @@ PAIR_IDENTITY_FIELDS = (
     "transaction_abort_count",
     "transaction_layer_write_count",
     "profile_steps",
-    "profile_begin_count",
-    "profile_commit_count",
+    "profile_token_count",
     "profile_append_count",
     "profile_decode_count",
     "rollback_repeats",
@@ -274,10 +273,8 @@ def validate_rows(
             context + repeats
         ) * layers:
             raise MultiLayerValidationError(f"layer write count mismatch: {key}")
-        if _integer(row, "profile_begin_count") != profile_steps:
-            raise MultiLayerValidationError(f"profile begin count mismatch: {key}")
-        if _integer(row, "profile_commit_count") != profile_steps:
-            raise MultiLayerValidationError(f"profile commit count mismatch: {key}")
+        if _integer(row, "profile_token_count") != profile_steps:
+            raise MultiLayerValidationError(f"profile token count mismatch: {key}")
         if _integer(row, "profile_append_count") != profile_steps * layers:
             raise MultiLayerValidationError(f"profile append count mismatch: {key}")
         if _integer(row, "profile_decode_count") != profile_steps * layers:

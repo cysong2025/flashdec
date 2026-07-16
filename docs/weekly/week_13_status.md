@@ -95,7 +95,7 @@ R2-B 已完成 RTX 5070 WSL focused/full correctness，冻结 sequential layer A
 - 新增 9 个 dependency-free tests；Mac `compileall`、`git diff --check` 与 tests 均通过。
 - 当前尚未运行 RTX 5070 quick/formal workload，因此没有 R2-D 性能结论。
 - RTX 3-trial quick 已通过严格 6-row summary；正式矩阵首次启动时发现 PyTorch profiler cycle 默认清理事件，导致首个 `begin` range 丢失，而 append/decode 与 correctness 轨迹完整。
-- profiler probe 已启用 `acc_events=True`，跨内部 cycle 累积 range；该修复等待 RTX 正式矩阵重跑验证，不改变 non-instrumented 性能计时。
+- `acc_events=True` 后纯 CPU `begin` range 在 4-layer probe 中仍可能丢失，但 append/decode GPU ranges 完整。证据契约已改为：runner 自身严格计数 completed profile tokens，profiler 只严格校验 append/decode 与 CUDA events；begin/commit 成本继续使用 non-instrumented host timer。该修复等待 RTX 重跑验证，不改变正式性能计时。
 
 ## 下一步
 

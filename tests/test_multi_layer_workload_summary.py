@@ -59,8 +59,7 @@ def _row(dtype, case, trial, backend, *, layers=2, batch=4, context=128):
                 (context + repeats) * layers
             ),
             "profile_steps": str(profile_steps),
-            "profile_begin_count": str(profile_steps),
-            "profile_commit_count": str(profile_steps),
+            "profile_token_count": str(profile_steps),
             "profile_append_count": str(profile_steps * layers),
             "profile_decode_count": str(profile_steps * layers),
             "rollback_repeats": str(rollback_repeats),
