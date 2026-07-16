@@ -190,3 +190,5 @@ python benchmarks/summarize_multi_layer_trials.py \
 ```
 
 正式矩阵共 `12 cases x 2 dtypes x 2 backends x 3 trials = 144 rows`。输入生成、context seed、JIT build、profiler probe 和 rollback probe 均排除在正式 complete-token latency 外；profiler 字段只做 append/decode/launch 归因，rollback latency 不混入正常吞吐。Summary 同时报告 ratio 与 torch/fused 绝对 attribution median，任何低于 1 的 ratio 都必须结合绝对时间解释。
+
+commit `fa0f89a` 的 RTX 5070 正式结果已通过 144 行严格校验。fused complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`；24 个 dtype/case 组合中 20 个三轮 p50 稳定胜出、4 个跨过 1.0。每轮仅 20 repeats，nearest-rank p99 接近单轮最大值，因此必须连同范围报告。

@@ -122,6 +122,8 @@ python -m unittest discover -s tests -p 'test_scheduler.py' -v
 python -m unittest discover -s tests -p 'test_benchmark_helpers.py' -v
 python -m unittest discover -s tests -p 'test_profile_decode_engine.py' -v
 python -m unittest discover -s tests -p 'test_r0_validation.py' -v
+python -m unittest discover -s tests -p 'test_scheduler_workload_summary.py' -v
+python -m unittest discover -s tests -p 'test_multi_layer_workload_*.py' -v
 ```
 
 完整 CPU/reference suite：
@@ -138,6 +140,11 @@ python -m pytest -vv \
   tests/test_workload_benchmark.py \
   tests/test_decode_engine_trial_summary.py \
   tests/test_profile_decode_engine.py \
+  tests/test_scheduler_workload_summary.py \
+  tests/test_multi_layer_transaction.py \
+  tests/test_multi_layer_engine.py \
+  tests/test_multi_layer_workload_benchmark.py \
+  tests/test_multi_layer_workload_summary.py \
   tests/test_r0_validation.py \
   tests/test_release_check.py
 ```
@@ -162,6 +169,10 @@ python -m pytest -vv \
   tests/test_workload_benchmark.py \
   tests/test_decode_engine_trial_summary.py \
   tests/test_profile_decode_engine.py \
+  tests/test_multi_layer_transaction.py \
+  tests/test_multi_layer_engine.py \
+  tests/test_multi_layer_workload_benchmark.py \
+  tests/test_multi_layer_workload_summary.py \
   tests/test_public_api.py
 ```
 
@@ -232,6 +243,38 @@ python benchmarks/profile_decode_engine.py \
 
 生成器会严格检查 3 workloads x 2 dtypes x 2 backends = 12 rows、统一 Git commit、CUDA event 非零，以及 `engine/preflight/append/decode` range count 与 successful/backpressure step 的对应关系。任一条件不满足时不接受该 summary 作为 release evidence。
 
+## R1 Scheduler 正式证据
+
+```bash
+python benchmarks/run_scheduler_workload.py \
+  --case all \
+  --dtype both \
+  --trials 3 \
+  --output benchmarks/results/r1_scheduler_workload_trials3.csv
+
+python benchmarks/summarize_scheduler_workload.py \
+  --input benchmarks/results/r1_scheduler_workload_trials3.csv \
+  --output benchmarks/results/r1_scheduler_workload_trials3_summary.md
+```
+
+正式矩阵必须是 2 cases x 2 dtypes x 3 policies x 3 trials = 36 rows。Release evidence 使用已经审核并提交的 Markdown summary；CSV 继续作为本地原始证据。R1 结论是 lifetime commitment 的容量安全与进展保证，不是所有普通 workload 下无条件更快。
+
+## R2 Multi-layer 正式证据
+
+```bash
+python benchmarks/run_multi_layer_engine.py \
+  --case all \
+  --dtype both \
+  --trials 3 \
+  --output benchmarks/results/r2_multi_layer_engine_trials3.csv
+
+python benchmarks/summarize_multi_layer_trials.py \
+  --input benchmarks/results/r2_multi_layer_engine_trials3.csv \
+  --output benchmarks/results/r2_multi_layer_engine_trials3_summary.md
+```
+
+正式矩阵必须是 12 cases x 2 dtypes x 2 backends x 3 trials = 144 rows。Validator 会检查 pair trajectory、transaction、block accounting、rollback、profiler、seed 和 backend order。正式 latency 来自 non-instrumented complete-token 路径；profiler 字段只做 append/decode/launch 归因，p99 必须连同范围报告。
+
 ## 结果文件与提交规则
 
 默认忽略：
@@ -282,6 +325,8 @@ python scripts/check_release.py --require-clean
 | 首轮 dynamic workload/invariant | 已完成 | `week12_decode_engine_workload_summary.md` |
 | Multi-trial runner/validator | 已完成 | commit `3708b87` 的 36-row RTX CSV + validated summary |
 | Complete-step profiler | 已完成 | commit `3708b87` 的 validated 12-case summary + quick trace |
+| R1 Scheduler v2 | 已完成 | commit `16de9d4` 的 36-row RTX policy matrix + validated summary |
+| R2 Multi-layer transaction | 正式性能证据已完成，最终回归待执行 | commit `fa0f89a` 的 144-row RTX matrix + validated summary |
 | Clean WSL editable install | 待执行 | 新 venv 命令、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

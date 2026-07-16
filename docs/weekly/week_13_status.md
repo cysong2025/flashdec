@@ -2,7 +2,7 @@
 
 ## 本周主题
 
-Block-aware Scheduler 正式证据闭环，以及 Multi-layer KV Token Transaction 的 Cache reference 基础。
+Block-aware Scheduler 正式证据闭环，以及 Multi-layer KV Token Transaction 从 Cache reference 到正式 workload 证据。
 
 ## R1 Scheduler 正式结果
 
@@ -92,13 +92,40 @@ R2-B 已完成 RTX 5070 WSL focused/full correctness，冻结 sequential layer A
 - 独立 rollback probe 在 layer 0 成功后向 layer 1 注入非法 Q，验证自动 abort、block rollback 和 request state 不可见。
 - CSV 记录 KV write bytes/token、cache capacity bytes、transaction counts、block accounting 和 timing scope。
 - 新增严格 summary，拒绝缺行、case/shape 不一致、pair trajectory 漂移、transaction/profile/rollback 计数错误及 seed/order 错误。
-- 新增 9 个 dependency-free tests；Mac `compileall`、`git diff --check` 与 tests 均通过。
-- 当前尚未运行 RTX 5070 quick/formal workload，因此没有 R2-D 性能结论。
+- 新增 10 个 dependency-free tests；Mac `compileall`、`git diff --check` 与 tests 均通过。
 - RTX 3-trial quick 已通过严格 6-row summary；正式矩阵首次启动时发现 PyTorch profiler cycle 默认清理事件，导致首个 `begin` range 丢失，而 append/decode 与 correctness 轨迹完整。
-- `acc_events=True` 后纯 CPU `begin` range 在 4-layer probe 中仍可能丢失，但 append/decode GPU ranges 完整。证据契约已改为：runner 自身严格计数 completed profile tokens，profiler 只严格校验 append/decode 与 CUDA events；begin/commit 成本继续使用 non-instrumented host timer。该修复等待 RTX 重跑验证，不改变正式性能计时。
+- `acc_events=True` 后纯 CPU `begin` range 在 4-layer probe 中仍可能丢失，但 append/decode GPU ranges 完整。证据契约已改为：runner 自身严格计数 completed profile tokens，profiler 只严格校验 append/decode 与 CUDA events；begin/commit 成本继续使用 non-instrumented host timer。commit `fa0f89a` 的正式重跑已验证该契约，不改变正式性能计时。
+
+## R2-D 正式结果
+
+正式命令：
+
+```bash
+python benchmarks/run_multi_layer_engine.py \
+  --case all \
+  --dtype both \
+  --trials 3 \
+  --output benchmarks/results/r2_multi_layer_engine_trials3.csv
+
+python benchmarks/summarize_multi_layer_trials.py \
+  --input benchmarks/results/r2_multi_layer_engine_trials3.csv \
+  --output benchmarks/results/r2_multi_layer_engine_trials3_summary.md
+```
+
+- 设备：NVIDIA GeForce RTX 5070；PyTorch/CUDA：2.11.0+cu128 / 12.8。
+- commit：`fa0f89a`。
+- 144/144 行与 72 个 paired trials 通过 matrix、trajectory、block、transaction、rollback、profiler、seed 和 backend-order 校验。
+- complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`。
+- total CUDA p50/per-layer CUDA p50 为 `1.2117x/1.3154x`。
+- profiler append/decode device 为 `1.6103x/1.0024x`；CUDA event ratio 为 `1.9784x`。收益主要来自 append 与 launch 减少，paged decode 基本不变。
+- 24 个 dtype/case 组合中 20 个三轮 p50 稳定胜出，4 个跨过 1.0，没有稳定 torch-faster case。
+- layer 1/2/4 的 p50 几何平均为 `1.1112x/1.2567x/1.2690x`，说明多层执行更能摊薄 transaction 与 launch 开销。
+- BF16 `l4_b4_c128` 的独立 profiler append ratio 为 `0.4980x`，但正式 complete-token p50 三轮均胜出；这是 attribution anomaly，不是 wall-clock 回退。
+- 每轮只有 20 repeats，nearest-rank p99 接近最大值，必须报告范围，不声明稳定生产尾延迟收益。
+- Mac 最终文档闭环验证：R2-D 10/10 dependency-free tests 通过，正式 summary 重建后逐字一致，`compileall`、`git diff --check` 和 `check_release.py --require-evidence` 通过。
 
 ## 下一步
 
-1. RTX 5070 先运行单个 2-layer FP16 quick case，验证 CSV、profiler attribution、rollback 和严格摘要。
-2. quick 通过后运行 144 行正式 multi-trial，记录稳定收益、跨 1.0 场景、p99 范围和至少一个负结果。
-3. 正式证据完成后执行 clean-machine install、版本升级和 release tag；不重新 sweep kernel，也不并行启动 shared prefix。
+1. 提交并推送正式 Markdown summary、文档与扩展后的 release evidence gate；CSV/log 保留为原始本地证据。
+2. RTX 5070 拉取该确定 commit 并运行完整 regression，确认 R2-D benchmark/profiler 修复未引入 correctness 回归。
+3. 记录最终回归结果后执行 clean-machine install、release quick workload 和 release checker；全部通过后再升级版本并创建 tag。

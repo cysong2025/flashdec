@@ -26,6 +26,10 @@ REQUIRED_PATHS = (
     "benchmarks/run_decode_engine_workload.py",
     "benchmarks/summarize_decode_engine_trials.py",
     "benchmarks/profile_decode_engine.py",
+    "benchmarks/run_scheduler_workload.py",
+    "benchmarks/summarize_scheduler_workload.py",
+    "benchmarks/run_multi_layer_engine.py",
+    "benchmarks/summarize_multi_layer_trials.py",
     "scripts/check_env.py",
     "scripts/check_release.py",
     "scripts/run_r0_validation.py",
@@ -35,6 +39,11 @@ REQUIRED_PATHS = (
     "tests/test_scheduler.py",
     "tests/test_r0_validation.py",
     "tests/test_release_check.py",
+    "tests/test_scheduler_workload_summary.py",
+    "tests/test_multi_layer_transaction.py",
+    "tests/test_multi_layer_engine.py",
+    "tests/test_multi_layer_workload_benchmark.py",
+    "tests/test_multi_layer_workload_summary.py",
 )
 
 RELEASE_EVIDENCE_PATHS = (
@@ -42,6 +51,8 @@ RELEASE_EVIDENCE_PATHS = (
     "benchmarks/results/week11_rope_kv_append_summary.md",
     "benchmarks/results/week12_decode_engine_workload_trials3_summary.md",
     "benchmarks/results/week12_decode_engine_profile_summary.md",
+    "benchmarks/results/r1_scheduler_workload_trials3_summary.md",
+    "benchmarks/results/r2_multi_layer_engine_trials3_summary.md",
     "docs/performance_report.md",
 )
 

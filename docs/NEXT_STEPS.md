@@ -10,6 +10,8 @@
 - 最终 FP16 medium/large p50 为 `0.155520/0.884576 ms`。
 - PagedKVCache v2 已支持 request lifecycle、block free/reuse、容量失败原子性、metrics 和 invariant validation。
 - RTX 5070 runtime v2 focused：`90 passed in 4.47s`；完整回归：`170 passed in 4.66s`。
+- R2-D commit `fa0f89a` 的 144 行正式 multi-layer 矩阵已通过严格校验；fused complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`。
+- R2-D 24 个 dtype/case 组合中 20 个三轮 p50 稳定胜出、4 个跨过 1.0、0 个稳定回退；profiler 显示收益来自 append/launch，decode device time 基本不变。
 
 ## 总目标
 
@@ -218,4 +220,13 @@ RoPE/KV append -> block_tables/seq_lens -> paged decode -> state update
 
 R1 已在 RTX 5070 完成 36 行正式策略矩阵并通过严格摘要校验。boundary-deadlock 中 lifetime FIFO + aging 完成 2/2 请求且无取消/死锁；cancel baseline 完成 1/2，greedy baseline 完成 0/2 并触发确定的零进展检测。普通 finite queue 中三种策略均完成 6/6，请勿把 R1 表述为无条件吞吐优化。
 
-当前进入 R2-D RTX workload 验证。R2-A/R2-B/R2-C correctness 均已完成。R2-D 已实现 12-case runner、non-instrumented complete-token wall/CUDA-event latency、per-layer device time、begin/commit host time、独立 profiler append/decode/launch attribution、KV bytes、rollback probe和严格 multi-trial summary；9 个 dependency-free tests 与 Mac 静态检查通过。下一步先运行 2-layer FP16 quick case，再运行 `12 cases x 2 dtypes x 2 backends x 3 trials = 144 rows` 正式矩阵。正式结果完成前不生成性能结论；版本保持 `0.0.0`。
+R2-D RTX workload 证据已完成。commit `fa0f89a` 的 `12 cases x 2 dtypes x 2 backends x 3 trials = 144 rows` 正式矩阵通过 shape、pair trajectory、transaction、block accounting、rollback、profiler、seed 与 backend-order 严格校验。整体 complete-token p50 降低约 17.4%，TPS 提高约 28.0%；层数从 1 增加到 2/4 时，p50 几何平均由 `1.1112x` 提高到 `1.2567x/1.2690x`。p99 必须继续连同范围报告，不能把 20-repeat 的单轮最大值写成稳定尾延迟结论。
+
+Mac 文档闭环验证已完成：R2-D 10 个 dependency-free tests 通过，正式 summary 重新生成后逐字一致，`compileall`、`git diff --check` 和 `check_release.py --require-evidence` 通过。
+
+当前立即执行顺序：
+
+1. 提交并推送正式 Markdown summary、R2 文档与扩展后的 release evidence gate；CSV/log 保留为本地原始证据，不提交大体积日志。
+2. RTX 5070 WSL 拉取该确定 commit，运行完整 regression，确认 benchmark/profiler 修复没有引入 correctness 回归。
+3. 将最终回归结果写入文档并提交，再执行 clean WSL venv editable install、release quick workload 和 release checker。
+4. release gate 全部通过后，才把版本从 `0.0.0` 更新为 `0.1.0` 并创建 tag；暂不并行启动 shared prefix。

@@ -13,7 +13,7 @@ FlashDec 是一个 12 周 AI Infra 工程项目，主题是 **单 GPU LLM decode
 
 ## 当前状态
 
-Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 fused append-only p50 几何平均为 `1.2226x`。Week 12 已完成 `287 passed` 回归、36 行正式 multi-trial 与 12-case Engine profiler；fused complete-step p50/p90/tokens-s 几何平均为 `1.0668x/1.0317x/1.0811x`，但 short-churn p50 跨 trial 穿过 1.0，p99 仍需按场景报告范围。R1 Block-aware Scheduler 已完成正式 RTX 策略矩阵。R2-A/R2-B/R2-C multi-layer transaction correctness 已完成；R2-D 12-case workload runner、profiler attribution、rollback probe 和严格 summary 已实现，等待 RTX quick/formal 数据。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 fused append-only p50 几何平均为 `1.2226x`。Week 12 已完成 `287 passed` 回归、36 行正式 multi-trial 与 12-case Engine profiler；fused complete-step p50/p90/tokens-s 几何平均为 `1.0668x/1.0317x/1.0811x`，但 short-churn p50 跨 trial 穿过 1.0，p99 仍需按场景报告范围。R1 Block-aware Scheduler 已完成正式 RTX 策略矩阵。R2 Multi-layer KV Token Transaction 的 Cache、Engine、fused CUDA correctness 与 R2-D 正式性能证据均已完成：commit `fa0f89a` 的 144 行矩阵中，20/24 个 dtype/case 组合三轮 p50 稳定胜出，整体 complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`。
 
 主要文档：
 
@@ -114,7 +114,7 @@ python -m pytest -vv \
 | KV runtime | allocate/free/reuse、finish/cancel、backpressure | 单 GPU、单 layer |
 | append backend | torch、独立 CUDA、fused CUDA | GPU Engine 显式 fused CUDA |
 | scheduler | cancel/greedy/lifetime 三策略、Engine decision apply、deadlock 检测 | R1 RTX 36 行正式证据已完成 |
-| multi-layer KV | Cache transaction + Engine sequential layer API + fused location-only write | R2-A/R2-B/R2-C 已通过 RTX correctness |
+| multi-layer KV | Cache transaction + Engine sequential layer API + fused location-only write | R2 correctness 与 144 行正式性能证据已完成 |
 | workload | short-churn、mixed-steady、long-pressure | wall-clock + memory/lifecycle metrics |
 | profiling | paged kernel、完整 Engine ranges、Chrome trace | instrumented 数据只做归因 |
 
@@ -123,7 +123,7 @@ python -m pytest -vv \
 - `v0.1.0` 固定为单 GPU、单 layer、每 request 每 step 一个 decode token。
 - Q/K/V 由调用方提供；不包含完整 Transformer forward、tokenizer、sampling 或网络服务。
 - Block-aware Scheduler v2 已通过正式 RTX 策略 workload；默认策略的结论是进展与资源安全，不声明所有普通场景下都更快。
-- Multi-layer KV Token Transaction 已完成 Cache reference、Engine sequential layer API 和 fused CUDA location-only write；R2-D multi-layer workload 代码已实现，但正式 RTX 144 行矩阵与性能结论仍未完成。
+- Multi-layer KV Token Transaction 已完成 Cache reference、Engine sequential layer API、fused CUDA location-only write 与正式 RTX 144 行矩阵。融合路径的主要收益来自 append 与 launch 减少；20-repeat 下的 p99 接近单轮最大值，只用于暴露离群点，不作为稳定生产长尾结论。
 - 不包含 prefix cache、swap/offload、抢占、tensor/pipeline parallel 或多机。
 - CUDA extension 使用 lazy JIT，需要匹配 PyTorch CUDA build 的 Toolkit、NVCC、host compiler 和 Ninja。
 - macOS 工作区只能执行静态检查；正式 correctness/benchmark/profiling 以 RTX 5070 WSL 为准。

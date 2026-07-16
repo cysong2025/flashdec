@@ -26,6 +26,8 @@ FlashDec 后续不再通过增加零散算子或重复参数 sweep 扩充内容�
 - DecodeEngine 单 layer dynamic batch、append -> paged decode 与显式 backpressure。
 - 三类 synthetic workload 和首轮 complete-step benchmark。
 - 正式 36 行 multi-trial 与 12-case profiler 已在 commit `3708b87` 完成；fused p50/p90/TPS 几何平均为 1.0668x/1.0317x/1.0811x，short-churn p50 与 p99 仍不稳定。
+- R1 Block-aware Scheduler v2 正式 36 行策略矩阵与容量安全/进展保证结论。
+- R2 Multi-layer KV Token Transaction 的 Cache、Engine、fused CUDA correctness，以及 commit `fa0f89a` 的 144 行正式性能矩阵。
 
 ### 当前代码暴露出的缺口
 
@@ -33,8 +35,8 @@ FlashDec 后续不再通过增加零散算子或重复参数 sweep 扩充内容�
 | --- | --- | --- |
 | 结果稳定性 | 36 行正式 3-trial 已通过严格配对/invariant 校验 | short-churn p50 跨 1.0，p99 范围很宽，必须继续按场景报告 |
 | 阶段耗时归因 | 12-case profiler 已验证 Engine ranges 与 CUDA event | fusion 主要减少 append/launch/runtime 开销，attention device time 基本不变 |
-| 调度策略 | `admit()` 不预留 block；workload 在 backpressure 时取消最老请求 | 当前是压力测试策略，不是 block-aware continuous batching |
-| 多 layer 事务 | cache 存储有 layer 维度，但 runtime 强制 `num_layers=1` | 对多个 layer 逐次 append 会错误地重复推进 seq_len，需要真正事务语义 |
+| 调度策略 | R1 lifetime commitment 已解决 boundary deadlock，并保留 cancel/greedy 负对照 | 后续重点是表达容量安全与公平性，不宣称所有普通 workload 更快 |
+| 多 layer 事务 | R2 事务语义与正式性能证据已闭合 | 20/24 case 稳定胜出，但 p99 与少数 profiler attribution 仍需保守解释 |
 | 共享前缀 | 每个请求独占所有 physical blocks | 无法研究重复 prompt 下的显存节省、refcount 和 eviction |
 | 发布证据 | 缺少 clean-install reproduction、CHANGELOG 和正式 tag | 代码可运行不等于第三方可以复现 |
 
@@ -225,7 +227,7 @@ request larger than schedulable capacity -> explicit rejection
 
 优先级：P1，是 v0.2 的第二条核心深度主线。预计 2 个阶段周。
 
-当前状态：R2-A Cache transaction、R2-B Engine sequential API 和 R2-C fused CUDA correctness 均已完成。R2-D 已实现 12-case runner、complete-token/per-layer/host/profiler/KV bytes/rollback 指标和严格 multi-trial summary，等待 RTX 5070 quick/formal 数据；当前不能写性能结论。
+当前状态：R2-A Cache transaction、R2-B Engine sequential API、R2-C fused CUDA correctness 和 R2-D 正式 workload 证据均已完成。commit `fa0f89a` 的 144 行矩阵通过严格校验；fused complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`。24 个 dtype/case 组合中 20 个三轮 p50 稳定胜出，4 个跨过 1.0，没有稳定回退 case。
 
 ### 要回答的问题
 
@@ -362,9 +364,10 @@ capacity failure -> refcount and ownership unchanged
 
 ## 11. 当前立即执行顺序
 
-1. 在 RTX 5070 执行 R2-D 2-layer FP16 quick case并验证严格摘要。
-2. 执行 144 行正式 multi-trial，报告 complete-token、per-layer、host、KV bytes、launch、transaction 和 rollback 指标。
-3. 冻结 multi-layer correctness 与性能边界，记录稳定结论和负结果；不并行启动 prefix。
-4. 全部功能完成后统一执行 clean-machine install、版本升级和 release tag。
+1. Mac dependency-free tests、summary 重建、静态检查与 release evidence 结构检查已通过。
+2. 提交并推送 R2 正式 summary、文档和扩展后的 release evidence gate。
+3. 在 RTX 5070 拉取该 commit 并运行完整 regression，冻结 multi-layer correctness 与性能边界。
+4. 记录回归结果后执行 clean-machine install、release quick workload 与 release checker。
+5. release gate 全部通过后升级版本并创建 `v0.1.0` tag；发布闭环后再在 shared prefix 与公开基线之间二选一。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

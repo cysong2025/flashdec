@@ -451,7 +451,11 @@ finish after commit -> releases block once for all layer storage
 - non-instrumented 路径分离完整 token wall/CUDA-event、per-layer device 与 begin/commit host time。
 - 独立 profiler probe 记录 append/decode device time 和 CUDA event count；独立 rollback probe 不混入正常吞吐。
 - 严格 summary 校验 matrix、shape、transaction、block、profile、rollback、seed/order。
-- 当前等待 RTX 5070 quick/formal 数据和至少一个负结果。
+- commit `fa0f89a` 的正式 144 行 RTX 5070 矩阵已通过严格校验。
+- fused complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`；per-layer append device 为 `1.6103x`，decode device 为 `1.0024x`，CUDA event ratio 为 `1.9784x`。
+- 24 个 dtype/case 组合中 20 个三轮 p50 稳定胜出，4 个跨过 1.0，没有稳定 torch-faster case。
+- BF16 `l4_b4_c128` 的 instrumented append ratio 为 `0.4980x`，但 complete-token p50 三轮均胜出，因此只记录为 profiler attribution anomaly。
+- 每轮只有 20 repeats，nearest-rank p99 接近该轮最大值；p99 必须与范围一起报告，不作为稳定生产长尾结论。
 
 ## 16. 验收门槛
 
@@ -465,4 +469,4 @@ finish after commit -> releases block once for all layer storage
 
 ## 17. 当前状态
 
-本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。R2-A/R2-B/R2-C correctness 已完成。R2-D runner、profiler attribution、rollback probe 与严格 summary 已实现，等待 RTX 5070 quick/formal 结果。正式矩阵、负结果和 clean-install evidence 完成前，不能把 R2 视为整体完成。
+本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。R2-A/R2-B/R2-C correctness 与 R2-D 正式性能证据均已完成；稳定结论是 fused append/launch 优化能够转化为 multi-layer complete-token 收益，限制是小样本 p99 波动和少数 profiler attribution anomaly。最终 RTX full regression、文档提交和 clean-install release evidence 完成后，R2 项目闭环才算全部完成。
