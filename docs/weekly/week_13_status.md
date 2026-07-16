@@ -48,6 +48,11 @@ python benchmarks/summarize_scheduler_workload.py \
 - Mac：`compileall` 与 `git diff --check` 通过。
 - R2-A RTX 5070 WSL 完整回归：`313 passed, 20 subtests passed in 5.83s`。
 - R2-A 无 skipped、warning 或 failure。
+- R2-B 验证 commit：`a009b45`，Git worktree clean。
+- R2-B 验证环境：WSL2 Ubuntu、Python 3.12.3、PyTorch 2.11.0+cu128、Triton 3.6.0、CUDA Toolkit/NVCC 12.8.93、Ninja 1.13.0、NVIDIA GeForce RTX 5070 11.94 GiB、sm_12.0。
+- R2-B focused：`71 passed, 8 subtests passed in 3.71s`。
+- R2-B 完整回归：`322 passed, 20 subtests passed in 6.62s`。
+- R2-B focused/full 均无 skipped、warning 或 failure。
 
 ## R2-B 当前实现
 
@@ -61,10 +66,10 @@ python benchmarks/summarize_scheduler_workload.py \
 - multi-layer transaction 当前明确要求 `append_backend="torch"`；native/fused location-only write 属于 R2-C。
 - 新增 2/4-layer per-layer reference、row order、自动 rollback、early commit、lifecycle/scheduler 互斥和单层兼容测试。
 
-R2-B 当前仅完成 Mac 静态与 dependency-free 验证，WSL PyTorch focused/full 待执行。
+R2-B 已完成 RTX 5070 WSL focused/full correctness，冻结 sequential layer API、异常 rollback、scheduler/open transaction 互斥和单层 compatibility 结论。本轮 pytest 总耗时只作为工程回归记录，不生成性能结论。
 
 ## 下一步
 
-1. 在 WSL 运行 `tests/test_multi_layer_engine.py`、相关 Cache/Engine focused tests 和完整回归。
-2. 记录 R2-B pass/subtest/skip/warning 数量，不生成性能结论。
-3. R2-B 通过后才重构 fused CUDA 为 location-only write，不重新做已冻结 kernel 参数 sweep。
+1. 实现 R2-C fused CUDA location-only write：native kernel 接收 transaction 已预留的 block ids/offsets，不自行推进 allocator 或 `seq_len`。
+2. 在 RTX 5070 完成至少 2-layer FP16/BF16 fused CUDA + Triton correctness，并验证失败 rollback 与单层 fast path 无回归。
+3. R2-C 通过后进入 R2-D multi-layer workload；不重新做已冻结 kernel 参数 sweep，也不并行启动 shared prefix。

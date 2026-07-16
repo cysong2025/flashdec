@@ -13,7 +13,7 @@ FlashDec 是一个 12 周 AI Infra 工程项目，主题是 **单 GPU LLM decode
 
 ## 当前状态
 
-Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 fused append-only p50 几何平均为 `1.2226x`。Week 12 已完成 `287 passed` 回归、36 行正式 multi-trial 与 12-case Engine profiler；fused complete-step p50/p90/tokens-s 几何平均为 `1.0668x/1.0317x/1.0811x`，但 short-churn p50 跨 trial 穿过 1.0，p99 仍需按场景报告范围。R1 Block-aware Scheduler 已在 commit `16de9d4` 完成 RTX 5070 的 36 行正式策略矩阵：默认 lifetime FIFO + aging 在 boundary-deadlock 场景完成率为 100%、无取消、无死锁；cancel baseline 仅完成 50%，greedy baseline 发生确定死锁。R2-A multi-layer KV token transaction 已通过 WSL `313 passed, 20 subtests passed` 完整回归；R2-B Engine sequential layer API 已实现，等待 WSL 验证。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 fused append-only p50 几何平均为 `1.2226x`。Week 12 已完成 `287 passed` 回归、36 行正式 multi-trial 与 12-case Engine profiler；fused complete-step p50/p90/tokens-s 几何平均为 `1.0668x/1.0317x/1.0811x`，但 short-churn p50 跨 trial 穿过 1.0，p99 仍需按场景报告范围。R1 Block-aware Scheduler 已在 commit `16de9d4` 完成 RTX 5070 的 36 行正式策略矩阵：默认 lifetime FIFO + aging 在 boundary-deadlock 场景完成率为 100%、无取消、无死锁；cancel baseline 仅完成 50%，greedy baseline 发生确定死锁。R2-A multi-layer KV token transaction 已通过 WSL `313 passed, 20 subtests passed` 完整回归；R2-B Engine sequential layer API 已在 commit `a009b45` 通过 RTX 5070 focused `71 passed, 8 subtests passed` 和完整回归 `322 passed, 20 subtests passed`。
 
 主要文档：
 
@@ -114,7 +114,7 @@ python -m pytest -vv \
 | KV runtime | allocate/free/reuse、finish/cancel、backpressure | 单 GPU、单 layer |
 | append backend | torch、独立 CUDA、fused CUDA | GPU Engine 显式 fused CUDA |
 | scheduler | cancel/greedy/lifetime 三策略、Engine decision apply、deadlock 检测 | R1 RTX 36 行正式证据已完成 |
-| multi-layer KV | Cache transaction + Engine sequential layer API | R2-A 已验证，R2-B 待 WSL 验证 |
+| multi-layer KV | Cache transaction + Engine sequential layer API | R2-A/R2-B 已通过 WSL；R2-C fused CUDA 待实现 |
 | workload | short-churn、mixed-steady、long-pressure | wall-clock + memory/lifecycle metrics |
 | profiling | paged kernel、完整 Engine ranges、Chrome trace | instrumented 数据只做归因 |
 

@@ -225,7 +225,7 @@ request larger than schedulable capacity -> explicit rejection
 
 优先级：P1，是 v0.2 的第二条核心深度主线。预计 2 个阶段周。
 
-当前状态：状态机、committed/pending seq_len、shared location、abort rollback、sequential layer Engine API、测试和 benchmark 边界已冻结。R2-A Cache reference transaction 已通过 WSL `313 passed, 20 subtests passed` 完整回归。R2-B Engine sequential layer API、layer 异常自动 abort、scheduler transaction 互斥和单层 compatibility wrapper 已实现，等待 WSL 回归；R2-C fused CUDA 和 RTX 多层数据路径证据尚未开始。
+当前状态：状态机、committed/pending seq_len、shared location、abort rollback、sequential layer Engine API、测试和 benchmark 边界已冻结。R2-A Cache reference transaction 已通过 WSL `313 passed, 20 subtests passed` 完整回归。R2-B Engine sequential layer API、layer 异常自动 abort、scheduler transaction 互斥和单层 compatibility wrapper 已在 commit `a009b45` 通过 RTX 5070 focused `71 passed, 8 subtests passed` 和完整回归 `322 passed, 20 subtests passed`；R2-C fused CUDA 和 RTX 多层数据路径证据尚未开始。
 
 ### 要回答的问题
 
@@ -362,9 +362,9 @@ capacity failure -> refcount and ownership unchanged
 
 ## 11. 当前立即执行顺序
 
-1. 在既有 WSL 环境验证 R2-B multi-layer Engine focused/full regression。
-2. 验证 layer output、异常 rollback、scheduler 互斥与单层 compatibility trajectory。
-3. R2-B 冻结后再实现 R2-C fused CUDA location-only write；不并行启动 prefix。
+1. 实现 R2-C fused CUDA location-only write，让 native kernel 只消费 transaction 预留位置。
+2. 在 RTX 5070 验证 2-layer FP16/BF16 fused CUDA + Triton correctness、异常 rollback 和单层 fast path。
+3. R2-C 冻结后实现 R2-D multi-layer workload 与阶段耗时报告；不并行启动 prefix。
 4. 全部功能完成后统一执行 clean-machine install、版本升级和 release tag。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

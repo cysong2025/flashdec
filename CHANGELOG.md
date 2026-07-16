@@ -20,6 +20,7 @@
 - Scheduler R1-B Engine/Cache 集成：scheduler-managed request submission、Engine/Cache `state_version`、authoritative snapshot、stale/forged decision 原子拒绝、显式 rejection、initial-context seeding 和 commitment metrics。
 - Scheduler R1-C trace-driven workload：cancel/greedy/lifetime 三策略、boundary-deadlock 检测、等待/公平性/commitment/physical block 指标、执行 token 与有效 token 分离，以及 RTX benchmark CLI。
 - Multi-layer KV Token Transaction 设计规格：committed/pending seq_len、shared location、逐层执行、batch commit/abort 和 rollback invariant。
+- Multi-layer Cache transaction 与 DecodeEngine sequential layer API：2/4-layer shared location、单次 seq_len commit、异常自动 rollback、scheduler transaction 互斥和单层 compatibility wrapper。
 
 ### Changed
 
@@ -35,6 +36,11 @@
 - Week 12 正式 36 行 multi-trial：fused p50/p90/TPS 几何平均为 1.0668x/1.0317x/1.0811x；全部 invariant、block accounting、pair trajectory 与 seed/order 校验通过。
 - short-churn 的 FP16/BF16 p50 均跨 trial 穿过 1.0；p99 ratio 范围为 0.2444x-5.0578x，因此保留为系统级噪声/负结果，不声明稳定尾延迟收益。
 - 12-case complete-step profiler 显示 fusion 将 CUDA event 数减少 21.8%-45.6%，而 paged decode device time 变化仅为 -1.7%-+1.1%；收益主要来自 append/launch/runtime 路径。
+
+### Correctness evidence
+
+- R2-A Cache transaction 完整回归：`313 passed, 20 subtests passed`。
+- R2-B commit `a009b45` RTX 5070 focused：`71 passed, 8 subtests passed in 3.71s`；完整回归：`322 passed, 20 subtests passed in 6.62s`，无 skipped、warning 或 failure。
 
 ### Pending before v0.1.0
 

@@ -103,4 +103,4 @@ CPU/reference tests 覆盖动态 admission、batch row order、finish/cancel、b
 fused_cuda append + Triton paged decode == PyTorch paged reference
 ```
 
-R2-B 新增 2/4-layer per-layer reference、异常自动 rollback、scheduler/open transaction 互斥和单层 compatibility tests；RTX 5070 WSL 结果在验证后记录到 Week 13 状态文档。
+R2-B 新增 2/4-layer per-layer reference、异常自动 rollback、scheduler/open transaction 互斥和单层 compatibility tests；commit `a009b45` 已在 RTX 5070 WSL 通过 focused `71 passed, 8 subtests passed` 和完整回归 `322 passed, 20 subtests passed`，详细环境与耗时记录见 Week 13 状态文档。
