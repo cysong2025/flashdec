@@ -243,6 +243,17 @@ def _event_time_us(event, primary, fallback):
     return float(value or 0.0)
 
 
+def _profiler_kwargs(torch):
+    """Keep explicit ranges across profiler cycles triggered by GPU tooling."""
+    return {
+        "activities": [
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        "acc_events": True,
+    }
+
+
 def _profile_probe(torch, case, dtype, backend, steps, seed):
     if steps <= 0:
         return {
@@ -260,11 +271,10 @@ def _profile_probe(torch, case, dtype, backend, steps, seed):
     )
     _seed_context(torch, engine, request_ids, case.context_tokens)
     inputs = _generate_inputs(torch, case, dtype, steps, seed)
-    activities = [
-        torch.profiler.ProfilerActivity.CPU,
-        torch.profiler.ProfilerActivity.CUDA,
-    ]
-    with torch.profiler.profile(activities=activities) as profiler:
+    # PyTorch/Triton may advance profiler cycles while compiling or launching
+    # kernels. Keep events across those cycles so the first begin/commit range
+    # is not silently discarded from the strict count validation.
+    with torch.profiler.profile(**_profiler_kwargs(torch)) as profiler:
         for token_inputs in inputs:
             with torch.profiler.record_function(PROFILE_RANGE_BEGIN):
                 transaction = engine.begin_step(request_ids)

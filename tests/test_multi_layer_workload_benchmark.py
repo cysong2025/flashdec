@@ -1,10 +1,12 @@
 """Dependency-free configuration tests for the multi-layer benchmark."""
 
+from types import SimpleNamespace
 import unittest
 
 from benchmarks.run_multi_layer_engine import (
     CASES,
     _max_blocks,
+    _profiler_kwargs,
     _quick_case,
     _selected_cases,
     _trial_backend_order,
@@ -53,6 +55,17 @@ class MultiLayerWorkloadBenchmarkTests(unittest.TestCase):
     def test_max_blocks_covers_context_measurement_and_boundary(self):
         case = CASES["l2_b4_c128"]
         self.assertEqual(_max_blocks(case, 20), 20)
+
+    def test_profiler_accumulates_events_across_internal_cycles(self):
+        torch = SimpleNamespace(
+            profiler=SimpleNamespace(
+                ProfilerActivity=SimpleNamespace(CPU="cpu", CUDA="cuda")
+            )
+        )
+        self.assertEqual(
+            _profiler_kwargs(torch),
+            {"activities": ["cpu", "cuda"], "acc_events": True},
+        )
 
 
 if __name__ == "__main__":
