@@ -225,7 +225,7 @@ request larger than schedulable capacity -> explicit rejection
 
 优先级：P1，是 v0.2 的第二条核心深度主线。预计 2 个阶段周。
 
-当前状态：状态机、committed/pending seq_len、shared location、abort rollback、sequential layer Engine API、测试和 benchmark 边界已冻结。R2-A Cache reference transaction 已通过 WSL `313 passed, 20 subtests passed` 完整回归。R2-B Engine sequential layer API、layer 异常自动 abort、scheduler transaction 互斥和单层 compatibility wrapper 已在 commit `a009b45` 通过 RTX 5070 focused `71 passed, 8 subtests passed` 和完整回归 `322 passed, 20 subtests passed`。R2-C fused CUDA location-only transaction write 已在 commit `6afc89f` 通过 focused `131 passed in 6.21s` 和完整回归 `326 passed, 20 subtests passed in 6.23s`；R2-D multi-layer workload 尚未开始。
+当前状态：R2-A Cache transaction、R2-B Engine sequential API 和 R2-C fused CUDA correctness 均已完成。R2-D 已实现 12-case runner、complete-token/per-layer/host/profiler/KV bytes/rollback 指标和严格 multi-trial summary，等待 RTX 5070 quick/formal 数据；当前不能写性能结论。
 
 ### 要回答的问题
 
@@ -362,9 +362,9 @@ capacity failure -> refcount and ownership unchanged
 
 ## 11. 当前立即执行顺序
 
-1. 实现 R2-D multi-layer workload 与严格结果摘要。
-2. 报告 complete-token latency、per-layer device time、allocator/preflight/commit overhead、KV bytes、launch、transaction 和 rollback 指标。
-3. 冻结 multi-layer correctness 与性能边界；不并行启动 prefix。
+1. 在 RTX 5070 执行 R2-D 2-layer FP16 quick case并验证严格摘要。
+2. 执行 144 行正式 multi-trial，报告 complete-token、per-layer、host、KV bytes、launch、transaction 和 rollback 指标。
+3. 冻结 multi-layer correctness 与性能边界，记录稳定结论和负结果；不并行启动 prefix。
 4. 全部功能完成后统一执行 clean-machine install、版本升级和 release tag。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

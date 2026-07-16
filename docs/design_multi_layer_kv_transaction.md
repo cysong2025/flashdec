@@ -447,9 +447,11 @@ finish after commit -> releases block once for all layer storage
 
 ### R2-D：Workload 与报告
 
-- 增加 multi-layer synthetic execution workload。
-- 分离完整 token latency、per-layer device time 和 allocator overhead。
-- 记录成功结果、rollback 错误路径与至少一个负结果。
+- 已实现 12-case workload、torch/fused 配对和交替 trial 顺序。
+- non-instrumented 路径分离完整 token wall/CUDA-event、per-layer device 与 begin/commit host time。
+- 独立 profiler probe 记录 append/decode device time 和 CUDA event count；独立 rollback probe 不混入正常吞吐。
+- 严格 summary 校验 matrix、shape、transaction、block、profile、rollback、seed/order。
+- 当前等待 RTX 5070 quick/formal 数据和至少一个负结果。
 
 ## 16. 验收门槛
 
@@ -463,4 +465,4 @@ finish after commit -> releases block once for all layer storage
 
 ## 17. 当前状态
 
-本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。R2-A Cache reference transaction 已通过 WSL `313 passed, 20 subtests passed` 完整回归；R2-B Engine sequential layer API、异常自动 abort、scheduler 互斥与单层 compatibility wrapper 已在 commit `a009b45` 通过 RTX 5070 focused `71 passed, 8 subtests passed` 和完整回归 `322 passed, 20 subtests passed`。R2-C fused CUDA location-only transaction write 已在 commit `6afc89f` 通过 focused `131 passed in 6.21s` 和完整回归 `326 passed, 20 subtests passed in 6.23s`，覆盖 2-layer FP16/BF16、GQA、Triton 与失败 rollback。multi-layer workload 尚未实现，因此不能把 R2 视为整体完成。
+本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。R2-A/R2-B/R2-C correctness 已完成。R2-D runner、profiler attribution、rollback probe 与严格 summary 已实现，等待 RTX 5070 quick/formal 结果。正式矩阵、负结果和 clean-install evidence 完成前，不能把 R2 视为整体完成。

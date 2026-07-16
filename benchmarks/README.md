@@ -38,6 +38,8 @@ benchmark 记录至少包含：
 - `profile_decode_engine.py`：在独立 instrumented 模式下标记 request submit/admit、Engine step、preflight、RoPE/KV append、paged decode 和 finish/cancel，输出 CPU/device time、CUDA event count、PyTorch profiler table、可选 Chrome trace 与阶段摘要。
 - `run_scheduler_workload.py`：在完全相同的有限 request trace 上比较 cancel-on-backpressure、greedy-step-only 和 lifetime FIFO + aging；输出完成率、强制取消、deadlock、有效 TPS、等待/公平性、commitment/physical block 和完整 step latency。
 - `summarize_scheduler_workload.py`：严格验证 36 行 scheduler case/dtype/policy/trial 矩阵、commit/device、seed、轮转执行顺序和策略特有的 progress invariant，再输出跨 trial 中位数摘要。
+- `run_multi_layer_engine.py`：R2-D multi-layer transaction workload；覆盖 1/2/4 layers、batch 4/16、context 128/1024、FP16/BF16 和 torch/fused CUDA，分离 complete-token wall/CUDA-event latency、begin/commit host time、独立 profiler attribution、KV bytes 与 rollback probe。
+- `summarize_multi_layer_trials.py`：严格验证 multi-layer matrix、case/shape identity、transaction/block accounting、profiler range、rollback evidence、seed 和交替 backend 顺序，再输出跨 trial 稳定性摘要。
 
 当前通用 benchmark/profile 默认配置为 `block_size=32, num_warps=2`。FP16 的少数小 shape 可显式使用 `block_size=16` 对照。
 
@@ -154,3 +156,37 @@ python benchmarks/summarize_scheduler_workload.py \
 ```
 
 相邻 trial 会轮转策略执行顺序。聚合器严格要求 36 行完整矩阵和统一 commit/device，并验证 boundary case 的策略语义。`completed_tokens` 包含随后被取消请求已经执行的无效工作；`useful_tokens` 只统计最终完成请求，因此策略吞吐结论优先使用 `useful_tokens_per_second`。任何 `resource_deadlocks > 0` 的行都必须与完成率、取消数一起解释，不能只比较 p50。
+
+R2-D multi-layer 快速验证：
+
+```bash
+python benchmarks/run_multi_layer_engine.py \
+  --case l2_b4_c128 \
+  --dtype float16 \
+  --trials 1 \
+  --quick \
+  --output benchmarks/results/r2_multi_layer_engine_quick.csv
+
+python benchmarks/summarize_multi_layer_trials.py \
+  --input benchmarks/results/r2_multi_layer_engine_quick.csv \
+  --output benchmarks/results/r2_multi_layer_engine_quick_summary.md \
+  --expected-trials 1 \
+  --expected-cases l2_b4_c32 \
+  --expected-dtypes float16
+```
+
+正式矩阵：
+
+```bash
+python benchmarks/run_multi_layer_engine.py \
+  --case all \
+  --dtype both \
+  --trials 3 \
+  --output benchmarks/results/r2_multi_layer_engine_trials3.csv
+
+python benchmarks/summarize_multi_layer_trials.py \
+  --input benchmarks/results/r2_multi_layer_engine_trials3.csv \
+  --output benchmarks/results/r2_multi_layer_engine_trials3_summary.md
+```
+
+正式矩阵共 `12 cases x 2 dtypes x 2 backends x 3 trials = 144 rows`。输入生成、context seed、JIT build、profiler probe 和 rollback probe 均排除在正式 complete-token latency 外；profiler 字段只做 append/decode/launch 归因，rollback latency 不混入正常吞吐。

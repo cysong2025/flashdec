@@ -13,7 +13,7 @@ FlashDec 是一个 12 周 AI Infra 工程项目，主题是 **单 GPU LLM decode
 
 ## 当前状态
 
-Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 fused append-only p50 几何平均为 `1.2226x`。Week 12 已完成 `287 passed` 回归、36 行正式 multi-trial 与 12-case Engine profiler；fused complete-step p50/p90/tokens-s 几何平均为 `1.0668x/1.0317x/1.0811x`，但 short-churn p50 跨 trial 穿过 1.0，p99 仍需按场景报告范围。R1 Block-aware Scheduler 已在 commit `16de9d4` 完成 RTX 5070 的 36 行正式策略矩阵：默认 lifetime FIFO + aging 在 boundary-deadlock 场景完成率为 100%、无取消、无死锁；cancel baseline 仅完成 50%，greedy baseline 发生确定死锁。R2-A multi-layer KV token transaction 已通过 WSL `313 passed, 20 subtests passed` 完整回归；R2-B Engine sequential layer API 已在 commit `a009b45` 通过 RTX 5070 focused `71 passed, 8 subtests passed` 和完整回归 `322 passed, 20 subtests passed`；R2-C fused CUDA location-only transaction write 已在 commit `6afc89f` 通过 focused `131 passed` 和完整回归 `326 passed, 20 subtests passed`。
+Week 1-3 已在 RTX 5070 上完成 correctness 与 benchmark 记录。Week 4 dense decode Triton kernel 已在 RTX 5070 上通过 correctness，并完成默认 benchmark。Week 5 Paged KV Cache runtime 与 paged PyTorch reference 已在 RTX 5070 上通过 correctness。Week 6 paged decode Triton kernel v1 已在 RTX 5070 上通过 correctness，并完成第一版 benchmark。Week 7 head_dim 128、BF16、GQA/MQA correctness 已在 RTX 5070 上通过，并完成 batch/context shape sweep。Week 8 已完成 `num_warps`、block size 和 KV layout 实验。Week 9 已完成最终默认配置的 FP16/BF16 四场景 profiling。Week 10 冻结通用 kernel 配置并完成 Paged KV runtime v2。Week 11 的 fused append-only p50 几何平均为 `1.2226x`。Week 12 已完成 `287 passed` 回归、36 行正式 multi-trial 与 12-case Engine profiler；fused complete-step p50/p90/tokens-s 几何平均为 `1.0668x/1.0317x/1.0811x`，但 short-churn p50 跨 trial 穿过 1.0，p99 仍需按场景报告范围。R1 Block-aware Scheduler 已完成正式 RTX 策略矩阵。R2-A/R2-B/R2-C multi-layer transaction correctness 已完成；R2-D 12-case workload runner、profiler attribution、rollback probe 和严格 summary 已实现，等待 RTX quick/formal 数据。
 
 主要文档：
 
@@ -123,7 +123,7 @@ python -m pytest -vv \
 - `v0.1.0` 固定为单 GPU、单 layer、每 request 每 step 一个 decode token。
 - Q/K/V 由调用方提供；不包含完整 Transformer forward、tokenizer、sampling 或网络服务。
 - Block-aware Scheduler v2 已通过正式 RTX 策略 workload；默认策略的结论是进展与资源安全，不声明所有普通场景下都更快。
-- Multi-layer KV Token Transaction 已完成 Cache reference、Engine sequential layer API 和 fused CUDA location-only write；R2-C 在 commit `6afc89f` 通过 focused `131 passed` 和完整回归 `326 passed, 20 subtests passed`。multi-layer workload 仍未完成。
+- Multi-layer KV Token Transaction 已完成 Cache reference、Engine sequential layer API 和 fused CUDA location-only write；R2-D multi-layer workload 代码已实现，但正式 RTX 144 行矩阵与性能结论仍未完成。
 - 不包含 prefix cache、swap/offload、抢占、tensor/pipeline parallel 或多机。
 - CUDA extension 使用 lazy JIT，需要匹配 PyTorch CUDA build 的 Toolkit、NVCC、host compiler 和 Ninja。
 - macOS 工作区只能执行静态检查；正式 correctness/benchmark/profiling 以 RTX 5070 WSL 为准。

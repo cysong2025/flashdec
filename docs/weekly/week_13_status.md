@@ -82,8 +82,21 @@ R2-B 已完成 RTX 5070 WSL focused/full correctness，冻结 sequential layer A
 - R2-C RTX 5070 完整回归：`326 passed, 20 subtests passed in 6.23s`。
 - focused/full 摘要均无 skipped、warning 或 failure；R2-C correctness 验收完成。pytest 总耗时仅作为工程回归记录，不形成性能结论。
 
+## R2-D 当前实现
+
+- 新增 `run_multi_layer_engine.py`，正式矩阵固定为 1/2/4 layers、batch 4/16、context 128/1024、FP16/BF16、torch/fused CUDA 和 3 trials。
+- 同一 trial 的 torch/fused 使用相同 seed、shape 和 request trajectory；相邻 trial 反转 backend 顺序。
+- complete-token 正式计时包含 `begin_step -> all step_layer -> commit_step`，排除输入生成、context seed、JIT、profiler 与 rollback probe。
+- CUDA event 记录完整 token、每层 combined append+decode 和所有 layer 合计 device time；begin/commit 单独记录 host dispatch 时间。
+- 独立 profiler probe 记录每层 append/decode device time 和 CUDA event count；instrumented 数据只做归因。
+- 独立 rollback probe 在 layer 0 成功后向 layer 1 注入非法 Q，验证自动 abort、block rollback 和 request state 不可见。
+- CSV 记录 KV write bytes/token、cache capacity bytes、transaction counts、block accounting 和 timing scope。
+- 新增严格 summary，拒绝缺行、case/shape 不一致、pair trajectory 漂移、transaction/profile/rollback 计数错误及 seed/order 错误。
+- 新增 9 个 dependency-free tests；Mac `compileall`、`git diff --check` 与 tests 均通过。
+- 当前尚未运行 RTX 5070 quick/formal workload，因此没有 R2-D 性能结论。
+
 ## 下一步
 
-1. 进入 R2-D multi-layer workload，固定 layer 数、dtype、batch/context、trial/seed 和计时边界。
-2. 分离 complete-token latency、per-layer device time、allocator/preflight/commit overhead，并记录 KV bytes、launch 和 rollback 指标。
-3. 完成 R2-D 后执行 clean-machine install、版本升级和 release tag；不重新做已冻结 kernel 参数 sweep，也不并行启动 shared prefix。
+1. RTX 5070 先运行单个 2-layer FP16 quick case，验证 CSV、profiler attribution、rollback 和严格摘要。
+2. quick 通过后运行 144 行正式 multi-trial，记录稳定收益、跨 1.0 场景、p99 范围和至少一个负结果。
+3. 正式证据完成后执行 clean-machine install、版本升级和 release tag；不重新 sweep kernel，也不并行启动 shared prefix。
