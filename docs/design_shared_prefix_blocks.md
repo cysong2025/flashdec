@@ -195,7 +195,17 @@ commit `1d5d8d0` 的 RTX 5070 正式矩阵覆盖 4 hit rates、2 dtypes、3 tria
 | 50% | 15/16 | 36/64 | 43.8% | 52 | 35.0% | 3.500 |
 | 75% | 16/16 | 20/64 | 68.8% | 36 | 55.0% | 5.500 |
 
-context saving 只计算重复 prefix；peak blocks 还包含每个请求不可共享的 private decode tail，因此 75% 的 context saving 是 68.8%，完整 peak reduction 是 55.0%。prefix attach p50 在所有非零 hit-rate case 中低于 `0.8 us`，相对约 `1.6-2.0 ms` 的 complete step 很小。跨轮中位 latency 对 hit rate 不单调，FP16/BF16 方向也不一致；在 paired trial range 完成归档前不形成 latency 收益结论。
+context saving 只计算重复 prefix；peak blocks 还包含每个请求不可共享的 private decode tail，因此 75% 的 context saving 是 68.8%，完整 peak reduction 是 55.0%。prefix attach p50 在所有非零 hit-rate case 中低于 `0.8 us`，相对约 `1.6-2.0 ms` 的 complete step 很小。
+
+paired trial 结果进一步限定 latency 结论：
+
+- FP16 25%：p50 `1.0672x [1.0076,1.1174]`，三轮稳定更快；
+- FP16 50%：p50 `1.0499x [0.8190,1.0928]`，跨过 1；
+- FP16 75%：p50 `0.9377x [0.9298,0.9870]`，三轮稳定更慢；
+- BF16 25%/50%：p50 分别为 `0.9725x [0.9370,1.0205]` 与 `0.9495x [0.9091,1.0015]`，均跨过 1；
+- BF16 75%：p50 `0.9054x [0.8602,0.9816]`，三轮稳定更慢。
+
+因此当前稳定结论仍是 memory/admission 收益，而不是 latency 加速。75% 的双 dtype 稳定回退需要进一步区分 `scheduler_p50_ms` 与 `engine_step_p50_ms`；在 attribution 完成前不将原因归于 host metadata、block aliasing 或 GPU cache 行为。
 
 ## 8. 验收测试
 

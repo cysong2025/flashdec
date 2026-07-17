@@ -60,7 +60,7 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 | Multi-layer R2 | complete-token p50/p90/TPS `1.2101x/1.3826x/1.2800x` | 24 个 dtype/case 中 20 个三轮稳定胜出 |
 | R2 最终 RTX 回归 | `337 passed, 25 subtests passed` | 无 skipped 或 failure |
 | R3-B RTX 回归 | focused `56 passed, 14 subtests passed`；full `352 passed, 25 subtests passed` | shared-prefix Engine/scheduler 集成验收通过 |
-| R3-C 正式矩阵 | 75% hit：context 节省 `68.8%`/`5.5 MiB`，admission `9/16 -> 16/16` | 24 行严格校验通过；decode latency 不声明稳定收益 |
+| R3-C 正式矩阵 | 75% hit：context 节省 `68.8%`/`5.5 MiB`，admission `9/16 -> 16/16` | 24 行通过；75% p50 在 FP16/BF16 均稳定回退，待归因 |
 
 R2 的 decode device ratio 为 `1.0024x`，而 append device 与 CUDA event ratio 分别为 `1.6103x` 和 `1.9784x`，说明系统收益主要来自 append/launch 路径。每轮仅 20 repeats，p99 接近单轮最大值，因此所有尾延迟结论都保留场景范围，不作生产级稳定性声明。
 

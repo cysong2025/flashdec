@@ -48,6 +48,7 @@
 - R2-D 每轮仅 20 repeats，nearest-rank p99 实际接近该轮最大值；p99 范围只用于报告长尾波动，不声明生产级尾延迟收益。
 - R3-C commit `fd36ed0` 的 RTX 5070 FP16 quick 4 行矩阵通过严格校验。75% hit 将 context physical blocks 从 `4/4` 降至 `2/4`、peak blocks 从 `8` 降至 `6`，bounded-pool admission 从 `2/4` 提高到 `3/4`；单轮 latency 非单调，不形成性能结论。
 - R3-C commit `1d5d8d0` 的 RTX 5070 正式 24 行矩阵全部通过严格校验。75% hit 将 context physical blocks 从 `64/64` 降至 `20/64`，节省 `68.8%`/`5.5 MiB`；peak blocks 从 `80` 降至 `36`，bounded-pool admission 从 `9/16` 提高到 `16/16`。attach p50 低于 `0.8 us`，decode latency 跨 dtype 非单调，因此不声明稳定加速。
+- R3-C paired latency：FP16 25% p50 三轮稳定更快；FP16/BF16 75% p50 三轮稳定更慢，ratio 分别为 `0.9377x [0.9298,0.9870]` 与 `0.9054x [0.8602,0.9816]`。该负结果保留并进入 scheduler/engine attribution，不用内存收益掩盖 latency trade-off。
 
 ### Correctness evidence
 
@@ -60,7 +61,7 @@
 
 ### Pending before v0.1.0
 
-- R3-C paired range summary 与 CSV/log 证据归档。
+- R3-C CSV/log/summary 证据归档与 75% hit scheduler/engine latency attribution。
 - clean WSL venv editable install 和 quick workload 复现。
 - 将 `pyproject.toml` 与 `flashdec.__version__` 同步更新为 `0.1.0`。
 - 创建并验证 `v0.1.0` tag；当前不得提前标记 release。

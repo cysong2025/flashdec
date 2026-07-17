@@ -205,7 +205,7 @@ CUDA event 结果：
 - 每个 request 的 decode tail 始终私有，所以 75% 的 context saving 为 68.8%，完整 peak block reduction 为 55.0%，不能混为同一个百分比。
 - 非零 hit-rate 的 prefix attach p50 为 `0.388-0.736 us`，相对毫秒级 complete step 很小。
 
-限制与负结果：跨轮中位 p50/TPS 随 hit rate 不单调，FP16 与 BF16 方向也不一致。shared prefix 不改变 attention 算法，当前证据不支持 decode latency 加速声明；正式摘要必须结合 paired trial 的 median `[min,max]` 与 direction，而不是只比较跨轮中位数。
+限制与负结果：paired p50 显示 FP16 25% 为 `1.0672x [1.0076,1.1174]`，是唯一三轮稳定更快的非零 case；FP16/BF16 50% 与 BF16 25% 均跨过 1。75% hit 在 FP16/BF16 都三轮稳定更慢，p50 ratio 分别为 `0.9377x [0.9298,0.9870]` 与 `0.9054x [0.8602,0.9816]`，TPS ratio 分别为 `0.9569x [0.8416,0.9712]` 与 `0.9022x [0.8271,0.9795]`。shared prefix 不改变 attention 算法，当前证据不支持整体 latency 加速声明；下一步必须分离 scheduler host 与 engine-step 字段，再决定这是可优化开销还是需要冻结的 trade-off。
 
 ## 后续工作边界
 
