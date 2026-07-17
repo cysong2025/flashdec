@@ -222,11 +222,10 @@ R1 已在 RTX 5070 完成 36 行正式策略矩阵并通过严格摘要校验。
 
 R2-D RTX workload 证据已完成。commit `fa0f89a` 的 `12 cases x 2 dtypes x 2 backends x 3 trials = 144 rows` 正式矩阵通过 shape、pair trajectory、transaction、block accounting、rollback、profiler、seed 与 backend-order 严格校验。整体 complete-token p50 降低约 17.4%，TPS 提高约 28.0%；层数从 1 增加到 2/4 时，p50 几何平均由 `1.1112x` 提高到 `1.2567x/1.2690x`。p99 必须继续连同范围报告，不能把 20-repeat 的单轮最大值写成稳定尾延迟结论。
 
-Mac 文档闭环验证已完成：R2-D 10 个 dependency-free tests 通过，正式 summary 重新生成后逐字一致，`compileall`、`git diff --check` 和 `check_release.py --require-evidence` 通过。
+Mac 文档闭环验证已完成：R2-D 10 个 dependency-free tests 通过，正式 summary 重新生成后逐字一致，`compileall`、`git diff --check` 和 `check_release.py --require-evidence` 通过。证据提交 `67bee15` 已在 RTX 5070 完成最终完整回归：`337 passed, 25 subtests passed in 5.82s`，无 skipped 或 failure。R2 功能、correctness、性能与文档证据至此闭环。
 
 当前立即执行顺序：
 
-1. 提交并推送正式 Markdown summary、R2 文档与扩展后的 release evidence gate；CSV/log 保留为本地原始证据，不提交大体积日志。
-2. RTX 5070 WSL 拉取该确定 commit，运行完整 regression，确认 benchmark/profiler 修复没有引入 correctness 回归。
-3. 将最终回归结果写入文档并提交，再执行 clean WSL venv editable install、release quick workload 和 release checker。
-4. release gate 全部通过后，才把版本从 `0.0.0` 更新为 `0.1.0` 并创建 tag；暂不并行启动 shared prefix。
+1. 提交最终 RTX 回归记录。
+2. 执行 clean WSL venv editable install、release quick workload 和 release checker。
+3. release gate 全部通过后，才把版本从 `0.0.0` 更新为 `0.1.0` 并创建 tag；暂不并行启动 shared prefix。

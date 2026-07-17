@@ -48,6 +48,7 @@
 - R2-A Cache transaction 完整回归：`313 passed, 20 subtests passed`。
 - R2-B commit `a009b45` RTX 5070 focused：`71 passed, 8 subtests passed in 3.71s`；完整回归：`322 passed, 20 subtests passed in 6.62s`，无 skipped、warning 或 failure。
 - R2-C commit `6afc89f` RTX 5070 focused：`131 passed in 6.21s`；完整回归：`326 passed, 20 subtests passed in 6.23s`，摘要无 skipped、warning 或 failure。
+- R2-D 证据提交 `67bee15` RTX 5070 最终完整回归：`337 passed, 25 subtests passed in 5.82s`，无 skipped 或 failure。
 
 ### Pending before v0.1.0
 

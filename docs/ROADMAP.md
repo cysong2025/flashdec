@@ -227,7 +227,7 @@ request larger than schedulable capacity -> explicit rejection
 
 优先级：P1，是 v0.2 的第二条核心深度主线。预计 2 个阶段周。
 
-当前状态：R2-A Cache transaction、R2-B Engine sequential API、R2-C fused CUDA correctness 和 R2-D 正式 workload 证据均已完成。commit `fa0f89a` 的 144 行矩阵通过严格校验；fused complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`。24 个 dtype/case 组合中 20 个三轮 p50 稳定胜出，4 个跨过 1.0，没有稳定回退 case。
+当前状态：R2-A Cache transaction、R2-B Engine sequential API、R2-C fused CUDA correctness 和 R2-D 正式 workload 证据均已完成。commit `fa0f89a` 的 144 行矩阵通过严格校验；fused complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`。24 个 dtype/case 组合中 20 个三轮 p50 稳定胜出，4 个跨过 1.0，没有稳定回退 case。证据提交 `67bee15` 的 RTX 5070 最终完整回归为 `337 passed, 25 subtests passed in 5.82s`，无 skipped 或 failure；R2 Definition of Done 已闭合。
 
 ### 要回答的问题
 
@@ -364,10 +364,8 @@ capacity failure -> refcount and ownership unchanged
 
 ## 11. 当前立即执行顺序
 
-1. Mac dependency-free tests、summary 重建、静态检查与 release evidence 结构检查已通过。
-2. 提交并推送 R2 正式 summary、文档和扩展后的 release evidence gate。
-3. 在 RTX 5070 拉取该 commit 并运行完整 regression，冻结 multi-layer correctness 与性能边界。
-4. 记录回归结果后执行 clean-machine install、release quick workload 与 release checker。
-5. release gate 全部通过后升级版本并创建 `v0.1.0` tag；发布闭环后再在 shared prefix 与公开基线之间二选一。
+1. R2 正式 summary、文档、release evidence gate 与 RTX 最终完整回归均已完成。
+2. 提交最终回归记录后执行 clean-machine install、release quick workload 与 release checker。
+3. release gate 全部通过后升级版本并创建 `v0.1.0` tag；发布闭环后再在 shared prefix 与公开基线之间二选一。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

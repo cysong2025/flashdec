@@ -469,4 +469,4 @@ finish after commit -> releases block once for all layer storage
 
 ## 17. 当前状态
 
-本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。R2-A/R2-B/R2-C correctness 与 R2-D 正式性能证据均已完成；稳定结论是 fused append/launch 优化能够转化为 multi-layer complete-token 收益，限制是小样本 p99 波动和少数 profiler attribution anomaly。最终 RTX full regression、文档提交和 clean-install release evidence 完成后，R2 项目闭环才算全部完成。
+本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。R2-A/R2-B/R2-C correctness 与 R2-D 正式性能证据均已完成；稳定结论是 fused append/launch 优化能够转化为 multi-layer complete-token 收益，限制是小样本 p99 波动和少数 profiler attribution anomaly。证据提交 `67bee15` 已在 RTX 5070 通过 `337 passed, 25 subtests passed in 5.82s` 的无跳过完整回归，R2 项目闭环完成；clean-install、版本号与 tag 属于后续 release gate。

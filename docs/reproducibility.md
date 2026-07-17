@@ -326,7 +326,7 @@ python scripts/check_release.py --require-clean
 | Multi-trial runner/validator | 已完成 | commit `3708b87` 的 36-row RTX CSV + validated summary |
 | Complete-step profiler | 已完成 | commit `3708b87` 的 validated 12-case summary + quick trace |
 | R1 Scheduler v2 | 已完成 | commit `16de9d4` 的 36-row RTX policy matrix + validated summary |
-| R2 Multi-layer transaction | 正式性能证据已完成，最终回归待执行 | commit `fa0f89a` 的 144-row RTX matrix + validated summary |
+| R2 Multi-layer transaction | 已完成 | commit `fa0f89a` 的 144-row RTX matrix + validated summary；证据提交 `67bee15` 的 `337 passed, 25 subtests passed in 5.82s` 无跳过完整回归 |
 | Clean WSL editable install | 待执行 | 新 venv 命令、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

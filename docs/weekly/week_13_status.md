@@ -123,9 +123,10 @@ python benchmarks/summarize_multi_layer_trials.py \
 - BF16 `l4_b4_c128` 的独立 profiler append ratio 为 `0.4980x`，但正式 complete-token p50 三轮均胜出；这是 attribution anomaly，不是 wall-clock 回退。
 - 每轮只有 20 repeats，nearest-rank p99 接近最大值，必须报告范围，不声明稳定生产尾延迟收益。
 - Mac 最终文档闭环验证：R2-D 10/10 dependency-free tests 通过，正式 summary 重建后逐字一致，`compileall`、`git diff --check` 和 `check_release.py --require-evidence` 通过。
+- 证据提交 `67bee15` 的 RTX 5070 最终完整回归：`337 passed, 25 subtests passed in 5.82s`，无 skipped 或 failure。运行前显式设置 `CUDA_HOME=/usr/local/cuda-12.8`、将 `$CUDA_HOME/bin` 加入 `PATH` 并确认 CUDA/BF16 可用。
+- R2-A/R2-B/R2-C/R2-D 的状态语义、correctness、正式性能、负结果、文档与最终回归均已完成；R2 项目闭环。
 
 ## 下一步
 
-1. 提交并推送正式 Markdown summary、文档与扩展后的 release evidence gate；CSV/log 保留为原始本地证据。
-2. RTX 5070 拉取该确定 commit 并运行完整 regression，确认 R2-D benchmark/profiler 修复未引入 correctness 回归。
-3. 记录最终回归结果后执行 clean-machine install、release quick workload 和 release checker；全部通过后再升级版本并创建 tag。
+1. 提交并推送最终 RTX 回归记录；CSV/log 继续作为原始本地证据。
+2. 执行 clean-machine install、release quick workload 和 release checker；全部通过后再升级版本并创建 tag。
