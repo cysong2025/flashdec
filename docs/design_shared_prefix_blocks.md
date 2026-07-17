@@ -134,9 +134,35 @@ sum((active_refcount - 1) * prefix_block_count)
 - shared-aware metrics 与 invariant validation；
 - CPU/reference correctness tests。
 
+验证状态：2026-07-17 的 WSL focused 与完整回归均报告通过。本轮未提供精确通过数量，因此只记录通过事实，不形成新的定量回归基线。
+
 ### R3-B：DecodeEngine 与 scheduler integration
 
-当前 scheduler 的 lifetime commitment 和 `physical_blocks` 都按 request 独占计算。R3-B 需要显式区分 shared resident blocks、request-private commitment 和本 step 的新增块，再允许 scheduler-managed request 使用 prefix。R3-A 不通过外部 cache mutation 绕过这一约束。
+`RequestSpec` 增加 opaque `prefix_id`。调用方不能提供 shared block 数；DecodeEngine 从 Cache registry 派生 prefix 长度，并要求：
+
+```text
+prefix.token_count == RequestSpec.initial_context_tokens
+```
+
+因此 R3-B 的 prefix 必须覆盖完整 initial context。admission 时 Engine 执行 `add_request + attach_prefix`，不再走逐 token prefill。`SchedulingSnapshot` 分别携带全局 `resident_prefix_blocks` 和每个 request 的 `shared_prefix_blocks`。
+
+容量口径调整为：
+
+```text
+resident_prefix_blocks
+  + sum(active request-private lifetime commitments)
+  <= max_blocks - reserve_blocks
+
+used physical blocks
+  = resident_prefix_blocks
+  + sum(active request-private physical blocks)
+```
+
+同一 prefix 被多个 request 引用时，resident blocks 只计一次；每个 request 的 future decode tail 独立 commitment。`needed_physical_blocks_now` 只统计 admission 后尚未存在的 private context blocks，以及本轮跨 boundary 的 private tail blocks。
+
+prefix 必须在 request submission 前通过 `DecodeEngine.register_prefix()` 注册，或在构造 Engine 前已经存在于 Cache。scheduler-managed mode 启动后，外部 register/evict/attach 会使 Cache version 与 Engine snapshot 不一致并被拒绝。第一版不会为了 admission 主动淘汰 inactive prefix；scheduler 将当前 resident set 视为固定物理占用。
+
+当前实现状态：dependency-free scheduler tests 已通过；DecodeEngine/PyTorch 与完整 WSL 回归待执行。
 
 ### R3-C：Benchmark 与 RTX evidence
 

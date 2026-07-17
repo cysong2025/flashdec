@@ -6,8 +6,6 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from flashdec.cache import PagedKVCache
-from flashdec.engine import DecodeEngine
-from flashdec.scheduler import RequestSpec
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -219,20 +217,3 @@ def test_shared_prefix_rejects_invalid_or_mutating_attach_inputs():
     assert cache.request_state("nonempty") == before
     assert cache.prefix_state("valid")["active_refcount"] == 0
     assert cache.validate_invariants()
-
-
-def test_r3a_rejects_scheduler_mode_until_shared_commitments_are_integrated():
-    cache = _cache(num_layers=1, max_blocks=3, prefix_capacity=1)
-    prefix_k, prefix_v = _prefix_blocks(cache, 1)
-    cache.register_prefix("resident", prefix_k, prefix_v)
-    engine = DecodeEngine(cache)
-
-    with pytest.raises(RuntimeError, match="requires an empty PagedKVCache"):
-        engine.submit_request(
-            RequestSpec(
-                request_id="request",
-                initial_context_tokens=cache.block_size,
-                max_new_tokens=1,
-                submission_order=0,
-            )
-        )

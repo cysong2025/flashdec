@@ -37,6 +37,15 @@ def _blocks_for_tokens(token_count, block_size):
     return (token_count + block_size - 1) // block_size
 
 
+def _private_commitment_blocks(spec, shared_prefix_blocks, block_size):
+    _require_non_bool_int("shared_prefix_blocks", shared_prefix_blocks)
+    total_blocks = spec.commitment_blocks(block_size)
+    private_blocks = total_blocks - shared_prefix_blocks
+    if private_blocks <= 0:
+        raise ValueError("request-private lifetime commitment must be positive")
+    return private_blocks
+
+
 @dataclass(frozen=True)
 class RequestSpec:
     """Immutable lifetime information supplied when a request is submitted."""
@@ -45,15 +54,18 @@ class RequestSpec:
     initial_context_tokens: int
     max_new_tokens: int
     submission_order: int
+    prefix_id: Hashable | None = None
 
     def __post_init__(self):
         _require_request_id(self.request_id)
         _require_non_bool_int("initial_context_tokens", self.initial_context_tokens)
         _require_non_bool_int("max_new_tokens", self.max_new_tokens, minimum=1)
         _require_non_bool_int("submission_order", self.submission_order)
+        if self.prefix_id is not None:
+            _require_request_id(self.prefix_id)
 
     def commitment_blocks(self, block_size):
-        """Return the maximum physical blocks needed over this request lifetime."""
+        """Return logical lifetime blocks before shared-prefix reuse."""
         return _blocks_for_tokens(
             self.initial_context_tokens + self.max_new_tokens,
             block_size,
@@ -67,17 +79,31 @@ class WaitingRequestMetadata:
     spec: RequestSpec
     wait_steps: int = 0
     skip_count: int = 0
+    shared_prefix_blocks: int = 0
 
     def __post_init__(self):
         if not isinstance(self.spec, RequestSpec):
             raise TypeError("spec must be a RequestSpec")
         _require_non_bool_int("wait_steps", self.wait_steps)
         _require_non_bool_int("skip_count", self.skip_count)
+        _require_non_bool_int("shared_prefix_blocks", self.shared_prefix_blocks)
+        if (self.spec.prefix_id is None) != (self.shared_prefix_blocks == 0):
+            raise ValueError(
+                "shared_prefix_blocks must be positive exactly when prefix_id is set"
+            )
 
     @property
     def request_id(self):
         """Return the request id carried by the immutable specification."""
         return self.spec.request_id
+
+    def private_commitment_blocks(self, block_size):
+        """Return request-private lifetime blocks after shared-prefix reuse."""
+        return _private_commitment_blocks(
+            self.spec,
+            self.shared_prefix_blocks,
+            block_size,
+        )
 
 
 @dataclass(frozen=True)
@@ -90,6 +116,7 @@ class ActiveRequestMetadata:
     physical_blocks: int
     committed_blocks: int
     service_wait_steps: int = 0
+    shared_prefix_blocks: int = 0
 
     def __post_init__(self):
         if not isinstance(self.spec, RequestSpec):
@@ -99,6 +126,11 @@ class ActiveRequestMetadata:
         _require_non_bool_int("physical_blocks", self.physical_blocks)
         _require_non_bool_int("committed_blocks", self.committed_blocks, minimum=1)
         _require_non_bool_int("service_wait_steps", self.service_wait_steps)
+        _require_non_bool_int("shared_prefix_blocks", self.shared_prefix_blocks)
+        if (self.spec.prefix_id is None) != (self.shared_prefix_blocks == 0):
+            raise ValueError(
+                "shared_prefix_blocks must be positive exactly when prefix_id is set"
+            )
         if self.remaining_tokens > self.spec.max_new_tokens:
             raise ValueError("remaining_tokens must not exceed max_new_tokens")
         expected_seq_len = self.spec.initial_context_tokens + (
@@ -108,13 +140,21 @@ class ActiveRequestMetadata:
             raise ValueError(
                 "seq_len must equal initial_context_tokens plus completed decode tokens"
             )
-        if self.physical_blocks > self.committed_blocks:
-            raise ValueError("physical_blocks must not exceed committed_blocks")
+        if self.private_physical_blocks > self.committed_blocks:
+            raise ValueError("private physical_blocks must not exceed committed_blocks")
 
     @property
     def request_id(self):
         """Return the request id carried by the immutable specification."""
         return self.spec.request_id
+
+    @property
+    def private_physical_blocks(self):
+        """Return physical blocks owned only by this request."""
+        private_blocks = self.physical_blocks - self.shared_prefix_blocks
+        if private_blocks < 0:
+            raise ValueError("shared_prefix_blocks must not exceed physical_blocks")
+        return private_blocks
 
 
 @dataclass(frozen=True)
@@ -147,6 +187,7 @@ class SchedulingSnapshot:
     block_size: int
     max_blocks: int
     free_blocks: int
+    resident_prefix_blocks: int = 0
     waiting: tuple[WaitingRequestMetadata, ...] = ()
     active: tuple[ActiveRequestMetadata, ...] = ()
 
@@ -156,8 +197,11 @@ class SchedulingSnapshot:
         _require_non_bool_int("block_size", self.block_size, minimum=1)
         _require_non_bool_int("max_blocks", self.max_blocks, minimum=1)
         _require_non_bool_int("free_blocks", self.free_blocks)
+        _require_non_bool_int("resident_prefix_blocks", self.resident_prefix_blocks)
         if self.free_blocks > self.max_blocks:
             raise ValueError("free_blocks must not exceed max_blocks")
+        if self.resident_prefix_blocks > self.max_blocks - self.free_blocks:
+            raise ValueError("resident_prefix_blocks must not exceed used physical blocks")
 
         waiting = tuple(self.waiting)
         active = tuple(self.active)
@@ -177,19 +221,40 @@ class SchedulingSnapshot:
         if len(submission_orders) != len(set(submission_orders)):
             raise ValueError("submission_order values must be globally unique")
 
+        for item in (*waiting, *active):
+            expected_prefix_tokens = item.shared_prefix_blocks * self.block_size
+            if item.spec.prefix_id is not None:
+                if item.shared_prefix_blocks > self.resident_prefix_blocks:
+                    raise ValueError(
+                        "request shared prefix blocks exceed global residency"
+                    )
+                if expected_prefix_tokens != item.spec.initial_context_tokens:
+                    raise ValueError(
+                        "R3-B shared prefix must cover the full initial context"
+                    )
+            elif expected_prefix_tokens:
+                raise ValueError("request without prefix_id cannot have shared prefix blocks")
+
         for item in active:
-            expected_commitment = item.spec.commitment_blocks(self.block_size)
+            expected_commitment = _private_commitment_blocks(
+                item.spec,
+                item.shared_prefix_blocks,
+                self.block_size,
+            )
             if item.committed_blocks != expected_commitment:
-                raise ValueError("active committed_blocks must match the request lifetime")
+                raise ValueError(
+                    "active committed_blocks must match the request-private lifetime"
+                )
             expected_physical = _blocks_for_tokens(item.seq_len, self.block_size)
             if item.physical_blocks != expected_physical:
                 raise ValueError("active physical_blocks must match seq_len")
 
         used_blocks = self.max_blocks - self.free_blocks
-        active_physical_blocks = sum(item.physical_blocks for item in active)
-        if active_physical_blocks != used_blocks:
+        active_private_blocks = sum(item.private_physical_blocks for item in active)
+        accounted_blocks = self.resident_prefix_blocks + active_private_blocks
+        if accounted_blocks != used_blocks:
             raise ValueError(
-                "active physical_blocks must exactly match max_blocks - free_blocks"
+                "resident prefix plus active private blocks must exactly match used blocks"
             )
 
 
@@ -241,7 +306,12 @@ class BlockAwareScheduler:
             raise ValueError("snapshot active requests exceed max_active_requests")
 
         schedulable_blocks = snapshot.max_blocks - config.reserve_blocks
-        committed_before = sum(item.committed_blocks for item in snapshot.active)
+        if snapshot.resident_prefix_blocks > schedulable_blocks:
+            raise ValueError("resident prefixes exceed schedulable block capacity")
+        private_capacity = schedulable_blocks - snapshot.resident_prefix_blocks
+        committed_before = snapshot.resident_prefix_blocks + sum(
+            item.committed_blocks for item in snapshot.active
+        )
         if committed_before > schedulable_blocks:
             raise ValueError("active commitments exceed schedulable block capacity")
 
@@ -253,7 +323,7 @@ class BlockAwareScheduler:
         rejected = [
             item
             for item in ordered_waiting
-            if item.spec.commitment_blocks(snapshot.block_size) > schedulable_blocks
+            if item.private_commitment_blocks(snapshot.block_size) > private_capacity
         ]
         rejected_ids = {item.request_id for item in rejected}
         eligible = [item for item in ordered_waiting if item.request_id not in rejected_ids]
@@ -272,7 +342,7 @@ class BlockAwareScheduler:
         ]
         barrier = aged[0] if aged else None
         if barrier is not None:
-            barrier_blocks = barrier.spec.commitment_blocks(snapshot.block_size)
+            barrier_blocks = barrier.private_commitment_blocks(snapshot.block_size)
             if remaining_slots == 0 or barrier_blocks > remaining_capacity:
                 drain_for_request_id = barrier.request_id
                 reasons.add("aging_drain")
@@ -288,7 +358,7 @@ class BlockAwareScheduler:
                 if remaining_slots == 0:
                     reasons.add("active_limit")
                     break
-                item_blocks = item.spec.commitment_blocks(snapshot.block_size)
+                item_blocks = item.private_commitment_blocks(snapshot.block_size)
                 if item_blocks <= remaining_capacity:
                     admitted.append(item)
                     remaining_slots -= 1
@@ -314,8 +384,9 @@ class BlockAwareScheduler:
                     item.spec.initial_context_tokens,
                     snapshot.block_size,
                 ),
-                committed_blocks=item.spec.commitment_blocks(snapshot.block_size),
+                committed_blocks=item.private_commitment_blocks(snapshot.block_size),
                 service_wait_steps=0,
+                shared_prefix_blocks=item.shared_prefix_blocks,
             )
             for item in admitted
         ]
@@ -331,7 +402,7 @@ class BlockAwareScheduler:
             reasons.add("idle")
 
         needed_physical_blocks_now = sum(
-            item.physical_blocks for item in admitted_active
+            item.private_physical_blocks for item in admitted_active
         )
         for item in runnable:
             seq_len_before_append = item.seq_len

@@ -19,13 +19,14 @@
 - capacity preflight 和 allocator invariant validation。
 - R2-A multi-layer token transaction：shared location、sequential layer write、commit/abort rollback。
 - R3-A Cache ownership core：opaque prefix id、immutable multi-layer full blocks、active refcount、request-private tail 与 inactive LRU。
+- R3-B scheduler integration：`RequestSpec.prefix_id`、Cache-derived shared block metadata、global residency + private lifetime commitment、admission attach 与 stale external mutation rejection。
 
 当前限制：
 
 - legacy `append()`、RoPE helper 和 `DecodeEngine.step()` compatibility wrapper 仍限制 `num_layers=1`；`num_layers>1` 使用 `begin_step()` / `step_layer()` / `commit_step()` sequential transaction API。
 - finished/cancelled request id 当前不能重新激活。
 - runtime v2 已通过 RTX 5070 focused/full correctness 验证。
-- R3-A shared prefix 尚未接入 DecodeEngine scheduler-managed admission；仍不包含模型 prefill、swap/offload 或生产级多线程 serving。
+- R3-B prefix 必须覆盖完整 initial context，并在 request submission 前 resident；尚不包含模型 prefill、content hashing、admission-time prefix eviction、swap/offload 或生产级多线程 serving。
 
 ## Paged Decode Triton Kernel
 
@@ -93,7 +94,7 @@
 - short-churn、mixed-steady、long-pressure synthetic workload 与完整 step p50/p90/p99/TPS/memory metrics。
 - 可选 `profile_ranges=True` 的 preflight/append/decode 归因；默认关闭。
 
-当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和正式 workload 已在 RTX 5070 验证。它仍不是完整模型执行器：Q/K/V 由调用方提供，不包含 multi-layer prompt prefill、model forward、sampling、prefix cache 或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成。
+当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和正式 workload 已在 RTX 5070 验证。它仍不是完整模型执行器：Q/K/V 由调用方提供，不包含 multi-layer prompt prefill、model forward、sampling、prefix 内容构建或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成；R3-B WSL 回归仍待执行。
 
 ### Week 11 Native CUDA KV Append
 
@@ -249,5 +250,5 @@ python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_de
 
 - kernel 配置已冻结为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
 - PagedKVCache runtime v2、RoPE/KV append、DecodeEngine、R1 Scheduler 与 R2 multi-layer transaction 均已完成 RTX 验证。
-- R3 Shared Prefix Blocks 已被选为当前优化方向；R3-A Cache core 的 CPU/RTX 验证尚未归档，R3-B scheduler integration 与 R3-C benchmark 仍待完成。
+- R3 Shared Prefix Blocks 已被选为当前优化方向；R3-A Cache core 的 WSL focused/full 回归已通过，R3-B scheduler integration 已实现并等待 WSL 回归，R3-C benchmark 仍待完成。
 - clean-install、版本升级和 release tag 保留在 R3 闭合后的最终发布门禁；公开基线继续作为非阻塞选择性扩展。

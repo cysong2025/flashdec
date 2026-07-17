@@ -28,21 +28,21 @@ Block-aware Scheduler
 
 ## 当前目标：R3 Shared Prefix Blocks
 
-状态：R3 设计与实现进行中；仓库按所有者要求继续保持 private。
+状态：R3-A 已通过 WSL focused/full 回归；R3-B 已实现并等待 WSL 回归；仓库按所有者要求继续保持 private。
 
 R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享，目标是减少重复 KV physical blocks，同时保持 request lifecycle、transaction rollback 和容量预检的正确性。
 
 分阶段目标：
 
-- R3-A：完成 prefix 注册、挂载、引用计数、inactive LRU、回收和 CPU 不变量测试。
-- R3-B：让 DecodeEngine 与 block-aware scheduler 正确区分 shared residency 和 request-private commitment。
+- R3-A：已完成 prefix 注册、挂载、引用计数、inactive LRU、回收和 CPU/RTX 回归。
+- R3-B：已实现 DecodeEngine/scheduler shared residency 与 request-private commitment 分离；待 focused/full WSL 回归。
 - R3-C：完成 hit-rate benchmark、RTX correctness、显存节省证据和结果归档。
 
 明确边界：
 
 - 只共享调用方已经构建的 immutable full blocks；tail block 保持 request-private。
 - 不实现 tokenizer、模型 prefill、sampling、HTTP server 或分布式执行。
-- R3-A 不绕过 scheduler 的 lifetime commitment；scheduler-managed prefix 在 R3-B 接入。
+- R3-B 只接受已经 resident 且覆盖完整 initial context 的 prefix；admission-time prefix eviction 暂不支持。
 
 所有权与验收细节见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 

@@ -62,7 +62,7 @@ cache = flashdec.PagedKVCache(
 
 Cache 是 request seq_len、physical block ownership、shared-prefix residency 和 transaction 状态的唯一事实来源。容量失败必须发生在 mutation 前；finish/cancel 释放 request-private blocks 并减少 prefix reference；multi-layer transaction 只在全部 layer 完成后增长一次 seq_len。
 
-R3-A shared-prefix API 接收已经构建的 immutable full blocks，shape 为 `[num_layers, num_prefix_blocks, num_kv_heads, block_size, head_dim]`。多个 request 可以共享同一组 physical ids，prefix 后的 tail 始终私有；无 active owner 的 prefix 才能被显式或 LRU 淘汰。`prefix_cache_capacity_blocks=0` 是默认值，表示关闭该功能。DecodeEngine/scheduler commitment integration 属于 R3-B，R3-A 会拒绝在已有 resident prefix 的 cache 上启用 scheduler-managed mode。完整所有权说明见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
+Shared-prefix API 接收已经构建的 immutable full blocks，shape 为 `[num_layers, num_prefix_blocks, num_kv_heads, block_size, head_dim]`。多个 request 可以共享同一组 physical ids，prefix 后的 tail 始终私有；无 active owner 的 prefix 才能被显式或 LRU 淘汰。`prefix_cache_capacity_blocks=0` 是默认值，表示关闭该功能。完整所有权说明见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
 ## RoPE 与 Append
 
@@ -96,6 +96,23 @@ engine = flashdec.DecodeEngine(
 )
 ```
 
+R3-B scheduler-managed prefix：
+
+```python
+engine.register_prefix("system-v1", prefix_k_blocks, prefix_v_blocks)
+engine.submit_request(
+    flashdec.RequestSpec(
+        request_id="request-1",
+        initial_context_tokens=prefix_k_blocks.shape[1] * cache.block_size,
+        max_new_tokens=128,
+        submission_order=0,
+        prefix_id="system-v1",
+    )
+)
+```
+
+prefix 必须在任何 request submission 之前 resident，并覆盖完整 `initial_context_tokens`。Snapshot 将 prefix residency 作为全局物理占用计一次，将每个 request 的 decode tail 作为 private lifetime commitment。scheduler-managed mode 启动后不能绕过 Engine 修改 prefix registry。
+
 Unscheduled lifecycle：
 
 ```text
@@ -125,7 +142,7 @@ Layer 必须按 `0..N-1` 顺序执行。`step_layer()` 的输入、写入或 dec
 
 ## Scheduler
 
-`RequestSpec` 固定 initial context、最大生成 token 数和 submission order；`SchedulerConfig` 固定 active/batch 上限、reserve blocks 与 aging threshold。`BlockAwareScheduler.plan(snapshot)` 是纯函数式规划步骤，不修改 Engine 或 Cache。
+`RequestSpec` 固定 initial context、最大生成 token 数、submission order 和可选 opaque `prefix_id`；`SchedulerConfig` 固定 active/batch 上限、reserve blocks 与 aging threshold。`BlockAwareScheduler.plan(snapshot)` 是纯函数式规划步骤，不修改 Engine 或 Cache。
 
 `SchedulerDecision` 必须由同一 `state_version` 的 Engine 应用。过期或伪造 decision 会在任何部分 mutation 前被拒绝。
 

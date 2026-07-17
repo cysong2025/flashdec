@@ -344,3 +344,30 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 ## 14. 当前状态
 
 本文已冻结 R1 的目标语义与实验边界。R1-A 纯策略层、R1-B Engine/Cache 集成、R1-C 三策略 workload 与 R1-D 结论冻结均已完成。正式结果表明 lifetime policy 在 boundary-deadlock 中完成 2/2 请求且无取消/死锁；cancel baseline 完成 1/2，greedy baseline 完成 0/2 并触发确定 deadlock。finite queue 中三种策略均完成 6/6，因此 R1 的稳定结论是容量安全与进展保证，而不是无条件 latency/TPS 优势。
+
+## 15. R3-B Shared Prefix 扩展
+
+R1 的 `sum(active physical_blocks) == used_blocks` 建立在每个 request 独占 block 的前提上。R3-B 允许多个 request 的 block table 重复引用同一组 immutable prefix ids，因此增加两层派生元数据：
+
+- `SchedulingSnapshot.resident_prefix_blocks`：Cache registry 当前持有的唯一 physical prefix blocks，只计一次。
+- `WaitingRequestMetadata/ActiveRequestMetadata.shared_prefix_blocks`：单个 request 的 logical block table 中有多少前导块来自 prefix。
+
+`RequestSpec` 只增加 opaque `prefix_id`，不接受调用方提供 prefix 长度。DecodeEngine 从 Cache registry 派生 shared block 数并验证 prefix 覆盖完整 initial context，防止伪造容量节省。
+
+R3-B 将不变量改为：
+
+```text
+used_blocks
+  == resident_prefix_blocks
+   + sum(active physical_blocks - active shared_prefix_blocks)
+
+committed_blocks
+  == resident_prefix_blocks
+   + sum(active request-private lifetime commitments)
+
+used_blocks <= committed_blocks <= schedulable_blocks
+```
+
+waiting request 的 admission 只消耗 private lifetime commitment；prefix residency 已经包含在全局基数中。admission 后 Engine 将同一 prefix ids 挂到 request block table 开头，下一 token 位于 full-block boundary 并分配私有 tail。
+
+当前限制：scheduler-managed mode 不在 decision 内注册或淘汰 prefix。resident set 必须在 request submission 前建立，后续外部 Cache mutation 会触发 version mismatch。这样先闭合可验证的 capacity semantics，再在 R3-C workload 中衡量固定 hit-rate 下的显存节省。

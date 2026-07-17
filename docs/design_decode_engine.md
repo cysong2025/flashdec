@@ -91,9 +91,11 @@ Engine 在执行 RoPE/KV append 前根据每个 active request 的当前 `seq_le
 - Q/K/V 由调用方提供；不执行模型 forward、sampling 或 prefill。
 - multi-layer prompt prefill 尚未实现。
 - multi-layer transaction 支持 `append_backend="torch"` 与 `"fused_cuda"`；独立非 fused CUDA append 不进入 transaction。
-- 不实现 priority、preemption、prefix cache 或 CPU offload。
+- 不实现 priority、preemption、prefix 内容构建、admission-time prefix eviction 或 CPU offload。
 
 后续 Scheduler v2 不会让 Scheduler 直接持有 physical blocks，而是在 admission 时建立 lifetime logical commitment，再由 Cache 按 append 进度惰性分配。详细状态所有权、deadlock 反例与 stale-decision 语义见 `docs/design_scheduler.md`。
+
+R3-B 在同一边界上增加 shared-prefix admission：Engine 从 Cache registry 验证 `RequestSpec.prefix_id`，admission 时挂载 immutable full blocks；Scheduler 只接收 derived `shared_prefix_blocks`，不接触 K/V 或 physical ids。global prefix residency 只计一次，每个 request 只承诺 private tail。完整定义见 `docs/design_shared_prefix_blocks.md`。
 
 ## 验证
 

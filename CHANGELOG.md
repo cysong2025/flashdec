@@ -25,6 +25,7 @@
 - R2-D multi-layer workload runner 与严格 trial summary：12-case layer/batch/context 矩阵、complete-token/per-layer latency、host begin/commit、独立 profiler append/decode/launch attribution、KV bytes、rollback probe 和 paired evidence validation。
 - 公开 API、文档索引、贡献指南、dependency-free Markdown link checker 与 GitHub Actions 质量门禁。
 - R3-A shared-prefix ownership core：opaque prefix id、immutable multi-layer full blocks、request reference counting、private tail、inactive LRU、容量失败原子性和 shared-memory metrics。
+- R3-B Engine/scheduler integration：`RequestSpec.prefix_id`、authoritative prefix metadata、admission attach、global residency + request-private commitment accounting，以及共享请求 lifecycle/invariant tests。
 
 ### Changed
 
@@ -51,9 +52,12 @@
 - R2-B commit `a009b45` RTX 5070 focused：`71 passed, 8 subtests passed in 3.71s`；完整回归：`322 passed, 20 subtests passed in 6.62s`，无 skipped、warning 或 failure。
 - R2-C commit `6afc89f` RTX 5070 focused：`131 passed in 6.21s`；完整回归：`326 passed, 20 subtests passed in 6.23s`，摘要无 skipped、warning 或 failure。
 - R2-D 证据提交 `67bee15` RTX 5070 最终完整回归：`337 passed, 25 subtests passed in 5.82s`，无 skipped 或 failure。
+- R3-A commit `e1bb6a8` 的 WSL focused 与完整回归均报告通过；本轮未提供精确计数，因此不增加新的定量 pytest 基线。
 
 ### Pending before v0.1.0
 
+- R3-B DecodeEngine/scheduler focused 与完整 WSL 回归。
+- R3-C hit-rate benchmark、严格 summary 与 RTX 证据归档。
 - clean WSL venv editable install 和 quick workload 复现。
 - 将 `pyproject.toml` 与 `flashdec.__version__` 同步更新为 `0.1.0`。
 - 创建并验证 `v0.1.0` tag；当前不得提前标记 release。

@@ -29,7 +29,15 @@ HAS_CUDA_TOOLCHAIN = (
 CUDA_TOOLCHAIN_REASON = "CUDA GPU, CUDA_HOME, and nvcc are required for fused engine tests"
 
 
-def _make_cache(device="cpu", dtype=torch.float32, num_kv_heads=1, head_dim=4, block_size=2, max_blocks=8):
+def _make_cache(
+    device="cpu",
+    dtype=torch.float32,
+    num_kv_heads=1,
+    head_dim=4,
+    block_size=2,
+    max_blocks=8,
+    prefix_cache_capacity_blocks=0,
+):
     return PagedKVCache(
         num_layers=1,
         num_kv_heads=num_kv_heads,
@@ -38,6 +46,7 @@ def _make_cache(device="cpu", dtype=torch.float32, num_kv_heads=1, head_dim=4, b
         max_blocks=max_blocks,
         dtype=dtype,
         device=device,
+        prefix_cache_capacity_blocks=prefix_cache_capacity_blocks,
     )
 
 
@@ -246,6 +255,91 @@ def test_scheduler_managed_engine_applies_decisions_and_releases_commitment():
     assert engine.metrics()["committed_blocks"] == 2
     assert engine.metrics()["committed_but_unallocated_blocks"] == 1
     assert engine.validate_invariants()
+
+
+def test_scheduler_managed_engine_counts_shared_prefix_once_and_private_tail_per_request():
+    cache = _make_cache(
+        block_size=2,
+        max_blocks=6,
+        prefix_cache_capacity_blocks=2,
+    )
+    engine = DecodeEngine(cache)
+    prefix_shape = (1, 2, 1, 2, 4)
+    prefix_k = torch.arange(
+        16,
+        dtype=cache.dtype,
+        device=cache.device,
+    ).reshape(prefix_shape)
+    prefix_v = prefix_k + 100
+    prefix_ids = engine.register_prefix("system", prefix_k, prefix_v)["block_ids"]
+    scheduler = BlockAwareScheduler(
+        SchedulerConfig(max_active_requests=2, max_batch_requests=2)
+    )
+    engine.submit_request(RequestSpec("a", 4, 2, 0, prefix_id="system"))
+    engine.submit_request(RequestSpec("b", 4, 2, 1, prefix_id="system"))
+
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    assert snapshot.resident_prefix_blocks == 2
+    assert [item.shared_prefix_blocks for item in snapshot.waiting] == [2, 2]
+    decision = scheduler.plan(snapshot)
+    assert decision.committed_blocks_before == 2
+    assert decision.committed_blocks_after == 4
+    assert decision.needed_physical_blocks_now == 2
+
+    engine.apply_scheduler_decision(decision)
+    assert cache.request_block_ids("a") == prefix_ids
+    assert cache.request_block_ids("b") == prefix_ids
+    assert engine.metrics()["committed_blocks"] == 4
+    assert engine.metrics()["committed_but_unallocated_blocks"] == 2
+    assert cache.num_used_blocks == 2
+
+    q, k, v = _step_inputs(2)
+    result = engine.step(q, k, v, request_ids=["a", "b"])
+    assert result.status == DecodeEngine.STEP_OK
+    assert cache.request_state("a")["seq_len"] == 5
+    assert cache.request_state("b")["seq_len"] == 5
+    assert cache.metrics()["saved_prefix_blocks"] == 2
+    assert cache.num_used_blocks == 4
+    assert engine.metrics()["committed_but_unallocated_blocks"] == 0
+
+    released_a = engine.finish_request("a")
+    assert len(released_a) == 1
+    assert cache.prefix_state("system")["active_refcount"] == 1
+    assert engine.metrics()["committed_blocks"] == 3
+    assert cache.num_used_blocks == 3
+
+    released_b = engine.finish_request("b")
+    assert len(released_b) == 1
+    assert cache.prefix_state("system")["active_refcount"] == 0
+    assert engine.metrics()["committed_blocks"] == 2
+    assert cache.num_used_blocks == 2
+    assert engine.validate_invariants()
+
+
+def test_scheduler_prefix_spec_requires_resident_exact_full_context():
+    cache = _make_cache(
+        block_size=2,
+        max_blocks=4,
+        prefix_cache_capacity_blocks=1,
+    )
+    engine = DecodeEngine(cache)
+    with pytest.raises(ValueError, match="must be resident"):
+        engine.submit_request(RequestSpec("missing", 2, 1, 0, prefix_id="missing"))
+    assert not engine.metrics()["scheduler_managed"]
+
+    prefix = torch.zeros(
+        (1, 1, 1, 2, 4),
+        dtype=cache.dtype,
+        device=cache.device,
+    )
+    engine.register_prefix("system", prefix, prefix)
+    with pytest.raises(ValueError, match="full initial context"):
+        engine.submit_request(RequestSpec("mismatch", 4, 1, 0, prefix_id="system"))
+    assert not engine.metrics()["scheduler_managed"]
+
+    engine.submit_request(RequestSpec("valid", 2, 1, 0, prefix_id="system"))
+    with pytest.raises(RuntimeError, match="before request submission"):
+        engine.register_prefix("later", prefix, prefix)
 
 
 def test_scheduler_decision_stale_version_is_rejected_without_partial_admission():

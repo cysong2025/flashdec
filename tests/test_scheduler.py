@@ -44,14 +44,26 @@ def _active(
     )
 
 
-def _snapshot(*, waiting=(), active=(), block_size=2, max_blocks=8, version=0, step=0):
-    used_blocks = sum(item.physical_blocks for item in active)
+def _snapshot(
+    *,
+    waiting=(),
+    active=(),
+    block_size=2,
+    max_blocks=8,
+    resident_prefix_blocks=0,
+    version=0,
+    step=0,
+):
+    used_blocks = resident_prefix_blocks + sum(
+        item.private_physical_blocks for item in active
+    )
     return SchedulingSnapshot(
         state_version=version,
         logical_step=step,
         block_size=block_size,
         max_blocks=max_blocks,
         free_blocks=max_blocks - used_blocks,
+        resident_prefix_blocks=resident_prefix_blocks,
         waiting=waiting,
         active=active,
     )
@@ -82,6 +94,98 @@ class SchedulerPolicyTests(unittest.TestCase):
             ):
                 spec = RequestSpec("r", initial, max_new, 0)
                 self.assertEqual(spec.commitment_blocks(block_size), expected)
+
+    def test_shared_prefix_admission_counts_residency_once_and_commits_private_tail(self):
+        spec = RequestSpec(
+            "shared",
+            initial_context_tokens=4,
+            max_new_tokens=3,
+            submission_order=0,
+            prefix_id="system",
+        )
+        waiting = WaitingRequestMetadata(spec, shared_prefix_blocks=2)
+        snapshot = _snapshot(
+            waiting=(waiting,),
+            block_size=2,
+            max_blocks=8,
+            resident_prefix_blocks=2,
+        )
+        scheduler = BlockAwareScheduler(
+            SchedulerConfig(max_active_requests=1, max_batch_requests=1)
+        )
+
+        decision = scheduler.plan(snapshot)
+
+        self.assertEqual(waiting.private_commitment_blocks(2), 2)
+        self.assertEqual(decision.admit_ids, ("shared",))
+        self.assertEqual(decision.runnable_ids, ("shared",))
+        self.assertEqual(decision.committed_blocks_before, 2)
+        self.assertEqual(decision.committed_blocks_after, 4)
+        self.assertEqual(decision.needed_physical_blocks_now, 1)
+
+    def test_two_active_requests_can_reference_same_resident_prefix(self):
+        spec_a = RequestSpec("a", 4, 2, 0, prefix_id="system")
+        spec_b = RequestSpec("b", 4, 2, 1, prefix_id="system")
+        active = (
+            ActiveRequestMetadata(
+                spec_a,
+                seq_len=4,
+                remaining_tokens=2,
+                physical_blocks=2,
+                committed_blocks=1,
+                shared_prefix_blocks=2,
+            ),
+            ActiveRequestMetadata(
+                spec_b,
+                seq_len=4,
+                remaining_tokens=2,
+                physical_blocks=2,
+                committed_blocks=1,
+                shared_prefix_blocks=2,
+            ),
+        )
+        snapshot = _snapshot(
+            active=active,
+            block_size=2,
+            max_blocks=8,
+            resident_prefix_blocks=2,
+        )
+        scheduler = BlockAwareScheduler(
+            SchedulerConfig(max_active_requests=2, max_batch_requests=2)
+        )
+
+        decision = scheduler.plan(snapshot)
+
+        self.assertEqual(snapshot.free_blocks, 6)
+        self.assertEqual(decision.committed_blocks_before, 4)
+        self.assertEqual(decision.needed_physical_blocks_now, 2)
+        self.assertEqual(decision.runnable_ids, ("a", "b"))
+
+    def test_snapshot_rejects_prefix_that_does_not_cover_initial_context(self):
+        waiting = WaitingRequestMetadata(
+            RequestSpec("r", 6, 1, 0, prefix_id="system"),
+            shared_prefix_blocks=2,
+        )
+
+        with self.assertRaisesRegex(ValueError, "full initial context"):
+            _snapshot(
+                waiting=(waiting,),
+                block_size=2,
+                resident_prefix_blocks=2,
+            )
+
+    def test_snapshot_rejects_shared_prefix_larger_than_global_residency(self):
+        waiting = WaitingRequestMetadata(
+            RequestSpec("r", 4, 1, 0, prefix_id="system"),
+            shared_prefix_blocks=2,
+        )
+
+        with self.assertRaisesRegex(ValueError, "exceed global residency"):
+            _snapshot(
+                waiting=(waiting,),
+                block_size=2,
+                resident_prefix_blocks=1,
+            )
 
     def test_scheduler_admits_only_requests_whose_full_lifetime_fits(self):
         snapshot = _snapshot(
