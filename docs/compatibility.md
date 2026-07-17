@@ -18,13 +18,14 @@
 - block utilization、internal fragmentation 和 allocation/free/reuse metrics。
 - capacity preflight 和 allocator invariant validation。
 - R2-A multi-layer token transaction：shared location、sequential layer write、commit/abort rollback。
+- R3-A Cache ownership core：opaque prefix id、immutable multi-layer full blocks、active refcount、request-private tail 与 inactive LRU。
 
 当前限制：
 
 - legacy `append()`、RoPE helper 和 `DecodeEngine.step()` compatibility wrapper 仍限制 `num_layers=1`；`num_layers>1` 使用 `begin_step()` / `step_layer()` / `commit_step()` sequential transaction API。
 - finished/cancelled request id 当前不能重新激活。
 - runtime v2 已通过 RTX 5070 focused/full correctness 验证。
-- 已支持 R1 block-aware scheduler；仍不包含 prefix cache、swap、evict 或生产级多线程 serving。
+- R3-A shared prefix 尚未接入 DecodeEngine scheduler-managed admission；仍不包含模型 prefill、swap/offload 或生产级多线程 serving。
 
 ## Paged Decode Triton Kernel
 
@@ -248,4 +249,5 @@ python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_de
 
 - kernel 配置已冻结为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
 - PagedKVCache runtime v2、RoPE/KV append、DecodeEngine、R1 Scheduler 与 R2 multi-layer transaction 均已完成 RTX 验证。
-- clean-install、版本升级和 release tag 保留在最终发布门禁；prefix cache 与公开基线属于 release 后的选择性扩展。
+- R3 Shared Prefix Blocks 已被选为当前优化方向；R3-A Cache core 的 CPU/RTX 验证尚未归档，R3-B scheduler integration 与 R3-C benchmark 仍待完成。
+- clean-install、版本升级和 release tag 保留在 R3 闭合后的最终发布门禁；公开基线继续作为非阻塞选择性扩展。

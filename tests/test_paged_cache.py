@@ -185,6 +185,8 @@ def test_paged_kv_cache_finish_releases_and_reuses_blocks_without_stale_tokens()
         "status": "finished",
         "seq_len": 3,
         "block_ids": (),
+        "prefix_id": None,
+        "shared_block_count": 0,
     }
     assert cache.num_used_blocks == 0
     assert cache.num_free_blocks == 2
@@ -262,6 +264,7 @@ def test_paged_kv_cache_metrics_report_utilization_and_fragmentation():
         "free_blocks": 2,
         "block_utilization": 0.5,
         "active_tokens": 3,
+        "physical_data_tokens": 3,
         "reserved_tokens": 8,
         "internal_fragmentation_tokens": 5,
         "internal_fragmentation_ratio": 0.625,
@@ -285,6 +288,19 @@ def test_paged_kv_cache_metrics_report_utilization_and_fragmentation():
         "bytes_per_block": 64,
         "allocated_kv_bytes": 128,
         "reserved_transaction_bytes": 0,
+        "prefix_cache_capacity_blocks": 0,
+        "resident_prefix_count": 0,
+        "resident_prefix_blocks": 0,
+        "active_prefix_references": 0,
+        "shared_prefix_blocks": 0,
+        "saved_prefix_blocks": 0,
+        "saved_prefix_bytes": 0,
+        "prefix_registration_count": 0,
+        "prefix_hit_count": 0,
+        "prefix_miss_count": 0,
+        "prefix_hit_ratio": 0.0,
+        "prefix_eviction_count": 0,
+        "prefix_capacity_failure_count": 0,
     }
     assert cache.validate_invariants()
 

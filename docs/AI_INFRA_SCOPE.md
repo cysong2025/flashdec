@@ -125,4 +125,4 @@ allocate/free/reuse      block_tables/seq_lens
 
 ## 选择性扩展边界
 
-Block-aware Scheduler 与 multi-layer KV token transaction 已完成。后续只在 shared prefix blocks 与 FlashInfer/vLLM 有限公开对比之间选择一个方向，避免同时扩大 ownership、eviction 和外部依赖边界。完整优先级与验收门槛见 `docs/ROADMAP.md`。
+Block-aware Scheduler 与 multi-layer KV token transaction 已完成，当前已选择 shared prefix blocks 作为下一条系统优化方向；FlashInfer/vLLM 有限公开对比暂缓，避免同时扩大 ownership、eviction 和外部依赖边界。完整优先级与验收门槛见 `docs/ROADMAP.md`。

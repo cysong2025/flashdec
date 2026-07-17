@@ -190,4 +190,4 @@ CUDA event 结果：
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
 2. Block-aware Scheduler 与 Multi-layer KV Token Transaction 已完成，后续优化必须基于新的 correctness 或系统证据。
 3. clean-install、版本与 tag 留在最终 release gate。
-4. 选择性扩展只在 shared prefix 与固定版本公开基线之间二选一；任何外部对比必须统一功能与计时边界。
+4. 当前已选择 shared prefix 作为下一条系统优化方向；固定版本公开基线暂缓，未来若执行仍必须统一功能与计时边界。

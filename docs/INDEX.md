@@ -19,6 +19,7 @@
 - [DecodeEngine](design_decode_engine.md)
 - [Block-aware Scheduler](design_scheduler.md)
 - [Multi-layer KV Token Transaction](design_multi_layer_kv_transaction.md)
+- [Shared Prefix Blocks](design_shared_prefix_blocks.md)
 - [Dynamic workload](design_dynamic_workload.md)
 
 ## 性能与复现

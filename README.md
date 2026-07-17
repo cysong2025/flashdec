@@ -6,7 +6,7 @@ FlashDec 是一个面向单 GPU LLM decode 的研究型运行时原型，覆盖 
 
 项目关注的核心问题是：在请求长度与 batch 持续变化的情况下，如何维护可验证的 KV 所有权和失败原子性，并证明底层 kernel 优化能够转化为完整 decode step 的系统收益。
 
-> 当前状态：R1 Block-aware Scheduler 与 R2 Multi-layer KV Token Transaction 已完成设计、correctness、RTX 5070 正式实验和文档闭环。仓库仍处于 `0.0.0` release candidate；clean-install 与正式版本发布留在最终 release gate。
+> 当前状态：R1 Block-aware Scheduler 与 R2 Multi-layer KV Token Transaction 已完成设计、correctness、RTX 5070 正式实验和文档闭环。R3 Shared Prefix Blocks 正在分阶段实现，当前为 R3-A Cache ownership core；仓库仍处于 `0.0.0`，clean-install 与正式版本发布留在最终 release gate。
 
 ## 架构
 
@@ -40,6 +40,7 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 
 - **Reference 与 kernel**：PyTorch dense/paged reference；Triton dense/paged decode attention；支持 FP16/BF16、MHA/GQA/MQA、head dimension 64/128 和变长 context。
 - **Paged KV Runtime**：physical block allocate/free/reuse、finish/cancel、容量预检、碎片与使用率指标、request churn invariant。
+- **Shared Prefix R3-A**：immutable multi-layer full-block 注册与共享、active refcount、request-private tail、inactive LRU 和 saved blocks/bytes 指标；Engine/scheduler 集成仍属于 R3-B。
 - **CUDA 数据路径**：独立 CUDA KV append 与 fused RoPE + paged KV append，保留 PyTorch fallback。
 - **DecodeEngine**：稳定 request-row 映射、动态 admission、显式 backpressure、append → paged decode 执行链。
 - **Block-aware Scheduler**：lifetime block commitment、FIFO + aging、公平 runnable subset、stale decision 拒绝和 boundary-deadlock 对照实验。
@@ -86,6 +87,7 @@ python -m pytest -q \
   tests/test_decode_reference.py \
   tests/test_paged_cache.py \
   tests/test_multi_layer_transaction.py \
+  tests/test_shared_prefix_blocks.py \
   tests/test_scheduler.py
 ```
 
@@ -151,6 +153,7 @@ scripts/                  环境检查、验证编排和 release gate
 - [DecodeEngine 设计](docs/design_decode_engine.md)
 - [Scheduler 设计](docs/design_scheduler.md)
 - [Multi-layer transaction 设计](docs/design_multi_layer_kv_transaction.md)
+- [Shared Prefix Blocks 设计](docs/design_shared_prefix_blocks.md)
 - [性能报告](docs/performance_report.md)
 - [兼容性矩阵](docs/compatibility.md)
 - [复现指南](docs/reproducibility.md)
@@ -163,7 +166,7 @@ scripts/                  环境检查、验证编排和 release gate
 - 单 GPU、每 request 每 step 一个 decode token。
 - Q/K/V 由调用方提供；不执行完整 Transformer forward、tokenizer、sampling 或网络服务。
 - Multi-layer API 是顺序 token transaction，不是完整模型执行器；multi-layer prompt prefill 尚未实现。
-- 不包含 prefix cache、swap/offload、生产级抢占、tensor/pipeline parallel 或多机执行。
+- R3-A prefix cache 只接收调用方已经构建的 full blocks；尚不包含模型 prefill、scheduler-managed prefix admission、swap/offload、生产级抢占、tensor/pipeline parallel 或多机执行。
 - CUDA extension 使用 lazy JIT，首次运行包含构建成本。
 - 公开结果只来自仓库代码、公开工具链与个人硬件；不包含任何第三方非公开实现或数据。
 

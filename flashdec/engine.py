@@ -180,7 +180,12 @@ class DecodeEngine:
             cache_metrics = self.cache.metrics()
             if any(
                 cache_metrics[name]
-                for name in ("active_requests", "finished_requests", "cancelled_requests")
+                for name in (
+                    "active_requests",
+                    "finished_requests",
+                    "cancelled_requests",
+                    "resident_prefix_count",
+                )
             ):
                 raise RuntimeError("scheduler-managed mode requires an empty PagedKVCache")
         self._scheduler_managed = True

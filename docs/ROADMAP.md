@@ -278,9 +278,9 @@ FP16/BF16 + GQA -> CPU/reference and RTX path aligned
 - 任意 layer 写入失败时，不留下 partial request state。
 - benchmark 明确报告 layer 数、总 KV bytes、launch 数与 token latency，不把单 layer结果外推。
 
-## 7. 阶段 R3：Shared Prefix Blocks（选择性进阶）
+## 7. 阶段 R3：Shared Prefix Blocks（当前阶段）
 
-优先级：P2。只有 R0-R2 全部完成后开始。预计 2-3 个阶段周。
+优先级：P2。R0-R2 已完成；仓库保持 private 期间先完成本阶段，再执行最终 clean install 与发布准备。预计 2-3 个阶段周。
 
 ### 目标
 
@@ -294,6 +294,8 @@ FP16/BF16 + GQA -> CPU/reference and RTX path aligned
 - request finish/cancel 只减少 refcount，最后一个 owner 才归还 free list。
 - 有容量边界的 LRU，只淘汰无 active owner 的 cached prefix。
 - hit/miss、shared blocks、saved blocks/bytes、eviction 指标。
+
+实现拆分为 R3-A cache ownership core、R3-B DecodeEngine/scheduler integration、R3-C benchmark/RTX evidence。详细状态转换、统计口径和不变量见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
 ### 核心测试
 
@@ -343,8 +345,8 @@ capacity failure -> refcount and ownership unchanged
 | P0 | multi-trial、阶段归因、reproducibility、v0.1.0 | 必须 |
 | P1 | block-aware scheduler | 必须，最重要的系统扩展 |
 | P1 | multi-layer KV transaction | 必须，修复当前架构边界 |
-| P2 | shared prefix blocks | 选择性进阶 |
-| P2 | FlashInfer/vLLM 有限公开对比 | 选择性进阶，建议和 prefix 二选一 |
+| P2 | shared prefix blocks | 已选为当前进阶方向 |
+| P2 | FlashInfer/vLLM 有限公开对比 | 暂缓，不与 R3 同时扩展 |
 | 不做 | HTTP server、完整模型、sampling、TP/PP、多机、swap/offload | 不影响项目完成 |
 
 如果时间不足，项目应在 R2 后停止增加功能，集中完成复现和文章。Scheduler + multi-layer transaction 比再增加三个小 kernel 更能证明 AI Infra 深度。
@@ -365,8 +367,9 @@ capacity failure -> refcount and ownership unchanged
 ## 11. 当前立即执行顺序
 
 1. R2 正式 summary、文档、release evidence gate、RTX 最终完整回归和证据提交均已完成。
-2. 先完成公开仓库的信息架构、状态一致性、文档检查与 GitHub 质量门禁。
-3. 作品集整理完成后执行 clean-machine install、release quick workload 与 release checker。
-4. release gate 全部通过后升级版本并创建 `v0.1.0` tag；发布闭环后再在 shared prefix 与公开基线之间二选一。
+2. 仓库信息架构、状态一致性、文档检查与 GitHub 质量门禁已完成；仓库继续保持 private。
+3. 依次完成 R3-A Cache ownership、R3-B DecodeEngine/scheduler integration 和 R3-C benchmark/RTX evidence。
+4. R3 闭合后执行 clean-machine install、release quick workload 与 release checker。
+5. release gate 全部通过后再确认仓库可见性、许可证、`0.1.0` 版本与 tag。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

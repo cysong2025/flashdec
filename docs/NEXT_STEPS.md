@@ -26,29 +26,29 @@ Block-aware Scheduler
 
 当前版本仍为 `0.0.0`。这表示 release gate 尚未全部关闭，不表示 R1/R2 功能未完成。
 
-## 当前目标：公开发布设置
+## 当前目标：R3 Shared Prefix Blocks
 
-状态：本地内容已完成并推送；仓库可见性与许可证待确认。
+状态：R3 设计与实现进行中；仓库按所有者要求继续保持 private。
 
-仓库内容已经可以独立说明问题、架构、实现边界和证据，不依赖开发过程中的上下文。
+R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享，目标是减少重复 KV physical blocks，同时保持 request lifecycle、transaction rollback 和容量预检的正确性。
 
-完成条件：
+分阶段目标：
 
-- README 以系统能力和可复现实验为主，不再充当阶段日记。
-- 设计、性能、兼容性、复现和历史记录有稳定导航。
-- 当前状态与历史记录分离，已完成项目不再被写成未来计划。
-- 本地 Markdown 链接、Python 语法和 release artifacts 有自动检查。
-- GitHub CI 能在无 GPU 环境执行 dependency-free 质量门禁。
+- R3-A：完成 prefix 注册、挂载、引用计数、inactive LRU、回收和 CPU 不变量测试。
+- R3-B：让 DecodeEngine 与 block-aware scheduler 正确区分 shared residency 和 request-private commitment。
+- R3-C：完成 hit-rate benchmark、RTX correctness、显存节省证据和结果归档。
 
-尚需仓库所有者确认：
+明确边界：
 
-- 是否将 GitHub repository 从 private 改为 public。
-- 采用 MIT、Apache-2.0，或继续保留无开源授权状态。
-- 在已登录 GitHub 页面确认首次 `quality` workflow 结果。
+- 只共享调用方已经构建的 immutable full blocks；tail block 保持 request-private。
+- 不实现 tokenizer、模型 prefill、sampling、HTTP server 或分布式执行。
+- R3-A 不绕过 scheduler 的 lifetime commitment；scheduler-managed prefix 在 R3-B 接入。
+
+所有权与验收细节见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
 ## 最终目标：v0.1.0 Release Gate
 
-状态：待作品集整理完成后执行。
+状态：待 R3 优化与证据闭合后执行。
 
 执行顺序：
 
@@ -60,12 +60,15 @@ Block-aware Scheduler
 
 版本升级和 tag 只能发生在 clean-install 证据通过之后。
 
-## Release 后的选择性扩展
+## 公开发布设置
 
-R3 与 R4 都不影响当前核心项目完成度，release 后只选择一条：
+仓库当前继续保持 private。可见性和许可证不再阻塞 R3；只有准备公开时才重新确认：
 
-- **R3 Shared Prefix Blocks**：研究 immutable full-block 共享、refcount、回收和显存节省。
-- **R4 公开基线**：选择固定版本的 FlashInfer 或 vLLM，只对齐共同支持的 shape、layout 和计时边界。
+- 是否将 GitHub repository 改为 public；
+- 采用 MIT、Apache-2.0，或继续保留无开源授权状态；
+- GitHub `quality` workflow 和公开链接是否正常。
+
+R4 FlashInfer/vLLM 有限公开对比仍是选择性扩展，不阻塞 R3 或 v0.1.0。
 
 不在范围内：HTTP 服务、tokenizer、sampling、完整模型 forward、swap/offload、TP/PP 和多机执行。
 

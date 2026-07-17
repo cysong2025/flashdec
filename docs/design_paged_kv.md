@@ -1,6 +1,6 @@
 # Paged KV Cache 设计说明
 
-本文记录 Paged KV Cache 的数据结构、paged PyTorch reference，以及 runtime v2 的 request 生命周期和 physical block allocator。它既是 paged decode Triton kernel 的正确性基准，也是后续 DecodeEngine 的内存管理基础。
+本文记录 Paged KV Cache 的数据结构、paged PyTorch reference，以及 request 生命周期和 physical block allocator。它既是 paged decode Triton kernel 的正确性基准，也是后续 DecodeEngine 的内存管理基础。R3 的 immutable full-block 共享另见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
 ## 1. 设计目标
 
@@ -195,6 +195,7 @@ PagedKVCache append tokens
 - 当前 allocator 和 request scheduler 位于 Python 层，目标是先定义清楚语义，不代表最终高吞吐 serving 实现。
 - paged Triton kernel 已在 RTX 5070 验证 `head_dim=64/128`、FP16/BF16 和 `block_size=8/16/32`；当前通用配置为 block32。
 - 当前 reference 会显式 gather logical K/V，适合作 correctness，不适合当性能实现。
+- R3-A 只在 Cache 层提供 shared-prefix ownership core；DecodeEngine/scheduler commitment integration 在 R3-B 完成前保持禁用。
 
 ## 8. Runtime v2 状态机与 allocator
 

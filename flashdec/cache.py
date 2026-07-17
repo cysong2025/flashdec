@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 import math
 from typing import Hashable
@@ -14,6 +14,14 @@ class _RequestState:
     seq_len: int = 0
     block_ids: list[int] = field(default_factory=list)
     transaction_id: int | None = None
+    prefix_id: Hashable | None = None
+    shared_block_count: int = 0
+
+
+@dataclass
+class _PrefixState:
+    block_ids: tuple[int, ...]
+    active_refcount: int = 0
 
 
 @dataclass(frozen=True)
@@ -62,9 +70,10 @@ class PagedKVCache:
 
     Each request owns a logical list of physical block ids. Appending one token
     writes into the current tail block or allocates a new physical block when
-    the logical position crosses a block boundary. Finished or cancelled
-    requests release their blocks back to a deterministic free list that
-    prioritizes reuse.
+    the logical position crosses a block boundary. Requests may also reference
+    immutable full blocks held by the optional shared-prefix registry; their
+    mutable tail remains private. Finished or cancelled requests release their
+    private blocks back to a deterministic free list that prioritizes reuse.
     """
 
     ACTIVE = "active"
@@ -80,6 +89,7 @@ class PagedKVCache:
         max_blocks,
         dtype=None,
         device=None,
+        prefix_cache_capacity_blocks=0,
     ):
         torch = _torch()
         if dtype is None:
@@ -104,6 +114,11 @@ class PagedKVCache:
         self.head_dim = int(head_dim)
         self.block_size = int(block_size)
         self.max_blocks = int(max_blocks)
+        self.prefix_cache_capacity_blocks = int(prefix_cache_capacity_blocks)
+        if self.prefix_cache_capacity_blocks < 0:
+            raise ValueError("prefix_cache_capacity_blocks must be non-negative")
+        if self.prefix_cache_capacity_blocks > self.max_blocks:
+            raise ValueError("prefix_cache_capacity_blocks must not exceed max_blocks")
         self.dtype = dtype
         self.device = torch.device(device)
 
@@ -119,6 +134,7 @@ class PagedKVCache:
         self.v_cache = torch.zeros_like(self.k_cache)
         self._free_blocks = deque(range(self.max_blocks))
         self._requests: dict[Hashable, _RequestState] = {}
+        self._prefixes: OrderedDict[Hashable, _PrefixState] = OrderedDict()
         self._ever_allocated_blocks: set[int] = set()
         self._allocation_count = 0
         self._fresh_allocation_count = 0
@@ -135,6 +151,11 @@ class PagedKVCache:
         self._transaction_layer_write_count = 0
         self._transaction_rollback_block_count = 0
         self._transaction_failure_count = 0
+        self._prefix_registration_count = 0
+        self._prefix_hit_count = 0
+        self._prefix_miss_count = 0
+        self._prefix_eviction_count = 0
+        self._prefix_capacity_failure_count = 0
 
     def add_request(self, request_id):
         """Register an empty request if it does not already exist."""
@@ -150,6 +171,92 @@ class PagedKVCache:
                 f"request_id {request_id!r} is {state.status} and cannot be reactivated"
             )
         return self
+
+    def register_prefix(self, prefix_id, k_blocks, v_blocks):
+        """Copy immutable full K/V blocks into the shared-prefix registry.
+
+        ``k_blocks`` and ``v_blocks`` use shape
+        ``[num_layers, num_prefix_blocks, num_kv_heads, block_size, head_dim]``.
+        Inactive least-recently-used prefixes are evicted when the configured
+        prefix capacity or the shared physical pool requires space.
+        """
+        if self._open_transaction_id is not None:
+            raise RuntimeError("cannot register a prefix during an open token transaction")
+        self._check_prefix_id(prefix_id)
+        if prefix_id in self._prefixes:
+            raise RuntimeError(f"prefix_id {prefix_id!r} is already registered")
+        k_blocks, v_blocks = self._prepare_prefix_blocks(k_blocks, v_blocks)
+        num_blocks = int(k_blocks.shape[1])
+        eviction_ids = self._prefix_eviction_plan(num_blocks)
+        if eviction_ids is None:
+            self._capacity_failure_count += 1
+            self._prefix_capacity_failure_count += 1
+            raise RuntimeError("PagedKVCache has insufficient evictable prefix capacity")
+
+        for evicted_id in eviction_ids:
+            self._evict_prefix_entry(evicted_id)
+
+        block_ids = tuple(self._allocate_block() for _ in range(num_blocks))
+        block_index = _torch().tensor(block_ids, device=self.device, dtype=_torch().long)
+        self.k_cache.index_copy_(1, block_index, k_blocks)
+        self.v_cache.index_copy_(1, block_index, v_blocks)
+        self._prefixes[prefix_id] = _PrefixState(block_ids=block_ids)
+        self._prefix_registration_count += 1
+        self._state_version += 1
+        return self.prefix_state(prefix_id)
+
+    def attach_prefix(self, request_id, prefix_id):
+        """Attach one resident immutable prefix to an empty active request."""
+        if self._open_transaction_id is not None:
+            raise RuntimeError("cannot attach a prefix during an open token transaction")
+        self._check_prefix_id(prefix_id)
+        state = self._require_active_request(request_id)
+        if state.transaction_id is not None:
+            raise RuntimeError("cannot attach a prefix to a request in a token transaction")
+        if state.seq_len or state.block_ids or state.prefix_id is not None:
+            raise RuntimeError("shared prefixes can only attach to an empty active request")
+        prefix = self._prefixes.get(prefix_id)
+        if prefix is None:
+            self._prefix_miss_count += 1
+            raise KeyError(f"unknown prefix_id: {prefix_id!r}")
+
+        state.block_ids.extend(prefix.block_ids)
+        state.seq_len = len(prefix.block_ids) * self.block_size
+        state.prefix_id = prefix_id
+        state.shared_block_count = len(prefix.block_ids)
+        prefix.active_refcount += 1
+        self._prefixes.move_to_end(prefix_id)
+        self._prefix_hit_count += 1
+        self._state_version += 1
+        return tuple(prefix.block_ids)
+
+    def evict_prefix(self, prefix_id):
+        """Evict one inactive prefix and return its blocks to the free list."""
+        if self._open_transaction_id is not None:
+            raise RuntimeError("cannot evict a prefix during an open token transaction")
+        self._check_prefix_id(prefix_id)
+        prefix = self._prefixes.get(prefix_id)
+        if prefix is None:
+            raise KeyError(f"unknown prefix_id: {prefix_id!r}")
+        if prefix.active_refcount:
+            raise RuntimeError("cannot evict a prefix with active request references")
+        released = self._evict_prefix_entry(prefix_id)
+        self._state_version += 1
+        return released
+
+    def prefix_state(self, prefix_id):
+        """Return a detached snapshot of one resident shared prefix."""
+        self._check_prefix_id(prefix_id)
+        prefix = self._prefixes.get(prefix_id)
+        if prefix is None:
+            raise KeyError(f"unknown prefix_id: {prefix_id!r}")
+        return {
+            "prefix_id": prefix_id,
+            "block_ids": tuple(prefix.block_ids),
+            "num_blocks": len(prefix.block_ids),
+            "token_count": len(prefix.block_ids) * self.block_size,
+            "active_refcount": prefix.active_refcount,
+        }
 
     def append(self, layer_idx, request_ids, k, v):
         """Append one token of K/V for each request.
@@ -527,6 +634,8 @@ class PagedKVCache:
             "status": state.status,
             "seq_len": state.seq_len,
             "block_ids": tuple(state.block_ids),
+            "prefix_id": state.prefix_id,
+            "shared_block_count": state.shared_block_count,
         }
 
     def next_positions(self, request_ids, device=None):
@@ -562,6 +671,19 @@ class PagedKVCache:
         states = list(self._requests.values())
         active_states = [state for state in states if state.status == self.ACTIVE]
         used_blocks = self.num_used_blocks
+        resident_prefix_blocks = self._resident_prefix_blocks()
+        active_prefix_references = sum(
+            prefix.active_refcount for prefix in self._prefixes.values()
+        )
+        shared_prefix_blocks = sum(
+            len(prefix.block_ids)
+            for prefix in self._prefixes.values()
+            if prefix.active_refcount >= 2
+        )
+        saved_prefix_blocks = sum(
+            max(0, prefix.active_refcount - 1) * len(prefix.block_ids)
+            for prefix in self._prefixes.values()
+        )
         bytes_per_block = (
             self.num_layers
             * 2
@@ -580,13 +702,19 @@ class PagedKVCache:
         )
         reserved_tokens = used_blocks * self.block_size
         active_tokens = sum(state.seq_len for state in active_states)
-        fragmentation_tokens = reserved_tokens - active_tokens
+        physical_data_tokens = resident_prefix_blocks * self.block_size + sum(
+            max(0, state.seq_len - state.shared_block_count * self.block_size)
+            for state in active_states
+        )
+        fragmentation_tokens = reserved_tokens - physical_data_tokens
+        prefix_lookups = self._prefix_hit_count + self._prefix_miss_count
         return {
             "max_blocks": self.max_blocks,
             "used_blocks": used_blocks,
             "free_blocks": self.num_free_blocks,
             "block_utilization": used_blocks / self.max_blocks,
             "active_tokens": active_tokens,
+            "physical_data_tokens": physical_data_tokens,
             "reserved_tokens": reserved_tokens,
             "internal_fragmentation_tokens": fragmentation_tokens,
             "internal_fragmentation_ratio": (
@@ -614,6 +742,21 @@ class PagedKVCache:
             "bytes_per_block": bytes_per_block,
             "allocated_kv_bytes": used_blocks * bytes_per_block,
             "reserved_transaction_bytes": reserved_transaction_blocks * bytes_per_block,
+            "prefix_cache_capacity_blocks": self.prefix_cache_capacity_blocks,
+            "resident_prefix_count": len(self._prefixes),
+            "resident_prefix_blocks": resident_prefix_blocks,
+            "active_prefix_references": active_prefix_references,
+            "shared_prefix_blocks": shared_prefix_blocks,
+            "saved_prefix_blocks": saved_prefix_blocks,
+            "saved_prefix_bytes": saved_prefix_blocks * bytes_per_block,
+            "prefix_registration_count": self._prefix_registration_count,
+            "prefix_hit_count": self._prefix_hit_count,
+            "prefix_miss_count": self._prefix_miss_count,
+            "prefix_hit_ratio": (
+                self._prefix_hit_count / prefix_lookups if prefix_lookups else 0.0
+            ),
+            "prefix_eviction_count": self._prefix_eviction_count,
+            "prefix_capacity_failure_count": self._prefix_capacity_failure_count,
         }
 
     def validate_invariants(self):
@@ -622,7 +765,20 @@ class PagedKVCache:
         if len(free_blocks) != len(set(free_blocks)):
             raise RuntimeError("PagedKVCache free list contains duplicate blocks")
 
-        owned_blocks = []
+        prefix_blocks = []
+        expected_prefix_refcounts = {prefix_id: 0 for prefix_id in self._prefixes}
+        for prefix in self._prefixes.values():
+            if not prefix.block_ids:
+                raise RuntimeError("resident prefix must own at least one block")
+            if prefix.active_refcount < 0:
+                raise RuntimeError("prefix active_refcount must be non-negative")
+            prefix_blocks.extend(prefix.block_ids)
+        if len(prefix_blocks) != len(set(prefix_blocks)):
+            raise RuntimeError("a physical block belongs to multiple prefixes")
+        if len(prefix_blocks) > self.prefix_cache_capacity_blocks:
+            raise RuntimeError("resident prefixes exceed configured prefix capacity")
+
+        private_blocks = []
         for state in self._requests.values():
             if state.status == self.ACTIVE:
                 pending_tokens = int(state.transaction_id is not None)
@@ -631,15 +787,37 @@ class PagedKVCache:
                 ) // self.block_size
                 if len(state.block_ids) != expected_blocks:
                     raise RuntimeError("active request block count does not match seq_len")
-                owned_blocks.extend(state.block_ids)
+                if state.prefix_id is None:
+                    if state.shared_block_count:
+                        raise RuntimeError("request without prefix has shared blocks")
+                else:
+                    prefix = self._prefixes.get(state.prefix_id)
+                    if prefix is None:
+                        raise RuntimeError("request references a non-resident prefix")
+                    if state.shared_block_count != len(prefix.block_ids):
+                        raise RuntimeError("request shared block count does not match prefix")
+                    if tuple(state.block_ids[: state.shared_block_count]) != prefix.block_ids:
+                        raise RuntimeError("request shared block ids do not match prefix")
+                    if state.seq_len < state.shared_block_count * self.block_size:
+                        raise RuntimeError("request seq_len is shorter than its shared prefix")
+                    expected_prefix_refcounts[state.prefix_id] += 1
+                private_blocks.extend(state.block_ids[state.shared_block_count :])
             else:
                 if state.block_ids:
                     raise RuntimeError("terminal request still owns physical blocks")
                 if state.transaction_id is not None:
                     raise RuntimeError("terminal request belongs to a token transaction")
+                if state.prefix_id is not None or state.shared_block_count:
+                    raise RuntimeError("terminal request still references a shared prefix")
 
-        if len(owned_blocks) != len(set(owned_blocks)):
-            raise RuntimeError("a physical block is owned by multiple requests")
+        for prefix_id, prefix in self._prefixes.items():
+            if prefix.active_refcount != expected_prefix_refcounts[prefix_id]:
+                raise RuntimeError("prefix active_refcount does not match attached requests")
+        if len(private_blocks) != len(set(private_blocks)):
+            raise RuntimeError("a private physical block is owned by multiple requests")
+        if set(private_blocks) & set(prefix_blocks):
+            raise RuntimeError("a physical block is both private and prefix-owned")
+        owned_blocks = prefix_blocks + private_blocks
         if set(owned_blocks) & set(free_blocks):
             raise RuntimeError("a physical block is both owned and free")
         if set(owned_blocks) | set(free_blocks) != set(range(self.max_blocks)):
@@ -769,7 +947,7 @@ class PagedKVCache:
 
     @property
     def num_used_blocks(self):
-        """Return physical blocks currently owned by active requests."""
+        """Return resident prefix and request-private physical blocks in use."""
         return self.max_blocks - len(self._free_blocks)
 
     @property
@@ -943,13 +1121,23 @@ class PagedKVCache:
         if self._open_transaction_id is not None:
             raise RuntimeError("cannot close a request during an open token transaction")
         state = self._require_active_request(request_id)
-        released_blocks = tuple(state.block_ids)
+        prefix = None
+        if state.prefix_id is not None:
+            prefix = self._prefixes.get(state.prefix_id)
+            if prefix is None or prefix.active_refcount <= 0:
+                raise RuntimeError("shared prefix reference accounting is inconsistent")
+        released_blocks = tuple(state.block_ids[state.shared_block_count :])
         # Do not zero K/V here: ownership plus the next request's seq_len masks
         # stale tail slots, while avoiding an extra device-wide cleanup path.
         for block_id in reversed(released_blocks):
             self._free_blocks.appendleft(block_id)
         self._free_count += len(released_blocks)
         state.block_ids.clear()
+        if prefix is not None:
+            prefix.active_refcount -= 1
+            self._prefixes.move_to_end(state.prefix_id)
+        state.prefix_id = None
+        state.shared_block_count = 0
         state.status = terminal_status
         self._state_version += 1
         return released_blocks
@@ -998,6 +1186,78 @@ class PagedKVCache:
             hash(request_id)
         except TypeError as exc:
             raise ValueError("request ids must be hashable") from exc
+
+    @staticmethod
+    def _check_prefix_id(prefix_id):
+        if prefix_id is None:
+            raise ValueError("prefix_id must not be None")
+        try:
+            hash(prefix_id)
+        except TypeError as exc:
+            raise ValueError("prefix ids must be hashable") from exc
+
+    def _prepare_prefix_blocks(self, k_blocks, v_blocks):
+        torch = _torch()
+        if not isinstance(k_blocks, torch.Tensor) or not isinstance(v_blocks, torch.Tensor):
+            raise TypeError("k_blocks and v_blocks must be torch tensors")
+        if k_blocks.dim() != 5 or v_blocks.dim() != 5:
+            raise ValueError(
+                "prefix K/V must have shape "
+                "[num_layers, num_prefix_blocks, num_kv_heads, block_size, head_dim]"
+            )
+        if k_blocks.shape != v_blocks.shape:
+            raise ValueError("prefix k_blocks and v_blocks must have the same shape")
+        expected_tail = (
+            self.num_kv_heads,
+            self.block_size,
+            self.head_dim,
+        )
+        if k_blocks.shape[0] != self.num_layers or tuple(k_blocks.shape[2:]) != expected_tail:
+            raise ValueError("prefix K/V shape does not match the PagedKVCache layout")
+        if k_blocks.shape[1] <= 0:
+            raise ValueError("prefix must contain at least one full block")
+        if k_blocks.device != self.device or v_blocks.device != self.device:
+            raise ValueError("prefix K/V must be on the cache device")
+        if k_blocks.dtype != self.dtype or v_blocks.dtype != self.dtype:
+            raise ValueError("prefix K/V must use the cache dtype")
+        return k_blocks, v_blocks
+
+    def _resident_prefix_blocks(self):
+        return sum(len(prefix.block_ids) for prefix in self._prefixes.values())
+
+    def _prefix_eviction_plan(self, required_blocks):
+        if required_blocks > self.prefix_cache_capacity_blocks:
+            return None
+        resident_blocks = self._resident_prefix_blocks()
+        needed_release = max(
+            0,
+            resident_blocks + required_blocks - self.prefix_cache_capacity_blocks,
+            required_blocks - len(self._free_blocks),
+        )
+        if not needed_release:
+            return ()
+
+        released = 0
+        eviction_ids = []
+        for prefix_id, prefix in self._prefixes.items():
+            if prefix.active_refcount:
+                continue
+            eviction_ids.append(prefix_id)
+            released += len(prefix.block_ids)
+            if released >= needed_release:
+                return tuple(eviction_ids)
+        return None
+
+    def _evict_prefix_entry(self, prefix_id):
+        prefix = self._prefixes[prefix_id]
+        if prefix.active_refcount:
+            raise RuntimeError("cannot evict a prefix with active request references")
+        del self._prefixes[prefix_id]
+        for block_id in reversed(prefix.block_ids):
+            self._free_blocks.appendleft(block_id)
+        self._free_count += len(prefix.block_ids)
+        self._prefix_eviction_count += 1
+        return tuple(prefix.block_ids)
 
     def _require_request(self, request_id):
         state = self._requests.get(request_id)

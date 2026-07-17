@@ -47,18 +47,22 @@ cache = flashdec.PagedKVCache(
     max_blocks=256,
     dtype=torch.float16,
     device="cuda",
+    prefix_cache_capacity_blocks=64,
 )
 ```
 
 主要接口：
 
 - lifecycle：`add_request()`、`finish_request()`、`cancel_request()`、`request_state()`。
+- shared prefix：`register_prefix()`、`attach_prefix()`、`prefix_state()`、`evict_prefix()`。
 - metadata：`block_tables()`、`seq_lens_tensor()`、`request_block_ids()`。
 - observability：`metrics()`、`validate_invariants()`。
 - legacy single-layer append：`append()`、`append_cuda()`、`append_fused_cuda()`。
 - multi-layer transaction：`begin_token()`、`write_token_layer()`、`write_token_layer_fused_cuda()`、`commit_token()`、`abort_token()`。
 
-Cache 是 request seq_len、physical block ownership 和 transaction 状态的唯一事实来源。容量失败必须发生在 mutation 前；finish/cancel 释放所有 owned blocks；multi-layer transaction 只在全部 layer 完成后增长一次 seq_len。
+Cache 是 request seq_len、physical block ownership、shared-prefix residency 和 transaction 状态的唯一事实来源。容量失败必须发生在 mutation 前；finish/cancel 释放 request-private blocks 并减少 prefix reference；multi-layer transaction 只在全部 layer 完成后增长一次 seq_len。
+
+R3-A shared-prefix API 接收已经构建的 immutable full blocks，shape 为 `[num_layers, num_prefix_blocks, num_kv_heads, block_size, head_dim]`。多个 request 可以共享同一组 physical ids，prefix 后的 tail 始终私有；无 active owner 的 prefix 才能被显式或 LRU 淘汰。`prefix_cache_capacity_blocks=0` 是默认值，表示关闭该功能。DecodeEngine/scheduler commitment integration 属于 R3-B，R3-A 会拒绝在已有 resident prefix 的 cache 上启用 scheduler-managed mode。完整所有权说明见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
 ## RoPE 与 Append
 
@@ -140,4 +144,4 @@ Multi-layer 正式 workload 位于 `benchmarks/run_multi_layer_engine.py`，它�
 - Q/K/V 由调用方提供；API 不包含模型投影、prefill engine、sampling 或网络服务。
 - CUDA extension 使用 lazy JIT；首次构建时间不得计入稳态 benchmark。
 
-状态机和失败原子性的完整说明见[总体设计](design.md)、[DecodeEngine 设计](design_decode_engine.md)与[Multi-layer transaction 设计](design_multi_layer_kv_transaction.md)。
+状态机和失败原子性的完整说明见[总体设计](design.md)、[DecodeEngine 设计](design_decode_engine.md)、[Multi-layer transaction 设计](design_multi_layer_kv_transaction.md)与[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
