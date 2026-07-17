@@ -157,6 +157,8 @@ class SharedPrefixWorkloadSummaryTests(unittest.TestCase):
         self.assertIn("Rows: 24", text)
         self.assertIn("context physical/logical blocks", text)
         self.assertIn("75%", text)
+        self.assertIn("Paired vs 0% Hit Rate", text)
+        self.assertIn("1.0000x [1.0000,1.0000]", text)
         self.assertIn("system noise", text)
 
 

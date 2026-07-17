@@ -297,7 +297,7 @@ FP16/BF16 + GQA -> CPU/reference and RTX path aligned
 
 实现拆分为 R3-A cache ownership core、R3-B DecodeEngine/scheduler integration、R3-C benchmark/RTX evidence。详细状态转换、统计口径和不变量见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
-当前状态：R3-A/R3-B correctness 已闭合。R3-B RTX 5070 focused 为 `56 passed, 14 subtests passed in 5.29s`，完整回归为 `352 passed, 25 subtests passed in 9.37s`。R3-C commit `fd36ed0` 的 RTX FP16 quick 4 行矩阵已通过严格校验；正式 FP16/BF16 三轮证据待执行。
+当前状态：R3-A/R3-B correctness 已闭合。R3-B RTX 5070 focused 为 `56 passed, 14 subtests passed in 5.29s`，完整回归为 `352 passed, 25 subtests passed in 9.37s`。R3-C commit `1d5d8d0` 的 RTX FP16/BF16 三轮正式矩阵共 24 行，已通过严格校验；75% hit 的 context memory 节省为 `68.8%`，bounded-pool admission 为 `16/16`，相对 0% 的 `9/16` 明显提高。
 
 ### 核心测试
 

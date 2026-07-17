@@ -35,6 +35,10 @@ Shared Prefix Blocks：从 Cache ownership core 扩展到 DecodeEngine 与 block
 - commit `fd36ed0` 的 RTX 5070 FP16 quick 共 4 行，matrix、capacity commitment、block/byte accounting、materialized context、immutable prefix、eviction 与 cleanup 全部通过严格校验。
 - quick 从 0% 到 75% hit 将 context physical blocks 从 `4/4` 降至 `2/4`、peak blocks 从 `8` 降至 `6`；bounded pool admission 从 `2/4` 提高到 `3/4`。
 - quick latency 在四档间非单调，每档只有 3 次正式 step 采样，因此不形成性能结论。
+- commit `1d5d8d0` 的 RTX 5070 FP16/BF16 三轮正式矩阵共 24 行，全部通过严格校验。
+- 正式 75% hit 将 context physical blocks 从 `64/64` 降至 `20/64`，节省 `68.8%`/`5.5 MiB`；包含 private tail 的 peak blocks 从 `80` 降至 `36`，减少 55%。
+- 固定 48-block bounded pool 下，admission 随 hit rate 从 `9/16`、`12/16`、`15/16` 提高到 `16/16`。
+- 非零 hit-rate 的 attach p50 均小于 `0.8 us`。跨轮中位 decode latency 非单调且 dtype 方向不一致，不声明稳定 latency 收益。
 
 ## 当前环境限制
 
@@ -42,8 +46,8 @@ macOS Codex 工作区没有项目 torch/pytest/CUDA 环境，只能执行 depend
 
 ## 需要在 RTX 5070 完成
 
-1. R3-C FP16/BF16 三轮正式矩阵与严格 summary。
-2. 结果回传 Mac 后归档显存、admission、attach 与 decode 结论。
+1. 用原始 24-row CSV 生成 paired p50/p90/p99/TPS range summary。
+2. 将 CSV、log 与正式 summary 回传 Mac 并归档。
 3. 完成 R3 文档收口与完整 pytest 回归。
 
 ## 下一步

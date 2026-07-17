@@ -229,3 +229,5 @@ python benchmarks/summarize_shared_prefix_trials.py \
 正式矩阵共 `4 hit rates x 2 dtypes x 3 trials = 24 rows`。`capacity_admitted_requests` 来自固定 60% bounded pool 的第一次调度；decode latency 使用独立的无共享基线容量，使四档 hit rate 始终运行相同 batch。context 构建、materialization correctness、extension/Triton warmup、registration 和 attach probe 均排除在 complete-step latency 外。共享 prefix 不改变 attention 算法，因此 latency 小幅变化不能单独解释为 kernel 加速。
 
 commit `fd36ed0` 的 RTX 5070 FP16 quick 已通过 4 行严格校验。0%/25%/50%/75% 的 context physical/logical blocks 分别为 `4/4`、`4/4`、`3/4`、`2/4`，bounded-pool admission 分别为 `2/4`、`2/4`、`3/4`、`3/4`。quick 每档只有 3 次正式 step 采样，latency/TPS 非单调，不形成正式性能结论。
+
+commit `1d5d8d0` 的 RTX 5070 FP16/BF16 三轮正式矩阵共 24 行并通过严格校验。0%/25%/50%/75% 的 context physical blocks 为 `64/52/36/20`，bounded-pool admission 为 `9/12/15/16`，75% hit 节省 `68.8%` context memory 和 `5.5 MiB` KV。summary 额外将每个 hit-rate 与同 dtype、同 trial 的 0% baseline 配对，报告 p50/p90/p99/TPS median `[min,max]`；只有全三轮同向才标记 `shared_faster` 或 `shared_slower`。

@@ -185,6 +185,28 @@ CUDA event 结果：
 
 这里的 profiler totals 是 nested attribution，不能相加，也不能替代 non-instrumented benchmark。Attention device time 基本不变，而事件数显著下降，支持“fusion 优化 append/launch/runtime 路径”的判断。long-pressure FP16 的 CPU total 与 instrumented p99 仍有回退，是必须保留的负结果。
 
+## R3 Shared Prefix 正式矩阵（2026-07-17）
+
+正式矩阵固定 RTX 5070、commit `1d5d8d0`、16 requests、128-token context、block size 32、fused CUDA append 与 Triton decode。0%/25%/50%/75% hit rate 覆盖 FP16/BF16 和 3 trials，共 24 行；case 顺序逐轮旋转。严格 validator 已检查 matrix、seed、capacity commitment、block/byte accounting、materialized context、immutable prefix、eviction 与最终 cleanup。
+
+两种 dtype 的内存与接纳结果一致：
+
+| hit rate | bounded-pool admission | context physical/logical blocks | context saved | peak blocks | saved MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0% | 9/16 | 64/64 | 0.0% | 80 | 0.000 |
+| 25% | 12/16 | 52/64 | 18.8% | 68 | 1.500 |
+| 50% | 15/16 | 36/64 | 43.8% | 52 | 3.500 |
+| 75% | 16/16 | 20/64 | 68.8% | 36 | 5.500 |
+
+稳定结论：
+
+- shared-prefix hit rate 提高时，physical context blocks 按 ownership 公式确定性下降；75% hit 避免 44 个重复 context blocks。
+- 同一个 48-block bounded pool 中，第一次调度可接纳请求数从 9 提高到 16，证明节省的 physical KV 可以直接转化为 admission capacity。
+- 每个 request 的 decode tail 始终私有，所以 75% 的 context saving 为 68.8%，完整 peak block reduction 为 55.0%，不能混为同一个百分比。
+- 非零 hit-rate 的 prefix attach p50 为 `0.388-0.736 us`，相对毫秒级 complete step 很小。
+
+限制与负结果：跨轮中位 p50/TPS 随 hit rate 不单调，FP16 与 BF16 方向也不一致。shared prefix 不改变 attention 算法，当前证据不支持 decode latency 加速声明；正式摘要必须结合 paired trial 的 median `[min,max]` 与 direction，而不是只比较跨轮中位数。
+
 ## 后续工作边界
 
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。

@@ -28,7 +28,7 @@ Block-aware Scheduler
 
 ## 当前目标：R3 Shared Prefix Blocks
 
-状态：R3-A 与 R3-B 已通过 WSL focused/full 回归；R3-C RTX quick 已通过，FP16/BF16 三轮正式矩阵待执行；仓库按所有者要求继续保持 private。
+状态：R3-A/R3-B correctness 与 R3-C RTX 24 行正式矩阵已通过；paired latency range 摘要归档和最终完整回归待完成；仓库按所有者要求继续保持 private。
 
 R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享，目标是减少重复 KV physical blocks，同时保持 request lifecycle、transaction rollback 和容量预检的正确性。
 
@@ -36,7 +36,7 @@ R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享�
 
 - R3-A：已完成 prefix 注册、挂载、引用计数、inactive LRU、回收和 CPU/RTX 回归。
 - R3-B：已完成 DecodeEngine/scheduler shared residency 与 request-private commitment 分离；focused 为 `56 passed, 14 subtests passed in 5.29s`，完整回归为 `352 passed, 25 subtests passed in 9.37s`。
-- R3-C：runner、严格 summary 与 RTX quick 已完成；quick 75% hit 的 context physical blocks 为 `2/4`、peak blocks 为 `6`，相对 0% 的 `4/4` 与 `8` 已显示预期内存节省。待完成 0%/25%/50%/75% FP16/BF16 三轮正式矩阵和结果归档。
+- R3-C：0%/25%/50%/75% FP16/BF16 三轮正式矩阵共 24 行，matrix、capacity、block/byte、context、immutability、eviction 与 cleanup 全部通过。75% hit 节省 `44/64` context blocks（`68.8%`，`5.5 MiB`），peak blocks 从 `80` 降至 `36`，bounded-pool admission 从 `9/16` 提高到 `16/16`。待归档 paired latency range summary，当前不声明 decode latency 收益。
 
 明确边界：
 

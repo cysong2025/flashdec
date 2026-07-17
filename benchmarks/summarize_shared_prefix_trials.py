@@ -323,6 +323,44 @@ def _median(rows, field):
     return statistics.median(_number(row, field) for row in rows)
 
 
+def _paired_ratios(rows, dtype, rate, field, *, higher_is_better):
+    indexed = {
+        (_integer(row, "hit_rate_percent"), _integer(row, "trial")): row
+        for row in rows
+        if row["dtype"] == dtype
+    }
+    trials = sorted(
+        trial
+        for candidate_rate, trial in indexed
+        if candidate_rate == 0
+    )
+    ratios = []
+    for trial in trials:
+        baseline = _number(indexed[(0, trial)], field, positive=True)
+        candidate = _number(indexed[(int(rate), trial)], field, positive=True)
+        ratios.append(
+            candidate / baseline if higher_is_better else baseline / candidate
+        )
+    return ratios
+
+
+def _ratio_cell(values):
+    return (
+        f"{statistics.median(values):.4f}x "
+        f"[{min(values):.4f},{max(values):.4f}]"
+    )
+
+
+def _direction(values):
+    if all(math.isclose(value, 1.0, rel_tol=0.0, abs_tol=1e-12) for value in values):
+        return "baseline"
+    if all(value > 1.0 for value in values):
+        return "shared_faster"
+    if all(value < 1.0 for value in values):
+        return "shared_slower"
+    return "crosses_1"
+
+
 def write_summary(
     rows,
     output_path,
@@ -389,6 +427,55 @@ def write_summary(
                 )
                 + " |"
             )
+    if 0 in expected_hit_rates:
+        lines.extend(
+            [
+                "",
+                "## Paired vs 0% Hit Rate",
+                "",
+                "Ratios above 1 favor the shared-prefix case. Latency ratios are 0%/shared; TPS is shared/0%.",
+                "",
+                "| dtype | hit rate | p50 median [min,max] | p90 | p99 | TPS | p50 direction |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for dtype in expected_dtypes:
+            for rate in expected_hit_rates:
+                p50 = _paired_ratios(
+                    rows, dtype, rate, "p50_ms", higher_is_better=False
+                )
+                p90 = _paired_ratios(
+                    rows, dtype, rate, "p90_ms", higher_is_better=False
+                )
+                p99 = _paired_ratios(
+                    rows,
+                    dtype,
+                    rate,
+                    "complete_step_p99_ms",
+                    higher_is_better=False,
+                )
+                tps = _paired_ratios(
+                    rows,
+                    dtype,
+                    rate,
+                    "decode_tokens_per_second",
+                    higher_is_better=True,
+                )
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            dtype,
+                            f"{int(rate)}%",
+                            _ratio_cell(p50),
+                            _ratio_cell(p90),
+                            _ratio_cell(p99),
+                            _ratio_cell(tps),
+                            _direction(p50),
+                        ]
+                    )
+                    + " |"
+                )
     lines.extend(
         [
             "",
@@ -397,6 +484,7 @@ def write_summary(
             "- The primary result is physical KV reduction and higher admission under the same bounded block pool.",
             "- Prefix attach is a host metadata lookup; registration copy and final eviction are reported separately.",
             "- Decode latency keeps the same request count in every hit-rate case. Shared prefixes do not change the attention algorithm, so small latency differences should be treated as system noise unless repeated evidence is stable.",
+            "- `crosses_1` means the paired p50 direction changes across trials; do not claim a stable latency win. p99 uses few samples per trial and must be read with its full range.",
             "- Non-instrumented synchronized wall time is the latency source; no profiler totals are mixed into release latency.",
         ]
     )

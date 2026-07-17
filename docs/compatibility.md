@@ -250,5 +250,5 @@ python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_de
 
 - kernel 配置已冻结为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
 - PagedKVCache runtime v2、RoPE/KV append、DecodeEngine、R1 Scheduler 与 R2 multi-layer transaction 均已完成 RTX 验证。
-- R3 Shared Prefix Blocks 已被选为当前优化方向；R3-A Cache core 与 R3-B scheduler integration 的 WSL focused/full 回归已通过，R3-C RTX FP16 quick 4 行矩阵已通过严格校验，FP16/BF16 三轮正式矩阵待执行。
+- R3 Shared Prefix Blocks 已完成 R3-A Cache core、R3-B scheduler integration 与 R3-C RTX 24 行 FP16/BF16 三轮正式矩阵。当前稳定结论是 physical KV 节省与 bounded-capacity admission 提升；decode latency 尚无稳定收益结论。
 - clean-install、版本升级和 release tag 保留在 R3 闭合后的最终发布门禁；公开基线继续作为非阻塞选择性扩展。
