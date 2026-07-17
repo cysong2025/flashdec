@@ -332,7 +332,7 @@ capacity failure -> refcount and ownership unchanged
 
 - 一篇中文技术文章：从 PagedAttention kernel 到 block-aware decode runtime。
 - 架构图、状态机、KV block ownership 图和性能归因图。
-- 面试讲解按五层组织：算法、kernel、allocator、scheduler、实验方法。
+- 技术总览按五层组织：算法、kernel、allocator、scheduler、实验方法。
 
 验收门槛：任何对比数字都绑定版本、shape、计时边界和命令；无法公平对齐的项目明确标记为不可比。
 
@@ -364,8 +364,9 @@ capacity failure -> refcount and ownership unchanged
 
 ## 11. 当前立即执行顺序
 
-1. R2 正式 summary、文档、release evidence gate 与 RTX 最终完整回归均已完成。
-2. 提交最终回归记录后执行 clean-machine install、release quick workload 与 release checker。
-3. release gate 全部通过后升级版本并创建 `v0.1.0` tag；发布闭环后再在 shared prefix 与公开基线之间二选一。
+1. R2 正式 summary、文档、release evidence gate、RTX 最终完整回归和证据提交均已完成。
+2. 先完成公开仓库的信息架构、状态一致性、文档检查与 GitHub 质量门禁。
+3. 作品集整理完成后执行 clean-machine install、release quick workload 与 release checker。
+4. release gate 全部通过后升级版本并创建 `v0.1.0` tag；发布闭环后再在 shared prefix 与公开基线之间二选一。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

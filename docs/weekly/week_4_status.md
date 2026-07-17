@@ -4,7 +4,7 @@
 
 dense decode attention Triton kernel。
 
-## 本周目标
+## 阶段目标
 
 - 写出第一个真正的 decode attention Triton kernel。
 - 使用 online softmax 在 kernel 内部完成 QK、softmax 和 V accumulation。
@@ -140,8 +140,8 @@ python benchmarks/run_dense_decode.py --block-seq 128 --output benchmarks/result
 - correctness tests 在 RTX 5070 上通过：`14 passed in 5.62s`。
 - benchmark 已生成：`benchmarks/results/week4_dense_decode.csv`。
 - 默认 `block_seq=64` 下，Triton dense decode 相比朴素 PyTorch reference 的 mean speedup 为 36.2128x 到 567.7538x。
-- 能解释 online softmax 的三个状态变量：
+- 实现与笔记覆盖 online softmax 的三个状态变量：
   - running max。
   - running exp sum。
   - running output accumulator。
-- 能说明 dense decode kernel 为什么是 Week 5 paged attention 的前置步骤。
+- 设计记录说明 dense decode kernel 与后续 paged attention 的语义衔接。

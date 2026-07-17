@@ -126,7 +126,7 @@ python benchmarks/summarize_multi_layer_trials.py \
 - 证据提交 `67bee15` 的 RTX 5070 最终完整回归：`337 passed, 25 subtests passed in 5.82s`，无 skipped 或 failure。运行前显式设置 `CUDA_HOME=/usr/local/cuda-12.8`、将 `$CUDA_HOME/bin` 加入 `PATH` 并确认 CUDA/BF16 可用。
 - R2-A/R2-B/R2-C/R2-D 的状态语义、correctness、正式性能、负结果、文档与最终回归均已完成；R2 项目闭环。
 
-## 下一步
+## 后续状态
 
-1. 提交并推送最终 RTX 回归记录；CSV/log 继续作为原始本地证据。
-2. 执行 clean-machine install、release quick workload 和 release checker；全部通过后再升级版本并创建 tag。
+1. 最终 RTX 回归记录已提交；CSV/log 继续作为原始本地证据。
+2. 先完成公开仓库整理，再执行 clean-machine install、release quick workload 和 release checker；全部通过后再升级版本并创建 tag。

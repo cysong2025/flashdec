@@ -207,9 +207,9 @@ context sweep 中 `num_warps=2` 结果：
 - Quick benchmark 已显示小 batch 有效带宽较低，而 batch/context 增大后有效带宽明显上升。
 - 完整 context sweep 已显示 `context=8192` 下 p50 约 1.322 ms，有效带宽约 1.24 TB/s，长 context 更接近 memory-bound。
 
-## E3：profiling 准备
+## E3：profiling 验证
 
-Week 8 后半段或 Week 9 需要对三类场景做 profiling：
+实验选择三类场景做 profiling：
 
 - 小 batch / 短 context：例如 `batch=1, context=128`。
 - 中 batch / 中 context：例如 `batch=16, context=1024`。

@@ -5,9 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "flashdec"
 version = "0.0.0"
-description = "LLM decode attention and paged KV cache experiments with PyTorch, Triton, and CUDA."
+description = "A single-GPU LLM decode runtime with paged KV cache, Triton attention, CUDA append, scheduling, and multi-layer transactions."
 readme = "README.md"
 requires-python = ">=3.10"
+keywords = ["llm", "inference", "triton", "cuda", "paged-attention", "kv-cache"]
 dependencies = [
   "torch",
   "triton",
@@ -20,6 +21,10 @@ dev = [
 cuda-extension = [
   "ninja",
 ]
+
+[project.urls]
+Repository = "https://github.com/cysong2025/flashdec"
+Documentation = "https://github.com/cysong2025/flashdec/tree/main/docs"
 
 [tool.setuptools.packages.find]
 include = ["flashdec*"]

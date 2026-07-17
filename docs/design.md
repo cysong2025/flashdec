@@ -1,119 +1,134 @@
-# FlashDec 设计文档
+# FlashDec 总体设计
 
-本文是 FlashDec 的设计文档初稿，当前重点定义 dense decode attention reference 的语义。后续 dense Triton kernel、Paged KV Cache、paged decode attention 都要对齐这里的输入输出约定。
+本文描述 FlashDec 的稳定架构、核心语义和模块边界。各子系统的状态机、失败路径与实验协议见[文档索引](INDEX.md)中的专题设计。
 
-## 1. 项目范围
+## 1. 设计目标
 
-FlashDec 聚焦 LLM decode 阶段的高性能 attention 与 Paged KV Cache。项目不实现完整 serving engine，而是围绕以下核心能力展开：
+FlashDec 研究单 GPU LLM decode 中三个相互关联的问题：
 
-- PyTorch reference：定义正确性标准。
-- Triton kernel：实现 dense decode attention 和 paged decode attention。
-- Paged KV Cache：用 block table 管理变长请求的 K/V cache。
-- correctness、benchmark、profiling：形成可复现的工程闭环。
+1. 变长请求如何通过 paged KV blocks 保存历史 K/V。
+2. scheduler、allocator 和执行引擎如何在动态 batch 下保持所有权与进展。
+3. CUDA/Triton 优化是否能从单算子传递到完整 token transaction。
 
-## 2. Prefill 与 Decode 的区别
+项目不执行完整 Transformer forward。Q/K/V 由调用方提供，输出停在 attention；tokenizer、sampling、网络服务和多 GPU 并行不在范围内。
 
-prefill 阶段处理 prompt 中的一段 token，通常有较大的矩阵乘法和较高并行度。
-
-decode 阶段每次只处理一个新 token，但要读取历史所有 token 的 K/V cache。此时：
+## 2. 分层架构
 
 ```text
-q: 当前 token 的 query
-k/v cache: 历史 token 的 key/value
-out: 当前 token 聚合历史上下文后的 attention 输出
+Workload / caller
+        |
+        v
+BlockAwareScheduler       request order, capacity commitment, fairness
+        |
+        v
+DecodeEngine              row mapping, lifecycle, execution orchestration
+        |
+        v
+PagedKVCache              block ownership, transaction, commit / rollback
+        |
+        +-------------------------------+
+        |                               |
+        v                               v
+Fused RoPE + KV Append             Observability
+CUDA extension                     latency, events, memory
+        |
+        v
+Paged Decode Attention
+Triton kernel / PyTorch reference
 ```
 
-decode attention 常见瓶颈不是算力不够，而是 K/V cache 读取带宽、访存布局和动态 batch 管理。
+所有权规则：
 
-## 3. Dense Decode Attention 语义
+- Scheduler 只产生 decision，不直接修改 Cache。
+- DecodeEngine 校验 decision 并组织一次或多层 token 执行。
+- PagedKVCache 是 block ownership、request lifecycle 和 seq_len 的唯一事实来源。
+- Kernel 只消费 tensor 和位置，不维护 request 状态。
+- Benchmark 通过公开 runtime API 执行，不复制 allocator 或事务语义。
 
-Week 3 的 dense reference 使用 dense K/V cache，不涉及分页。
+## 3. Decode Attention 语义
 
-输入 shape：
+单个 decode step 的输入输出约定：
 
 ```text
 q:        [num_seqs, num_q_heads, head_dim]
-k_cache:  [num_seqs, max_seq_len, num_kv_heads, head_dim]
-v_cache:  [num_seqs, max_seq_len, num_kv_heads, head_dim]
+k_cache:  dense 或 paged physical storage
+v_cache:  dense 或 paged physical storage
 seq_lens: [num_seqs]
+out:      [num_seqs, num_q_heads, head_dim]
 ```
 
-输出 shape：
-
-```text
-out: [num_seqs, num_q_heads, head_dim]
-```
-
-对每个 sequence 和 q head：
-
-1. 根据 GQA/MQA 映射找到对应 kv head。
-2. 只读取 `[0, seq_lens[seq_idx])` 范围内的 K/V。
-3. 计算 `score = dot(q, k) * sm_scale`。
-4. 使用数值稳定 softmax。
-5. 用 softmax 权重加权求和 V。
-
-## 4. GQA/MQA Head 映射
-
-FlashDec 使用如下映射：
+每个 query head 通过以下映射选择 KV head：
 
 ```python
 kv_head = q_head // (num_q_heads // num_kv_heads)
 ```
 
-约束：
+因此同一语义同时覆盖 MHA、GQA 和 MQA。Attention 只读取 `[0, seq_len)` 的有效历史，并使用 FP32 accumulation 与数值稳定 softmax。`dense_decode_attention_ref` 和 `paged_decode_attention_ref` 是 Triton 实现的 correctness anchor。
 
-- `num_q_heads` 必须能被 `num_kv_heads` 整除。
-- MHA：`num_q_heads == num_kv_heads`。
-- GQA：`num_q_heads > num_kv_heads`，多个 q head 共享一个 kv head。
-- MQA：`num_kv_heads == 1`，所有 q head 共享同一个 kv head。
+## 4. Paged KV 语义
 
-## 5. seq_lens 的作用
-
-`seq_lens` 表示每个 sequence 的有效历史长度。dense cache 通常 padding 到同一个 `max_seq_len`，但 padding token 不能参与 attention。
-
-例如：
+逻辑 token 位置通过 block table 映射到 physical storage：
 
 ```text
-max_seq_len = 8
-seq_lens[0] = 5
+logical_block = position // block_size
+block_offset  = position % block_size
+physical_id   = block_table[request, logical_block]
 ```
 
-第 0 个 sequence 只能读取 K/V 的前 5 个 token，后 3 个 padding 位置必须忽略。
-
-这件事对后续 paged attention 也很关键，因为每个 request 的逻辑长度不同。
-
-## 6. 数值稳定 Softmax
-
-reference 使用 safe softmax：
+默认 token-major layout 为：
 
 ```text
-scores = scores - max(scores)
-probs = exp(scores) / sum(exp(scores))
+[num_layers, num_blocks, block_size, num_kv_heads, head_dim]
 ```
 
-这样可以避免 score 较大时 `exp` 溢出。
+Cache 负责容量预检、分配、释放、复用和终态 request 检查。批量操作在修改状态前完成 preflight；容量不足时不允许部分 request 或部分 seq_len 被提交。
 
-Week 4 的 Triton dense decode kernel 会进一步使用 online softmax，避免在 kernel 内 materialize 整个 attention score。
+## 5. Token Transaction
 
-## 7. Correctness Anchor
+多层执行不能为每一层分别增长 request 长度。FlashDec 使用显式 token transaction：
 
-`dense_decode_attention_ref` 是后续实现的 correctness anchor：
+```text
+begin_step(request_ids)
+    -> reserve one physical location per request
+step_layer(layer=0 ... N-1)
+    -> write K/V and run attention at the shared location
+commit_step()
+    -> advance each seq_len exactly once
 
-- Week 4 dense Triton decode kernel 要与它对齐。
-- Week 5 paged reference 要与它对齐。
-- Week 6/7 paged Triton decode kernel 也要与它对齐。
+exception
+    -> rollback reservation and keep committed state unchanged
+```
 
-这也是 Week 3 先写 reference、测试和 benchmark，而不是直接写 Triton attention kernel 的原因。
+Open transaction 中的 layer 可以读取 `committed_seq_len + 1` 的有效视图，但未提交 bytes 对其他操作不可见。跨层 block id 与 offset 必须一致；中途失败后，调用方必须丢弃此前 layer output。
 
-Paged KV Cache 的 block table、physical block layout 和 paged reference 语义见 `docs/design_paged_kv.md`。
+## 6. Scheduler 与 Backpressure
 
-## 8. Week 4 Triton Kernel 计划
+Scheduler 根据 logical capacity、physical free blocks、request lifetime commitment 和等待年龄选择 runnable subset。Decision 带有 `state_version`；Engine 在执行前拒绝 stale 或 forged decision。
 
-Week 4 的 dense decode Triton kernel 计划：
+容量不足是正常 backpressure，不是 Cache 异常。默认 lifetime FIFO + aging 策略优先保证：
 
-- 每个 Triton program 处理一个 `(sequence, q_head)`。
-- 沿 context 维度分 block 读取 K/V。
-- 使用 FP32 accumulation。
-- 实现 running max、running exp sum、running output accumulator。
-- 先支持 `head_dim=64`，再支持 `head_dim=128`。
-- correctness 对齐 `dense_decode_attention_ref`。
+- 不超额承诺 physical blocks。
+- 有限请求在边界容量场景中取得进展。
+- waiting request 不因持续新到达请求而永久饥饿。
+
+R1 的 boundary workload 用 cancel 和 greedy baseline 展示了仅看当前 step 空间时可能出现的零进展问题；它不是无条件吞吐加速结论。
+
+## 7. Kernel 与性能边界
+
+Paged decode 默认配置冻结为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。Fused CUDA 路径把 RoPE、位置映射和 K/V 写入放在更少的 launch 中；attention 仍由相同的 Triton paged decode kernel 完成。
+
+因此性能证据分为三层：
+
+- kernel/event time：解释设备端工作。
+- profiler attribution：解释 append、decode 和 launch 数变化。
+- non-instrumented complete-token wall latency：作为正式系统性能来源。
+
+Profiler 数据不与 release latency 混用。所有性能结论绑定硬件、commit、seed、shape、trial 和 backend order，详见[性能报告](performance_report.md)与[复现指南](reproducibility.md)。
+
+## 8. 公开边界
+
+- 支持单 GPU、单 token decode 和顺序 multi-layer transaction。
+- 支持 FP16/BF16 paged decode；append reference 另支持 FP32。
+- 不包含 multi-layer prompt prefill、prefix cache、抢占、swap/offload 或生产级并发服务。
+- CUDA extension 使用 lazy JIT，首次运行含构建成本。
+- 当前版本为 `0.0.0` release candidate；clean-install gate 通过后才升级 `0.1.0`。

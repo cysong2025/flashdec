@@ -88,7 +88,7 @@ pytest tests/test_triton_basics.py
 
 - `tests/test_triton_basics.py` 在 RTX 5070 上通过：24 passed。
 - `benchmarks/results/week1_microbench.csv` 生成。
-- 你能口头解释 `docs/notes/triton_basics.md` 中的 6 个概念：
+- `docs/notes/triton_basics.md` 已覆盖并由对应实现验证以下概念：
   - program id
   - block size
   - mask load/store

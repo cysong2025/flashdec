@@ -23,6 +23,7 @@
 - Multi-layer Cache transaction 与 DecodeEngine sequential layer API：2/4-layer shared location、单次 seq_len commit、异常自动 rollback、scheduler transaction 互斥和单层 compatibility wrapper。
 - R2-C fused CUDA location-only transaction write：复用 transaction 预留的 block ids/offsets，保持 allocator、rollback 和 committed seq_len 由 Cache transaction 唯一管理，并增加 2-layer FP16/BF16、GQA、Triton 与失败回滚测试。
 - R2-D multi-layer workload runner 与严格 trial summary：12-case layer/batch/context 矩阵、complete-token/per-layer latency、host begin/commit、独立 profiler append/decode/launch attribution、KV bytes、rollback probe 和 paired evidence validation。
+- 公开仓库文档索引、贡献指南、dependency-free Markdown link checker 与 GitHub Actions 质量门禁。
 
 ### Changed
 

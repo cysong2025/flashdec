@@ -4,7 +4,7 @@
 
 matmul、访存、autotune、profiling 入门。
 
-## 本周目标
+## 阶段目标
 
 - 建立 GPU kernel 性能直觉。
 - 理解 compute-bound 与 memory-bound 的区别。
@@ -122,7 +122,7 @@ autotuned profiler 摘要：
 - 已生成 profiler 文本摘要：
   - `benchmarks/profiles/week2_matmul_profiler.txt`
   - `benchmarks/profiles/week2_matmul_autotuned_profiler.txt`
-- 你能解释：
+- 实验与笔记覆盖以下性能概念：
   - global memory、shared memory、register 的区别。
   - compute-bound 与 memory-bound 的区别。
   - kernel launch time 与 GPU execution time 的区别。

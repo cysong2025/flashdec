@@ -21,7 +21,7 @@
 
 当前限制：
 
-- legacy `append()`/RoPE/DecodeEngine 路径仍限制 `num_layers=1`；`num_layers>1` 目前只支持 Cache reference transaction。
+- legacy `append()`、RoPE helper 和 `DecodeEngine.step()` compatibility wrapper 仍限制 `num_layers=1`；`num_layers>1` 使用 `begin_step()` / `step_layer()` / `commit_step()` sequential transaction API。
 - finished/cancelled request id 当前不能重新激活。
 - runtime v2 已通过 RTX 5070 focused/full correctness 验证。
 - 已支持 R1 block-aware scheduler；仍不包含 prefix cache、swap、evict 或生产级多线程 serving。
@@ -92,7 +92,7 @@
 - short-churn、mixed-steady、long-pressure synthetic workload 与完整 step p50/p90/p99/TPS/memory metrics。
 - 可选 `profile_ranges=True` 的 preflight/append/decode 归因；默认关闭。
 
-当前限制：DecodeEngine 的 multi-layer reference transaction API 已实现但待 WSL 验证；multi-layer native/fused append、prompt prefill 与 workload 尚未实现。Q/K/V 由调用方提供；没有 model forward、sampling、prefix cache 或网络服务。R1 block-aware scheduler 的 36 行 RTX 正式矩阵与 R2-A Cache transaction 回归已完成。
+当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和正式 workload 已在 RTX 5070 验证。它仍不是完整模型执行器：Q/K/V 由调用方提供，不包含 multi-layer prompt prefill、model forward、sampling、prefix cache 或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成。
 
 ### Week 11 Native CUDA KV Append
 
@@ -244,7 +244,8 @@ python benchmarks/run_layout_sweep.py --quick --output benchmarks/results/week8_
 python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_decode_layout.csv
 ```
 
-## 后续计划
+## 当前工程状态
 
 - kernel 配置已冻结为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
-- PagedKVCache runtime v2 已完成验证；当前推进 RoPE/KV append 与 DecodeEngine。
+- PagedKVCache runtime v2、RoPE/KV append、DecodeEngine、R1 Scheduler 与 R2 multi-layer transaction 均已完成 RTX 验证。
+- clean-install、版本升级和 release tag 保留在最终发布门禁；prefix cache 与公开基线属于 release 后的选择性扩展。

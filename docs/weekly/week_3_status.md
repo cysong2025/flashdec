@@ -4,7 +4,7 @@
 
 attention reference 与 dense decode baseline。
 
-## 本周目标
+## 阶段目标
 
 - 先把 decode attention 的张量语义定义清楚。
 - 写出一个朴素、可信、容易解释的 PyTorch dense decode attention reference。
@@ -150,7 +150,7 @@ benchmarks/run_decode_reference.py
 - reference 内部使用 FP32 计算 score、softmax 和 value accumulation，再转回输入 dtype。
 - `seq_len == 0` 时输出 zero，便于后续处理空上下文边界。
 
-## 本周学习任务
+## 阶段验证项
 
 重点理解：
 
@@ -272,7 +272,7 @@ benchmarks/results/week3_decode_reference.csv
 - 支持变长 `seq_lens`。
 - `benchmarks/run_decode_reference.py` 已生成 baseline CSV：`benchmarks/results/week3_decode_reference.csv`。
 - `docs/design.md` 初稿完成。
-- 你能口头解释：
+- 设计文档和 tests 已明确以下语义：
   - decode attention 与 prefill attention 的区别。
   - `q/k/v` 的 shape 含义。
   - `seq_lens` 为什么必须参与 attention。

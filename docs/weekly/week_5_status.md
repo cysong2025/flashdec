@@ -4,7 +4,7 @@
 
 Paged KV Cache 数据结构。
 
-## 本周目标
+## 阶段目标
 
 - 把 block table 和 cache 语义定义清楚。
 - 实现一个简单可解释的 `PagedKVCache`。

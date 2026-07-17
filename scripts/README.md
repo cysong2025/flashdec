@@ -29,6 +29,14 @@ docs/environment.md
 - `nvcc` path。
 - `nvcc --version`。
 
+文档链接检查：
+
+```bash
+python scripts/check_docs.py
+```
+
+该脚本扫描 README、CHANGELOG、CONTRIBUTING、`docs/`、`benchmarks/` 和 `scripts/` 中的本地 Markdown 链接，拒绝缺失目标或逃逸出仓库的相对路径；外部 URL 不发起网络请求。
+
 发布候选结构检查：
 
 ```bash

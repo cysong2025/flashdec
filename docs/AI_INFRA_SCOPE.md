@@ -60,7 +60,7 @@ allocate/free/reuse      block_tables/seq_lens
 - append 与 paged attention 的接口衔接。
 - PyTorch fallback 与 CUDA extension 路径。
 
-这一层回答“一个 decode step 的状态如何从新 K/V 流入 attention”。计划使用 fused RoPE + paged KV append CUDA extension；若范围过大，先完成独立 CUDA KV append。
+这一层回答“一个 decode step 的状态如何从新 K/V 流入 attention”。当前实现同时保留 PyTorch reference、独立 CUDA append 和 fused RoPE + paged KV append；GPU Engine 默认使用 fused 路径。
 
 当前 PyTorch RoPE + paged KV append reference 和统一返回接口已通过 RTX 5070 correctness。独立 CUDA KV append 的 JIT extension、raw op 与 runtime integration 也已通过 RTX 5070 验证（focused `34 passed in 3.59s`，full `198 passed in 5.13s`）；RoPE 的 `append_backend="cuda"` integration 已通过（focused `56 passed in 3.85s`，full `204 passed in 4.47s`）；fused RoPE + KV append 已通过（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）。三路径 full CUDA-event benchmark 已完成，fused p50 几何平均为 1.2226x vs torch。
 
@@ -94,22 +94,22 @@ allocate/free/reuse      block_tables/seq_lens
 - tensor parallel、pipeline parallel 或多机调度。
 - prefix cache、swap、CPU offload 和生产级抢占。
 - 完整 prefill kernel 与生产级 continuous batching scheduler。
-- 完整多 layer 模型执行；`v0.1.0` 的 DecodeEngine 固定验证单 layer 路径。
+- 完整多 layer 模型 forward；当前只实现调用方提供逐层 Q/K/V 的顺序 token transaction。
 
 这些内容可以作为后续路线，但不应稀释当前单 GPU decode runtime 主线。
 
-## 当前状态与缺口
+## 当前状态
 
-| 层次 | 当前状态 | 主要缺口 |
+| 层次 | 当前状态 | 证据边界 |
 | --- | --- | --- |
-| Reference / Kernel | 已完成主要 correctness、参数实验、最终 profiling 与配置冻结 | 仅在出现明确回归时重新进入 |
-| Paged KV Runtime | 已完成 request lifecycle、free/reuse、capacity atomicity、metrics、churn tests 和 Engine 集成；multi-layer transaction 语义已设计 | transaction begin/write/commit/abort、rollback 与 RTX 实测 |
-| Decode Data Path | 三条路径已通过 RTX correctness；append-only fused p50 为 1.2226x，complete-step 正式 p50 为 1.0668x；阶段归因已完成 | scheduler/multi-layer 下的数据路径集成 |
-| Execution Engine | DecodeEngine v1 已完成 RTX correctness；Scheduler R1-B snapshot/decision apply/commitment lifecycle 已实现 | WSL/RTX 回归与 R1-C 三策略 workload 实测 |
-| End-to-End Evaluation | 36 行 multi-trial 与 12-case profiler 已完成；p50/p90/TPS 几何平均 1.0668x/1.0317x/1.0811x | short-churn 与 p99 噪声解释、scheduler 策略对照 |
-| Reproducibility | 一键 R0 编排器与正式 GPU 证据已完成 | 全部功能完成后的 clean-machine 验证、版本升级和 release tag |
+| Reference / Kernel | correctness、shape sweep、profiling 与默认配置冻结已完成 | 仅在明确回归时重新进入参数实验 |
+| Paged KV Runtime | lifecycle、free/reuse、capacity atomicity、metrics、churn 与 multi-layer transaction 已完成 | Cache 是 block ownership 与事务状态的唯一来源 |
+| Decode Data Path | torch/CUDA/fused 三条路径通过 RTX correctness；fused append-only p50 为 `1.2226x` | native kernel 不修改 allocator 或 seq_len |
+| Execution Engine | dynamic batch、backpressure、Scheduler R1 与 multi-layer R2 已完成 | 不包含模型 forward、sampling 或网络层 |
+| End-to-End Evaluation | 36-row Engine、36-row Scheduler、144-row Multi-layer 正式矩阵完成 | profiler 只做归因；p99 保留范围 |
+| Reproducibility | 环境检查、分层验证、严格 summary 与 release checker 已完成 | clean-machine install、版本与 tag 留在最终发布阶段 |
 
-## v0.1.0 完成标准
+## Release candidate 完成标准
 
 只有满足以下条件，FlashDec 才算完成一个有足够深度的 AI Infra 项目：
 
@@ -123,6 +123,6 @@ allocate/free/reuse      block_tables/seq_lens
 
 单个 kernel 更快、参数 sweep 更多，不能单独满足上述完成标准。
 
-## v0.1 之后的深化边界
+## 选择性扩展边界
 
-`v0.2` 的必做深化方向是 block-aware scheduler 与 multi-layer KV token transaction；它们分别补齐“谁能进入本轮 batch”和“一个 token 如何原子地更新所有 layer”两个当前核心缺口。Shared prefix blocks 与 FlashInfer/vLLM 有限对比属于 `v0.3` 选择项，不与 scheduler 同时展开。完整路线与验收门槛见 `docs/ROADMAP.md`。
+Block-aware Scheduler 与 multi-layer KV token transaction 已完成。后续只在 shared prefix blocks 与 FlashInfer/vLLM 有限公开对比之间选择一个方向，避免同时扩大 ownership、eviction 和外部依赖边界。完整优先级与验收门槛见 `docs/ROADMAP.md`。

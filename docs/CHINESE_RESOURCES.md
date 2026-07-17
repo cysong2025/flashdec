@@ -1,389 +1,85 @@
-# 中文学习资料导航
+# FlashDec 技术参考资料
 
-这份资料导航服务于 FlashDec 项目。原则是：**主学习路径全部用中文资料和中文笔记推进**。英文论文或官方英文页面只作为必要时核对术语和 API 的备用资料，不作为每天学习主线。
+本文汇总与 FlashDec 设计直接相关的公开资料入口。资料用于核对术语、API 和系统设计；项目结论仍以仓库源码、测试和可复现实验为准。
 
-## 0. 使用方式
-
-每看一份资料，都输出一页中文笔记。笔记不要抄原文，按下面结构写：
-
-```markdown
-# 资料标题
-
-## 我学到了什么
-
-## 和 FlashDec 的关系
-
-## 关键概念
-
-## 我还没懂的问题
-
-## 下一步要写的代码或实验
-```
-
-学习资料必须和项目产出绑定。只看不写代码、只看不做实验，都不算完成。
-
-## 1. 优先资料入口
-
-### Triton
+## Triton
 
 - Triton 中文文档：https://triton-lang.cn/main/index.html
-- Triton 中文教程入口：https://triton-lang.cn/main/getting-started/tutorials/index.html
-- Triton 中文 API：`triton.language`、`triton.testing`、Triton 语义。
+- Triton 中文教程：https://triton-lang.cn/main/getting-started/tutorials/index.html
 
-重点看：
+相关主题：program id、mask load/store、reduction、matmul、fused attention、autotune 和 debugging。
 
-- 安装。
-- vector add。
-- fused softmax。
-- matmul。
-- fused attention。
-- autotune。
-- debugging。
+对应实现：
 
-目标：
+- `flashdec/kernels/dense_decode.py`
+- `flashdec/kernels/paged_decode.py`
+- `tests/test_dense_decode.py`
+- `tests/test_paged_decode.py`
 
-- Week 1 能写 vector add / softmax / RMSNorm。
-- Week 2 能写 matmul 和小范围 autotune。
-- Week 4 起能写 attention kernel。
-
-### PyTorch
+## PyTorch 与自定义算子
 
 - PyTorch 中文站：https://pytorch.ac.cn/
 - PyTorch 中文教程：https://docs.pytorch.ac.cn/tutorials/
-- PyTorch 自定义 C++/CUDA 算子中文教程：https://docs.pytorch.ac.cn/tutorials/advanced/cpp_custom_ops.html
+- PyTorch 自定义 C++/CUDA 算子教程：https://docs.pytorch.ac.cn/tutorials/advanced/cpp_custom_ops.html
 
-重点看：
+相关主题：reference tensor semantics、CUDA event、profiler、C++/CUDA extension 和 op registration。
 
-- Tensor 基础、shape、stride。
-- CUDA tensor。
-- `torch.cuda.Event` 计时。
-- PyTorch profiler。
-- 自定义 C++/CUDA 算子。
+对应实现：
 
-目标：
+- `flashdec/reference.py`
+- `flashdec/paged_reference.py`
+- `flashdec/csrc/`
+- `flashdec/_cuda_kv_append.py`
+- `flashdec/_fused_rope_kv_append.py`
 
-- Week 1 建立 correctness tests 和 benchmark。
-- Week 3 写 attention reference。
-- Week 10 写 CUDA extension。
-
-### vLLM 与 PagedAttention
+## PagedAttention 与 KV Cache
 
 - vLLM 中文文档：https://docs.vllm.com.cn/
-- vLLM Paged Attention 中文页面：https://docs.vllm.com.cn/en/latest/design/paged_attention/
+- vLLM Paged Attention 设计：https://docs.vllm.com.cn/en/latest/design/paged_attention/
 
-重点看：
+相关主题：logical/physical blocks、block table、GQA/MQA head mapping、paged KV layout 和请求生命周期。
 
-- Paged Attention 的输入。
-- Query / Key / Value 的内存布局。
-- QK 计算。
-- Softmax 归约。
-- block、thread block、warp、thread group 的区别。
-- Paged KV Cache 与 block table 的思想。
+对应设计：
 
-目标：
-
-- Week 5 能设计 `PagedKVCache`。
-- Week 6 能实现 paged decode v1。
-- Week 9 能写 profiling 报告。profiling 相关页面从 vLLM 中文首页搜索“性能分析”进入，避免直接依赖不稳定深链接。
-
-### CUDA
-
-中文资料优先级：
-
-1. 中文书：《CUDA 编程：基础与实践》。
-2. 中文书：《CUDA C 编程权威指南》。
-3. NVIDIA 中文/中国站文档中关于 CUDA 编程模型、内存层次、性能优化的章节。
-4. 高质量中文博客，仅作辅助，不把博客结论当最终事实。
-
-重点看：
-
-- grid / block / thread。
-- warp。
-- global memory。
-- shared memory。
-- register。
-- coalesced memory access。
-- occupancy。
-- CUDA event。
-- `nvcc` 与 PyTorch extension 构建。
-
-目标：
-
-- Week 2 能解释 GPU memory hierarchy。
-- Week 8-9 能理解 profiling 指标。
-- Week 10 能写一个小 CUDA extension。
-
-### Attention / FlashAttention / Online Softmax
-
-中文资料优先级：
-
-1. Transformer attention 中文讲解。
-2. FlashAttention 中文原理解析。
-3. online softmax 中文推导。
-4. vLLM Paged Attention 中文页面里的 Softmax 部分。
-
-重点看：
-
-- attention 公式。
-- safe softmax。
-- online softmax。
-- 为什么不 materialize 完整 attention matrix。
-- 为什么 FlashAttention 强调 IO-aware。
-
-目标：
-
-- Week 3 写 dense attention reference。
-- Week 4 写 dense decode Triton kernel。
-- Week 9 解释性能瓶颈。
-
-## 2. 分阶段学习路线
-
-### 第 0 阶段：环境与概念，Week 0
-
-阅读：
-
-- PyTorch 中文站安装页。
-- Triton 中文安装页。
-- vLLM 中文 Paged Attention 页面开头、输入、概念。
-
-输出：
-
-- `docs/environment.md`
-- `docs/notes/triton_basics.md`
-- 一张手画或 Markdown 图：dense KV vs paged KV。
-
-必须弄懂：
-
-- 什么是 decode。
-- 什么是 KV cache。
-- 为什么 decode 每次只产生一个 token。
-- 为什么 KV cache 会随着上下文增长。
-
-### 第 1 阶段：Triton 小算子，Week 1
-
-阅读：
-
-- Triton 中文 vector add。
-- Triton 中文 softmax。
-- Triton 中文 API：`tl.arange`、`tl.load`、`tl.store`、mask、program id。
-
-输出：
-
-- vector add kernel。
-- softmax kernel。
-- RMSNorm kernel。
-- `docs/notes/triton_basics.md` 完整版。
-
-必须弄懂：
-
-- 一个 Triton program 对应什么计算块。
-- mask load/store 为什么必要。
-- stride 与 contiguous tensor 的关系。
-
-### 第 2 阶段：矩阵乘与性能直觉，Week 2
-
-阅读：
-
-- Triton 中文 matmul。
-- Triton 中文 autotune。
-- CUDA 中文资料中的内存层次与线程层次。
-
-输出：
-
-- matmul kernel。
-- shape sweep benchmark。
-- `docs/notes/gpu_memory_basics.md`
-
-必须弄懂：
-
-- 为什么 matmul 要 tiling。
-- 为什么 global memory 慢、shared/register 快。
-- 为什么 coalesced load 重要。
-- 为什么算子性能不能只看 FLOPS。
-
-### 第 3 阶段：Attention 语义，Week 3
-
-阅读：
-
-- Transformer attention 中文讲解。
-- FlashAttention 中文原理解析。
-- vLLM Paged Attention：输入、QK、Softmax。
-
-输出：
-
-- PyTorch dense decode reference。
-- correctness tests。
-- `docs/design.md` 初稿。
-
-必须弄懂：
-
-- q/k/v shape。
-- causal attention 在 decode 阶段如何简化。
-- GQA/MQA 的 head 映射。
-- safe softmax。
-
-### 第 4 阶段：Dense Decode Kernel，Week 4
-
-阅读：
-
-- Triton 中文 fused attention 教程。
-- online softmax 中文推导。
-
-输出：
-
-- dense decode Triton kernel。
-- dense decode benchmark。
-- `docs/notes/online_softmax.md`
-
-必须弄懂：
-
-- running max 如何更新。
-- running sum 如何重标定。
-- output accumulator 如何随 max 变化重标定。
-
-### 第 5 阶段：Paged KV Cache，Week 5
-
-阅读：
-
-- vLLM 中文 Paged Attention 全文。
-- 操作系统分页/虚拟内存中文资料。
-
-输出：
-
-- `PagedKVCache`。
-- paged reference。
 - `docs/design_paged_kv.md`
+- `docs/design_decode_engine.md`
+- `docs/design_scheduler.md`
+- `docs/design_multi_layer_kv_transaction.md`
 
-必须弄懂：
+## CUDA 与 GPU 性能
 
-- logical block。
-- physical block。
-- block table。
-- 为什么物理内存不连续也能表示连续上下文。
+建议参考 NVIDIA 官方 CUDA Programming Guide、CUDA Best Practices Guide，以及公开的体系结构与 profiling 文档。关键主题包括：
 
-### 第 6 阶段：Paged Decode Kernel，Week 6-7
+- grid/block/thread/warp。
+- global/shared/register memory。
+- coalesced access、occupancy 和 register pressure。
+- CUDA event 与 kernel launch overhead。
+- NVCC、host compiler 和 PyTorch extension 构建。
 
-阅读：
+FlashDec 的性能判断以 CUDA event、PyTorch profiler、固定 shape sweep 和显式 timing scope 为证据；没有硬件计数时不会推断具体 occupancy 或 cache hit rate。
 
-- vLLM Paged Attention 的 Key、Value、QK、Softmax、LV、Output 部分。
-- Triton 中文 debugging。
+## Attention 与 online softmax
 
-输出：
+相关主题：
 
-- paged decode v1。
-- head_dim 64/128。
-- GQA/MQA。
-- BF16。
-- `docs/compatibility.md`
+- decode attention 的 Q/K/V shape。
+- safe softmax 与 online softmax。
+- FP32 accumulation。
+- memory-bound decode 与 KV read traffic。
+- 不 materialize 完整 attention matrix 的流式归约。
 
-必须弄懂：
+仓库笔记：
 
-- 如何从 logical token index 找到 physical block 和 block offset。
-- 最后一个 block 如何 mask。
-- 为什么不同 layout 会影响访存。
+- `docs/notes/online_softmax.md`
+- `docs/notes/gpu_memory_basics.md`
+- `docs/design.md`
 
-### 第 7 阶段：性能优化，Week 8-9
+## 资料与实验的使用规则
 
-阅读：
+1. API 和行为优先以官方文档与源码为准。
+2. 第三方文章只作为设计线索，不直接作为性能结论。
+3. 关键判断必须由最小测试或 benchmark 验证。
+4. 性能数字必须记录硬件、版本、shape、dtype、计时范围和 commit。
+5. 不同实现无法公平对齐时，明确标记为不可比。
 
-- CUDA 中文性能优化资料。
-- vLLM 中文性能分析资料。
-- PyTorch profiler 中文资料。
-
-输出：
-
-- `docs/perf_experiments.md`
-- `docs/performance_report.md`
-- profiler 截图或摘要。
-
-必须弄懂：
-
-- latency/token。
-- memory bandwidth。
-- occupancy。
-- kernel launch overhead。
-- shape sweep 为什么重要。
-
-### 第 8 阶段：CUDA Extension，Week 10
-
-阅读：
-
-- PyTorch 自定义 C++/CUDA 算子中文教程。
-- CUDA 中文资料中的 kernel、memory、build 部分。
-
-输出：
-
-- CUDA extension。
-- correctness tests。
-- append benchmark。
-- `docs/cuda_extension.md`
-
-必须弄懂：
-
-- PyTorch extension 如何注册 op。
-- host code 与 device code 的区别。
-- `nvcc` 在构建里做什么。
-
-### 第 9 阶段：项目收尾，Week 11-12
-
-阅读：
-
-- 优秀中文开源项目 README。
-- 高性能算子 / AI Infra 项目复盘文章。
-
-输出：
-
-- 中文 README。
-- 中文设计文档。
-- 中文性能报告。
-- 兼容性与复现说明。
-- `CHANGELOG.md` 和 release 记录。
-
-必须弄懂：
-
-- 新读者需要理解“为什么这样设计”和“怎么证明有效”。
-- benchmark 结论必须可复现。
-- 不要夸张宣称超过工业库。
-
-## 3. 每周固定输出
-
-每周至少输出下面 3 类证据中的 2 类：
-
-- 代码：kernel、reference、cache runtime、benchmark、tests。
-- 数据：CSV、Markdown 表格、profiler 截图/摘要。
-- 文档：中文笔记、设计文档、周复盘。
-
-周复盘路径：
-
-```text
-docs/weekly/week_N_review.md
-```
-
-## 4. 资料质量判断标准
-
-中文博客很多，质量不一。使用时按这个顺序判断：
-
-1. 官方中文文档优先。
-2. 有代码、有实验、有图示的文章优先。
-3. 能和官方文档或源码互相印证的文章优先。
-4. 只讲结论、不讲 shape、不讲代码、不讲实验的文章只作启发。
-
-遇到中文资料互相矛盾时：
-
-- 以官方文档和源码为准。
-- 自己写最小实验验证。
-- 在笔记里记录“我验证了什么”和“还没验证什么”。
-
-## 5. 每周工程结论
-
-每周把实现和实验压缩成 3 句话：
-
-```markdown
-## 本周工程结论
-
-1. 本周解决的问题：
-2. 实现选择与原因：
-3. correctness / benchmark 结论：
-```
-
-到 Week 12 时，这些结论应能直接汇总进设计文档、性能报告和复现说明。
+完整实验方法见[复现指南](reproducibility.md)和[性能报告](performance_report.md)。

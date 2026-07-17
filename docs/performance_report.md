@@ -1,6 +1,6 @@
 # FlashDec 性能报告
 
-本文记录 FlashDec paged decode attention 的性能结论、profiling 证据和后续优化方向。
+本文记录 FlashDec paged decode attention、DecodeEngine 和 multi-layer transaction 的性能结论与 profiling 证据。
 
 ## 当前结论
 
@@ -18,7 +18,7 @@
 - Week 12 正式 36 行 multi-trial 显示 fused complete-step p50/p90/TPS 几何平均为 1.0668x/1.0317x/1.0811x；short-churn p50 跨 trial 穿过 1.0。
 - Week 12 正式 12-case profiler 显示 fusion 将 CUDA event 数减少 21.8%-45.6%，paged decode device time 仅变化 -1.7%-+1.1%。
 
-## Profiling 计划
+## Profiling 场景与命令
 
 代表场景：
 
@@ -185,10 +185,9 @@ CUDA event 结果：
 
 这里的 profiler totals 是 nested attribution，不能相加，也不能替代 non-instrumented benchmark。Attention device time 基本不变，而事件数显著下降，支持“fusion 优化 append/launch/runtime 路径”的判断。long-pressure FP16 的 CPU total 与 instrumented p99 仍有回退，是必须保留的负结果。
 
-## 下一步优化候选
+## 后续工作边界
 
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
-2. R0 clean-install/release 完成后，主线进入 block-aware scheduler 的 Engine/Cache 集成。
-3. 对比 cancel-on-backpressure、greedy-step-only 与 lifetime FIFO + aging 的完成率、公平性和资源效率。
-4. Scheduler 冻结后实现 multi-layer KV token transaction；不再通过新增零散 kernel 扩展项目。
-5. shared prefix 完成后，与固定版本 vLLM 做有限、同边界公开对比。
+2. Block-aware Scheduler 与 Multi-layer KV Token Transaction 已完成，后续优化必须基于新的 correctness 或系统证据。
+3. clean-install、版本与 tag 留在最终 release gate。
+4. 选择性扩展只在 shared prefix 与固定版本公开基线之间二选一；任何外部对比必须统一功能与计时边界。

@@ -58,4 +58,4 @@ RTX 5070 已完成首次 JIT build 和 correctness：focused `66 passed in 44.35
 - `fused_cuda` 与 PyTorch reference 的 rotated Q、cache、block table、seq_lens、request state 和 metrics 对齐。
 - fused capacity failure atomicity 与 CPU cache error path。
 
-本阶段尚无性能结论。下一步以 CUDA event 对比 `torch`、`cuda`、`fused_cuda` 三条路径，且将 JIT build 和 cache prefill 排除在计时外。
+三路径 CUDA-event 实验已完成，并将 JIT build 和 cache prefill 排除在计时外。`fused_cuda` 在 6/6 个 p50 case 胜出，p50 几何平均为 `1.2226x` vs torch；独立 CUDA append 为 `0.9840x`。该结果支持 GPU Engine 显式选择 fused 路径，公开 reference API 继续默认使用 torch。

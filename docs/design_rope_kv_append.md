@@ -93,7 +93,7 @@ capacity failure 由 PagedKVCache v2 在写入前统一检查，因此失败时�
 
 当前不支持：
 
-- `append_backend="cuda"` 只替换 rotated K/raw V 的写入，未消除 PyTorch RoPE kernel 或 K 的中间 tensor。`fused_cuda` 已作为单 CUDA kernel 通过 RTX 5070 correctness，但仍待性能验证；详细映射见 [Fused RoPE + Paged KV Append 设计说明](design_fused_rope_kv_append.md)。
+- `append_backend="cuda"` 只替换 rotated K/raw V 的写入，未消除 PyTorch RoPE kernel 或 K 的中间 tensor。`fused_cuda` 已作为单 CUDA kernel 通过 RTX 5070 correctness 与正式性能验证，并作为 GPU Engine 默认路径；详细映射见 [Fused RoPE + Paged KV Append 设计说明](design_fused_rope_kv_append.md)。
 - interleaved adjacent-pair RoPE。
 - RoPE scaling、YaRN 或 NTK-aware scaling。
 - 多 layer execution。
@@ -122,4 +122,4 @@ focused: 38 passed in 3.60s
 full:    186 passed in 4.96s
 ```
 
-独立 CUDA KV append 已在 RTX 5070 通过 JIT build 与 correctness（focused `34 passed in 3.59s`，full `198 passed in 5.13s`）。RoPE 的 `torch`/`cuda` 双 backend 集成也已通过（focused `56 passed in 3.85s`，full `204 passed in 4.47s`），覆盖 GQA、跨 block、FP16/BF16/FP32 对齐和 CPU error path。fused CUDA kernel 也已通过（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）；当前没有性能结论，下一步开始三路径 CUDA-event 比较。
+独立 CUDA KV append 已在 RTX 5070 通过 JIT build 与 correctness（focused `34 passed in 3.59s`，full `198 passed in 5.13s`）。RoPE 的 `torch`/`cuda` 双 backend 集成也已通过（focused `56 passed in 3.85s`，full `204 passed in 4.47s`），覆盖 GQA、跨 block、FP16/BF16/FP32 对齐和 CPU error path。fused CUDA kernel 也已通过（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）。后续三路径 CUDA-event 实验显示 fused p50 几何平均为 `1.2226x` vs torch，独立 CUDA append 为 `0.9840x`；因此 GPU Engine 选择 fused，独立 append 不再继续调优。

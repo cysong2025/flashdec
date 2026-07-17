@@ -257,7 +257,7 @@ request/order decisions are deterministic for the same snapshot/config
 
 性能表必须同时报告完成率、公平性和资源效率，不能只用 p50 或瞬时 active batch 判断策略优劣。
 
-## 11. 测试计划
+## 11. 测试覆盖
 
 ### 11.1 纯 Scheduler 测试
 
@@ -306,7 +306,7 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 
 验收不要求 lifetime policy 的所有 latency 指标都最好。预期取舍是：它可能降低瞬时并发或增加等待，但必须消除容量死锁和强制取消，并给出可解释的完成率/公平性收益。
 
-## 13. 实现阶段与验收门槛
+## 13. 实现阶段与验收结果
 
 ### R1-A：纯策略层
 
@@ -314,7 +314,7 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 - 实现 commitment 计算、FIFO/aging admission、fair runnable selection。
 - 完成不依赖 torch/CUDA 的纯 Python tests。
 
-当前状态：已实现 `flashdec/scheduler.py` 和 `tests/test_scheduler.py`。planner 和 focused tests 不依赖 torch/pytest；Mac 标准库 `unittest` 为 12/12 通过，另有 1000/1000 随机合法 snapshot invariant 检查通过。WSL pytest 收集与完整回归仍待执行。
+当前状态：已实现 `flashdec/scheduler.py` 和 `tests/test_scheduler.py`。planner 和 focused tests 不依赖 torch/pytest；标准库 `unittest`、随机合法 snapshot invariant、WSL pytest 与最终完整回归均已通过。
 
 ### R1-B：Engine/Cache 集成
 
@@ -323,7 +323,7 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 - lifecycle 同步释放 commitment。
 - 保持 Cache 为唯一 physical allocator。
 
-当前状态：以上代码与 CPU/PyTorch 集成测试已实现；Mac 已通过 compileall/diff check 和 R1-A 12/12 dependency-free tests。PyTorch CPU、完整回归与 RTX fused/Triton 仍待 WSL 验证。
+当前状态：Engine/Cache 集成、CPU/PyTorch tests、RTX fused/Triton 数值对齐和 stale-decision 错误路径均已完成验证。
 
 ### R1-C：Workload 与对照实验
 
@@ -331,7 +331,7 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 - 新增 boundary-deadlock workload 与 scheduler metrics。
 - CPU quick 验证生命周期轨迹，再在 RTX 5070 跑 FP16/BF16 正式矩阵。
 
-当前状态：trace-driven runner、三策略 event loop、确定性 deadlock cutoff、等待/服务公平性/commitment/physical block/有效 token 指标、CPU/PyTorch 对抗测试和 `run_scheduler_workload.py` 已实现。scheduled fused CUDA + Triton 数值对齐测试也已加入；所有 PyTorch/RTX 结果仍待 WSL 验证。
+当前状态：trace-driven runner、三策略 event loop、确定性 deadlock cutoff、等待/服务公平性/commitment/physical block/有效 token 指标、CPU/PyTorch 对抗测试和 scheduled fused CUDA + Triton 对齐均已完成。commit `16de9d4` 的 RTX 5070 正式 36-row policy matrix 已通过严格摘要校验。
 
 ### R1-D：结论冻结
 
@@ -343,4 +343,4 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 
 ## 14. 当前状态
 
-本文已冻结 R1 的目标语义与实验边界，完成 R1-A 纯策略层、R1-B Engine/Cache 集成并通过 WSL `293 passed`，也完成 R1-C 三策略 workload 代码。R1-C 的 CPU/PyTorch/full regression 与 RTX 5070 对照数据尚未完成，不能把实现状态写成性能结论。clean-machine install 统一推迟到全部功能完成后的最终发布验证，版本继续保持 `0.0.0`。
+本文已冻结 R1 的目标语义与实验边界。R1-A 纯策略层、R1-B Engine/Cache 集成、R1-C 三策略 workload 与 R1-D 结论冻结均已完成。正式结果表明 lifetime policy 在 boundary-deadlock 中完成 2/2 请求且无取消/死锁；cancel baseline 完成 1/2，greedy baseline 完成 0/2 并触发确定 deadlock。finite queue 中三种策略均完成 6/6，因此 R1 的稳定结论是容量安全与进展保证，而不是无条件 latency/TPS 优势。

@@ -1,18 +1,18 @@
 # Week 6 状态记录
 
-## 本周主题
+## 阶段主题
 
 paged decode kernel v1。
 
-## 本周学习目标
+## 阶段目标
 
 - 理解 paged decode attention 中 logical token 到 physical block 的间接索引。
 - 把 Week 4 dense decode kernel 的 online softmax 改造成 paged KV cache 版本。
 - 掌握最后一个 block 的 mask 处理，避免 padding token 参与 attention。
 - 建立第一版 paged decode correctness 和 benchmark 路径。
-- 能解释 paged v1 的潜在瓶颈：block table 间接索引、K/V 访存、launch overhead、occupancy。
+- 性能记录覆盖 paged v1 的潜在瓶颈：block table 间接索引、K/V 访存、launch overhead、occupancy。
 
-## 本周学习计划
+## 实施记录
 
 ### Day 1：复盘 Week 5 语义
 

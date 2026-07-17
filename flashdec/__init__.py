@@ -1,4 +1,4 @@
-"""FlashDec: LLM decode attention and paged KV cache experiments."""
+"""FlashDec: a single-GPU LLM decode runtime research prototype."""
 
 __all__ = [
     "PagedKVCache",

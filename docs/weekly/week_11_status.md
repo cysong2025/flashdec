@@ -123,7 +123,7 @@ focused: 34 passed in 3.59s
 full:    198 passed in 5.13s
 ```
 
-结论：独立 CUDA KV append 已在 RTX 5070 上完成 JIT 构建和 correctness。它与 Python allocator/reference 在测试覆盖的 FP16/BF16/FP32、跨 block 分配、physical slot 写入、capacity failure 和公开 API 语义上一致；这一结论不代表性能更快，性能比较仍待 benchmark。
+结论：独立 CUDA KV append 已在 RTX 5070 上完成 JIT 构建和 correctness。它与 Python allocator/reference 在测试覆盖的 FP16/BF16/FP32、跨 block 分配、physical slot 写入、capacity failure 和公开 API 语义上一致。后续正式 benchmark 已完成：独立 CUDA append 没有稳定优于 torch，fused 路径因此成为 GPU Engine 默认策略。
 
 RoPE 的 `torch`/`cuda` 双 backend 集成验证结果：
 
