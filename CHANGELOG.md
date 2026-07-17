@@ -46,6 +46,7 @@
 - R2-D commit `fa0f89a` 的正式 144 行 multi-layer 矩阵全部通过严格校验；fused complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`，per-layer append device 为 `1.6103x`，decode device 为 `1.0024x`，CUDA event ratio 为 `1.9784x`。
 - 24 个 dtype/case 组合中 20 个三轮 p50 稳定胜出，4 个跨过 1.0，没有稳定 torch-faster case。BF16 `l4_b4_c128` 的独立 profiler append ratio 为 `0.4980x`，但正式 complete-token p50 三轮均胜出，因此记录为 instrumented attribution anomaly，不解释为正式 wall-clock 回退。
 - R2-D 每轮仅 20 repeats，nearest-rank p99 实际接近该轮最大值；p99 范围只用于报告长尾波动，不声明生产级尾延迟收益。
+- R3-C commit `fd36ed0` 的 RTX 5070 FP16 quick 4 行矩阵通过严格校验。75% hit 将 context physical blocks 从 `4/4` 降至 `2/4`、peak blocks 从 `8` 降至 `6`，bounded-pool admission 从 `2/4` 提高到 `3/4`；单轮 latency 非单调，不形成性能结论。
 
 ### Correctness evidence
 

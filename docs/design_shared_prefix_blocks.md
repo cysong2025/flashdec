@@ -173,7 +173,18 @@ runner 将实验分为两个互不混淆的探针：
 - fixed bounded capacity：所有 hit-rate 使用相同小容量，只记录第一次调度可接纳的请求数和 lifetime commitment；
 - fixed full batch：使用足以容纳无共享基线的相同容量，保证四档 hit-rate 的 decode batch 完全一致，再比较物理块、字节和完整 step 延迟。
 
-shared 与 private request 使用相同 K/V context。正式计时前逐行 materialize 并对齐；计时后再次检查 resident prefix 内容未被 private tail 改写。CSV validator 严格验证 matrix、trial 轮转、seed、容量单调性、block/byte 公式、prefix lifecycle 与最终 cleanup。代码已实现，RTX quick/formal evidence 待执行。
+shared 与 private request 使用相同 K/V context。正式计时前逐行 materialize 并对齐；计时后再次检查 resident prefix 内容未被 private tail 改写。CSV validator 严格验证 matrix、trial 轮转、seed、容量单调性、block/byte 公式、prefix lifecycle 与最终 cleanup。
+
+commit `fd36ed0` 的 RTX 5070 FP16 quick 共 4 行，全部通过严格校验：
+
+| hit rate | admitted | context physical/logical | context saved | peak blocks | saved MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0% | 2/4 | 4/4 | 0% | 8 | 0.000 |
+| 25% | 2/4 | 4/4 | 0% | 8 | 0.000 |
+| 50% | 3/4 | 3/4 | 25% | 7 | 0.125 |
+| 75% | 3/4 | 2/4 | 50% | 6 | 0.250 |
+
+25% 只有一个 hit request，没有第二个 owner 可以复用，因此相对私有存储没有净节省。50%/75% 从第二个 owner 开始分别节省 1/2 个 context blocks，并在相同 bounded pool 下多接纳一个请求。quick 每档只有 3 次正式 step 采样，p50/TPS 非单调，只验证链路，不形成 latency 结论。FP16/BF16 三轮正式证据待执行。
 
 ## 8. 验收测试
 

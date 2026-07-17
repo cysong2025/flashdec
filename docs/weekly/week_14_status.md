@@ -31,7 +31,10 @@ Shared Prefix Blocks：从 Cache ownership core 扩展到 DecodeEngine 与 block
 - bounded-capacity admission 与 fixed-full-batch decode 使用独立 probe，避免把 batch 下降误写成 latency 收益。
 - 计时前验证 shared/private context materialization 一致，计时后验证 shared K/V immutable。
 - strict summary validator 检查 matrix、seed、capacity monotonicity、block/byte accounting、prefix lifecycle 与 cleanup。
-- Mac dependency-free 新增测试 `8 tests` 通过；RTX quick/formal evidence 待执行。
+- Mac dependency-free 新增测试 `8 tests` 通过。
+- commit `fd36ed0` 的 RTX 5070 FP16 quick 共 4 行，matrix、capacity commitment、block/byte accounting、materialized context、immutable prefix、eviction 与 cleanup 全部通过严格校验。
+- quick 从 0% 到 75% hit 将 context physical blocks 从 `4/4` 降至 `2/4`、peak blocks 从 `8` 降至 `6`；bounded pool admission 从 `2/4` 提高到 `3/4`。
+- quick latency 在四档间非单调，每档只有 3 次正式 step 采样，因此不形成性能结论。
 
 ## 当前环境限制
 
@@ -39,9 +42,9 @@ macOS Codex 工作区没有项目 torch/pytest/CUDA 环境，只能执行 depend
 
 ## 需要在 RTX 5070 完成
 
-1. R3-C quick benchmark，先验证 CUDA runner、CSV 与单轮 summary。
-2. R3-C FP16/BF16 三轮正式矩阵与严格 summary。
-3. 结果回传 Mac 后归档显存、admission、attach 与 decode 结论。
+1. R3-C FP16/BF16 三轮正式矩阵与严格 summary。
+2. 结果回传 Mac 后归档显存、admission、attach 与 decode 结论。
+3. 完成 R3 文档收口与完整 pytest 回归。
 
 ## 下一步
 

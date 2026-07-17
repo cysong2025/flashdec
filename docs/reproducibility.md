@@ -328,7 +328,7 @@ python scripts/check_release.py --require-clean
 | R1 Scheduler v2 | 已完成 | commit `16de9d4` 的 36-row RTX policy matrix + validated summary |
 | R2 Multi-layer transaction | 已完成 | commit `fa0f89a` 的 144-row RTX matrix + validated summary；证据提交 `67bee15` 的 `337 passed, 25 subtests passed in 5.82s` 无跳过完整回归 |
 | R3 Shared Prefix correctness | 已完成 | commit `08d0414` 的 focused `56 passed, 14 subtests passed in 5.29s` 与 full `352 passed, 25 subtests passed in 9.37s` |
-| R3 Shared Prefix benchmark | 待执行 | 0%/25%/50%/75% hit-rate RTX CSV + strict summary |
+| R3 Shared Prefix benchmark | quick 已完成 | commit `fd36ed0` 的 FP16 4-row RTX quick + strict summary；FP16/BF16 三轮正式矩阵待执行 |
 | Clean WSL editable install | 待执行 | 新 venv 命令、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |
