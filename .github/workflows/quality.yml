@@ -27,8 +27,14 @@ jobs:
       - name: Run dependency-free tests
         run: >-
           python -m pytest -q
+          tests/test_benchmark_helpers.py
           tests/test_docs_check.py
+          tests/test_profile_decode_engine.py
+          tests/test_profile_paged_decode.py
+          tests/test_r0_validation.py
           tests/test_release_check.py
+          tests/test_scheduled_workload_config.py
           tests/test_scheduler.py
+          tests/test_scheduler_workload_summary.py
           tests/test_multi_layer_workload_benchmark.py
           tests/test_multi_layer_workload_summary.py

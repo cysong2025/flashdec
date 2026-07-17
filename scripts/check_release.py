@@ -21,6 +21,7 @@ REQUIRED_PATHS = (
     "flashdec/scheduler.py",
     "flashdec/workload.py",
     "docs/AI_INFRA_SCOPE.md",
+    "docs/API.md",
     "docs/INDEX.md",
     "docs/PROJECT_PLAN.md",
     "docs/ROADMAP.md",

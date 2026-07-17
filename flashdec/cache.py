@@ -54,7 +54,7 @@ def _torch():
 
 
 class PagedKVCache:
-    """A small fixed-block KV cache for single-token decode experiments.
+    """Fixed-block KV cache runtime for single-token decode.
 
     The physical cache layout is:
 
@@ -155,8 +155,8 @@ class PagedKVCache:
         """Append one token of K/V for each request.
 
         Args:
-            layer_idx: Layer to write. Week 5 validates the single-layer path,
-                but the storage keeps a layer dimension for later extension.
+            layer_idx: Layer to write. Legacy append is restricted to a
+                single-layer cache; multi-layer caches use token transactions.
             request_ids: Request ids in the same order as the first dimension of
                 k and v.
             k/v: [num_requests, num_kv_heads, head_dim]. For one request,
@@ -764,10 +764,12 @@ class PagedKVCache:
 
     @property
     def num_free_blocks(self):
+        """Return currently unowned physical blocks."""
         return len(self._free_blocks)
 
     @property
     def num_used_blocks(self):
+        """Return physical blocks currently owned by active requests."""
         return self.max_blocks - len(self._free_blocks)
 
     @property
@@ -777,6 +779,7 @@ class PagedKVCache:
 
     @property
     def has_open_transaction(self):
+        """Return whether a multi-layer token transaction is open."""
         return self._open_transaction_id is not None
 
     def _transaction_view(self, transaction):

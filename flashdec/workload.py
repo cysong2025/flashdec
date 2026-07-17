@@ -1,4 +1,4 @@
-"""Synthetic dynamic workloads for the single-layer DecodeEngine runtime."""
+"""Synthetic dynamic workloads for the DecodeEngine single-layer API."""
 
 from __future__ import annotations
 
@@ -73,31 +73,38 @@ class WorkloadResult:
 
     @property
     def mean_ms(self):
+        """Return the arithmetic mean complete-step latency."""
         return statistics.fmean(self.latencies_ms)
 
     @property
     def p50_ms(self):
+        """Return median complete-step latency."""
         return percentile(self.latencies_ms, 50)
 
     @property
     def p90_ms(self):
+        """Return p90 complete-step latency."""
         return percentile(self.latencies_ms, 90)
 
     @property
     def p99_ms(self):
+        """Return p99 complete-step latency."""
         return percentile(self.latencies_ms, 99)
 
     @property
     def tokens_per_second(self):
+        """Return completed decode tokens per measured second."""
         total_seconds = sum(self.latencies_ms) / 1_000.0
         return self.completed_tokens / total_seconds if total_seconds else 0.0
 
     @property
     def mean_active_batch(self):
+        """Return the mean active batch size over measured steps."""
         return statistics.fmean(self.active_batch_samples) if self.active_batch_samples else 0.0
 
     @property
     def max_active_batch(self):
+        """Return the maximum active batch size over measured steps."""
         return max(self.active_batch_samples, default=0)
 
 

@@ -145,6 +145,7 @@ scripts/                  环境检查、验证编排和 release gate
 ## 文档
 
 - [文档索引](docs/INDEX.md)
+- [公开 API](docs/API.md)
 - [系统范围与分层](docs/AI_INFRA_SCOPE.md)
 - [Paged KV Cache 设计](docs/design_paged_kv.md)
 - [DecodeEngine 设计](docs/design_decode_engine.md)

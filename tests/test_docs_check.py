@@ -4,10 +4,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from scripts.check_docs import local_link_problems, markdown_files
+from scripts.check_docs import (
+    documentation_problems,
+    local_link_problems,
+    markdown_files,
+    portfolio_wording_problems,
+)
 
 
-class DocumentationLinkCheckTests(unittest.TestCase):
+class DocumentationCheckTests(unittest.TestCase):
     def test_discovers_public_root_documents(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -44,6 +49,17 @@ class DocumentationLinkCheckTests(unittest.TestCase):
             self.assertEqual(len(problems), 2)
             self.assertIn("missing link target", problems[0])
             self.assertIn("link escapes repository", problems[1])
+
+    def test_rejects_utility_oriented_portfolio_wording(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.joinpath("README.md").write_text("面试准备 interview notes\n")
+
+            problems = portfolio_wording_problems(root)
+
+            self.assertEqual(len(problems), 2)
+            self.assertTrue(all("disallowed portfolio wording" in item for item in problems))
+            self.assertEqual(documentation_problems(root), problems)
 
 
 if __name__ == "__main__":

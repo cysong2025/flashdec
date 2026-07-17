@@ -75,11 +75,13 @@ block_offset  = position % block_size
 physical_id   = block_table[request, logical_block]
 ```
 
-默认 token-major layout 为：
+默认 token-major physical storage layout 为：
 
 ```text
-[num_layers, num_blocks, block_size, num_kv_heads, head_dim]
+[num_layers, num_blocks, num_kv_heads, block_size, head_dim]
 ```
+
+去掉 layer 维度后，paged attention kernel 接收 `[num_blocks, num_kv_heads, block_size, head_dim]`；其中 token 轴位于 `head_dim` 之前。
 
 Cache 负责容量预检、分配、释放、复用和终态 request 检查。批量操作在修改状态前完成 preflight；容量不足时不允许部分 request 或部分 seq_len 被提交。
 

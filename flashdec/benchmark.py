@@ -11,6 +11,8 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class BenchmarkResult:
+    """Serializable latency summary plus evidence metadata for one case."""
+
     name: str
     mean_ms: float
     p50_ms: float
@@ -21,6 +23,7 @@ class BenchmarkResult:
     metadata: dict
 
     def as_row(self) -> dict:
+        """Return a stable CSV-ready mapping with formatted latency fields."""
         row = {
             "name": self.name,
             "mean_ms": f"{self.mean_ms:.6f}",

@@ -35,7 +35,7 @@ docs/environment.md
 python scripts/check_docs.py
 ```
 
-该脚本扫描 README、CHANGELOG、CONTRIBUTING、`docs/`、`benchmarks/` 和 `scripts/` 中的本地 Markdown 链接，拒绝缺失目标或逃逸出仓库的相对路径；外部 URL 不发起网络请求。
+该脚本扫描 README、CHANGELOG、CONTRIBUTING、`docs/`、`benchmarks/` 和 `scripts/` 中的本地 Markdown 链接，拒绝缺失目标、逃逸出仓库的相对路径，以及与项目实现无关的个人评估措辞；外部 URL 不发起网络请求。
 
 发布候选结构检查：
 

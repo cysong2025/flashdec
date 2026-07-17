@@ -2,6 +2,7 @@
 
 ## 系统概览
 
+- [公开 API](API.md)
 - [项目范围与系统分层](AI_INFRA_SCOPE.md)
 - [项目演进与里程碑](PROJECT_PLAN.md)
 - [路线图](ROADMAP.md)

@@ -74,7 +74,7 @@
 当前限制：
 
 - 独立 CUDA KV append extension 和 `PagedKVCache.append_cuda()` 已在 RTX 5070 通过 JIT build 与 correctness；focused 为 `34 passed in 3.59s`，完整回归为 `198 passed in 5.13s`。
-- 只支持当前 PagedKVCache v2 的单 layer runtime。
+- 统一 RoPE helper 只走 legacy single-layer append；multi-layer Cache 由 DecodeEngine transaction 调用 location-only fused write，不通过该 helper 推进 seq_len。
 - 不包含 RoPE scaling、YaRN、NTK-aware scaling 或 interleaved-pair convention。
 - RTX 5070 focused 为 `38 passed in 3.60s`，完整回归为 `186 passed in 4.96s`。
 - native extension 当前要求 CUDA-resident、contiguous FP16/BF16/FP32 token-major cache 与 K/V；Toolkit 前置检查已通过 `nvcc 12.8.93`、`CUDA_HOME=/usr/local/cuda-12.8` 和 Ninja 1.13.0。

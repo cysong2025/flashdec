@@ -118,48 +118,59 @@ class SchedulerWorkloadResult:
 
     @property
     def mean_ms(self):
+        """Return the arithmetic mean complete-step latency."""
         return statistics.fmean(self.step_latencies_ms)
 
     @property
     def p50_ms(self):
+        """Return median complete-step latency."""
         return percentile(self.step_latencies_ms, 50)
 
     @property
     def p90_ms(self):
+        """Return p90 complete-step latency."""
         return percentile(self.step_latencies_ms, 90)
 
     @property
     def p99_ms(self):
+        """Return p99 complete-step latency."""
         return percentile(self.step_latencies_ms, 99)
 
     @property
     def tokens_per_second(self):
+        """Return all executed tokens per measured second."""
         seconds = sum(self.step_latencies_ms) / 1_000.0
         return self.completed_tokens / seconds if seconds else 0.0
 
     @property
     def useful_tokens_per_second(self):
+        """Return tokens belonging to requests that ultimately complete."""
         seconds = sum(self.step_latencies_ms) / 1_000.0
         return self.useful_tokens / seconds if seconds else 0.0
 
     @property
     def completion_rate(self):
+        """Return the fraction of trace requests that completed."""
         return len(self.completed_request_ids) / len(self.config.arrivals)
 
     @property
     def mean_waiting_depth(self):
+        """Return the mean waiting-queue depth."""
         return statistics.fmean(self.waiting_depth_samples)
 
     @property
     def max_waiting_depth(self):
+        """Return the maximum waiting-queue depth."""
         return max(self.waiting_depth_samples, default=0)
 
     @property
     def admission_wait_p50(self):
+        """Return median request admission wait in logical steps."""
         return percentile(self.admission_wait_steps, 50) if self.admission_wait_steps else 0
 
     @property
     def admission_wait_p90(self):
+        """Return p90 request admission wait in logical steps."""
         return percentile(self.admission_wait_steps, 90) if self.admission_wait_steps else 0
 
 

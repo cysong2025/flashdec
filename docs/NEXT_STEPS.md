@@ -26,11 +26,11 @@ Block-aware Scheduler
 
 当前版本仍为 `0.0.0`。这表示 release gate 尚未全部关闭，不表示 R1/R2 功能未完成。
 
-## 当前目标：公开仓库整理
+## 当前目标：公开发布设置
 
-状态：进行中。
+状态：本地内容已完成并推送；仓库可见性与许可证待确认。
 
-目标是让仓库本身可以独立说明问题、架构、实现边界和证据，而不依赖开发过程中的上下文。
+仓库内容已经可以独立说明问题、架构、实现边界和证据，不依赖开发过程中的上下文。
 
 完成条件：
 
@@ -39,6 +39,12 @@ Block-aware Scheduler
 - 当前状态与历史记录分离，已完成项目不再被写成未来计划。
 - 本地 Markdown 链接、Python 语法和 release artifacts 有自动检查。
 - GitHub CI 能在无 GPU 环境执行 dependency-free 质量门禁。
+
+尚需仓库所有者确认：
+
+- 是否将 GitHub repository 从 private 改为 public。
+- 采用 MIT、Apache-2.0，或继续保留无开源授权状态。
+- 在已登录 GitHub 页面确认首次 `quality` workflow 结果。
 
 ## 最终目标：v0.1.0 Release Gate
 

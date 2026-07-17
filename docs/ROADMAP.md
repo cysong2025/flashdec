@@ -23,7 +23,7 @@ FlashDec 后续不再通过增加零散算子或重复参数 sweep 扩充内容�
 - token-major、`block_size=32`、`num_warps=2`、`num_stages=None` 的冻结配置。
 - PagedKVCache allocate/free/reuse、finish/cancel、capacity atomicity、fragmentation 与 invariant。
 - PyTorch、独立 CUDA、fused CUDA 三条 RoPE/KV append 路径。
-- DecodeEngine 单 layer dynamic batch、append -> paged decode 与显式 backpressure。
+- DecodeEngine 单层 compatibility step 与 multi-layer sequential transaction、动态 batch、append -> paged decode 和显式 backpressure。
 - 三类 synthetic workload 和首轮 complete-step benchmark。
 - 正式 36 行 multi-trial 与 12-case profiler 已在 commit `3708b87` 完成；fused p50/p90/TPS 几何平均为 1.0668x/1.0317x/1.0811x，short-churn p50 与 p99 仍不稳定。
 - R1 Block-aware Scheduler v2 正式 36 行策略矩阵与容量安全/进展保证结论。

@@ -96,7 +96,7 @@ capacity failure 由 PagedKVCache v2 在写入前统一检查，因此失败时�
 - `append_backend="cuda"` 只替换 rotated K/raw V 的写入，未消除 PyTorch RoPE kernel 或 K 的中间 tensor。`fused_cuda` 已作为单 CUDA kernel 通过 RTX 5070 correctness 与正式性能验证，并作为 GPU Engine 默认路径；详细映射见 [Fused RoPE + Paged KV Append 设计说明](design_fused_rope_kv_append.md)。
 - interleaved adjacent-pair RoPE。
 - RoPE scaling、YaRN 或 NTK-aware scaling。
-- 多 layer execution。
+- 通过统一 RoPE helper 直接执行多层 append；multi-layer execution 使用独立的 Engine token transaction API。
 
 ## 验证
 

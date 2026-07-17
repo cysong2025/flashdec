@@ -8,7 +8,17 @@ version = "0.0.0"
 description = "A single-GPU LLM decode runtime with paged KV cache, Triton attention, CUDA append, scheduling, and multi-layer transactions."
 readme = "README.md"
 requires-python = ">=3.10"
+authors = [{ name = "songchuangye" }]
 keywords = ["llm", "inference", "triton", "cuda", "paged-attention", "kv-cache"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
   "torch",
   "triton",

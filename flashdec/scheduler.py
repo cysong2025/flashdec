@@ -76,6 +76,7 @@ class WaitingRequestMetadata:
 
     @property
     def request_id(self):
+        """Return the request id carried by the immutable specification."""
         return self.spec.request_id
 
 
@@ -112,6 +113,7 @@ class ActiveRequestMetadata:
 
     @property
     def request_id(self):
+        """Return the request id carried by the immutable specification."""
         return self.spec.request_id
 
 

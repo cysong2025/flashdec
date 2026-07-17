@@ -220,8 +220,8 @@ def rope_paged_kv_append(
     PyTorch RoPE calculation but writes rotated K/raw V through
     :meth:`PagedKVCache.append_cuda`. ``append_backend='fused_cuda'`` rotates
     Q/K and writes K/V through one native CUDA kernel. The fused backend is
-    CUDA-only and exists to compare end-to-end append cost against the two
-    readable baseline paths.
+    CUDA-only and is the explicit GPU Engine policy; the public helper keeps
+    the readable PyTorch path as its default.
     """
     return _rope_paged_kv_append(
         cache,

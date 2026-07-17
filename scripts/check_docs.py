@@ -12,6 +12,13 @@ MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 SKIP_PREFIXES = ("http://", "https://", "mailto:", "data:", "#")
 DEFAULT_ROOT_FILES = ("README.md", "CHANGELOG.md", "CONTRIBUTING.md")
 DEFAULT_DIRECTORIES = ("docs", "benchmarks", "scripts")
+DISALLOWED_PORTFOLIO_TERMS = (
+    "面试",
+    "求职",
+    "简历",
+    "interview",
+    "resume",
+)
 
 
 def markdown_files(root: Path):
@@ -55,6 +62,30 @@ def local_link_problems(root: Path):
     return problems
 
 
+def portfolio_wording_problems(root: Path):
+    """Return utility-oriented wording that does not belong in project docs."""
+    root = root.resolve()
+    problems = []
+    for document in markdown_files(root):
+        for line_number, line in enumerate(
+            document.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            lowered = line.casefold()
+            for term in DISALLOWED_PORTFOLIO_TERMS:
+                if term.casefold() in lowered:
+                    problems.append(
+                        f"{document.relative_to(root)}:{line_number}: "
+                        f"disallowed portfolio wording: {term}"
+                    )
+    return problems
+
+
+def documentation_problems(root: Path):
+    """Return all repository documentation quality problems."""
+    return local_link_problems(root) + portfolio_wording_problems(root)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -67,13 +98,13 @@ def parse_args():
 def main():
     args = parse_args()
     root = Path(args.root)
-    problems = local_link_problems(root)
+    problems = documentation_problems(root)
     if problems:
-        print("Markdown link check: FAIL")
+        print("Documentation check: FAIL")
         for problem in problems:
             print(f"- {problem}")
         return 1
-    print(f"Markdown link check: PASS ({len(markdown_files(root))} files)")
+    print(f"Documentation check: PASS ({len(markdown_files(root))} files)")
     return 0
 
 
