@@ -25,7 +25,7 @@ FlashDec 研究 LLM decode 阶段的三个相互关联的问题：
 | DecodeEngine | dynamic active batch、稳定 row mapping、backpressure | complete-step workload 与 profiler attribution |
 | Scheduler R1 | lifetime commitment、FIFO + aging、stale decision 语义 | 36-row policy matrix 与 boundary-deadlock case |
 | Multi-layer R2 | shared location、sequential layers、commit/rollback | 144-row正式矩阵与最终 RTX 完整回归 |
-| Shared Prefix R3 | immutable full-block reuse、refcount/LRU、shared-aware admission | R3-A WSL 回归已通过；R3-B 回归与 R3-C benchmark 待完成 |
+| Shared Prefix R3 | immutable full-block reuse、refcount/LRU、shared-aware admission | R3-A/R3-B WSL 回归已通过；R3-C benchmark 已实现，RTX 实测待完成 |
 | Release | clean install、版本、tag、公开 release | 最终 release gate，留到项目收尾执行 |
 
 ## 3. 关键设计决策
@@ -63,7 +63,7 @@ Scheduler 不持有 K/V tensor 或 physical blocks；kernel 不推进 request se
 ## 5. 当前完成状态
 
 - Kernel、Paged KV Runtime、DecodeEngine、Scheduler R1 和 Multi-layer R2 已完成。
-- R3-A shared-prefix Cache ownership 已通过 WSL focused/full 回归；R3-B Engine/scheduler integration 已实现，尚待 WSL 回归；R3-C benchmark 尚未开始。
+- R3-A shared-prefix Cache ownership 与 R3-B Engine/scheduler integration 已通过 WSL focused/full 回归。R3-B focused 为 `56 passed, 14 subtests passed in 5.29s`，完整回归为 `352 passed, 25 subtests passed in 9.37s`。R3-C benchmark/summary 已实现，RTX 实测待完成。
 - R2 正式结果绑定 commit `fa0f89a`；证据提交 `67bee15` 在 RTX 5070 完成 `337 passed, 25 subtests passed` 的无跳过回归。
 - 当前仓库是 `0.0.0` release candidate。
 - clean-install、版本更新与 tag 按要求留在最后 release 阶段。

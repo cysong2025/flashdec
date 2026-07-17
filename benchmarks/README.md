@@ -40,6 +40,8 @@ benchmark 记录至少包含：
 - `summarize_scheduler_workload.py`：严格验证 36 行 scheduler case/dtype/policy/trial 矩阵、commit/device、seed、轮转执行顺序和策略特有的 progress invariant，再输出跨 trial 中位数摘要。
 - `run_multi_layer_engine.py`：R2-D multi-layer transaction workload；覆盖 1/2/4 layers、batch 4/16、context 128/1024、FP16/BF16 和 torch/fused CUDA，分离 complete-token wall/CUDA-event latency、begin/commit host time、独立 profiler attribution、KV bytes 与 rollback probe。
 - `summarize_multi_layer_trials.py`：严格验证 multi-layer matrix、case/shape identity、transaction/block accounting、profiler range、rollback evidence、seed 和交替 backend 顺序，再输出跨 trial 稳定性摘要。
+- `run_shared_prefix_workload.py`：R3-C 0%/25%/50%/75% shared-prefix workload；分离 bounded-capacity admission 与 fixed-full-batch decode，输出 physical/saved blocks/bytes、attach/registration/eviction latency、complete-step latency 和 TPS。
+- `summarize_shared_prefix_trials.py`：严格验证 hit-rate/dtype/trial matrix、case-order 轮转、seed、capacity monotonicity、block/byte accounting、prefix lifecycle、context correctness 与最终 cleanup，再输出跨 trial 中位数摘要。
 
 当前通用 benchmark/profile 默认配置为 `block_size=32, num_warps=2`。FP16 的少数小 shape 可显式使用 `block_size=16` 对照。
 
@@ -192,3 +194,36 @@ python benchmarks/summarize_multi_layer_trials.py \
 正式矩阵共 `12 cases x 2 dtypes x 2 backends x 3 trials = 144 rows`。输入生成、context seed、JIT build、profiler probe 和 rollback probe 均排除在正式 complete-token latency 外；profiler 字段只做 append/decode/launch 归因，rollback latency 不混入正常吞吐。Summary 同时报告 ratio 与 torch/fused 绝对 attribution median，任何低于 1 的 ratio 都必须结合绝对时间解释。
 
 commit `fa0f89a` 的 RTX 5070 正式结果已通过 144 行严格校验。fused complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`；24 个 dtype/case 组合中 20 个三轮 p50 稳定胜出、4 个跨过 1.0。每轮仅 20 repeats，nearest-rank p99 接近单轮最大值，因此必须连同范围报告。
+
+R3-C shared-prefix quick 验证：
+
+```bash
+python benchmarks/run_shared_prefix_workload.py \
+  --quick \
+  --hit-rate all \
+  --dtype float16 \
+  --trials 1 \
+  --output benchmarks/results/r3_shared_prefix_workload_quick.csv
+
+python benchmarks/summarize_shared_prefix_trials.py \
+  --input benchmarks/results/r3_shared_prefix_workload_quick.csv \
+  --output benchmarks/results/r3_shared_prefix_workload_quick_summary.md \
+  --expected-trials 1 \
+  --expected-dtypes float16
+```
+
+正式矩阵：
+
+```bash
+python benchmarks/run_shared_prefix_workload.py \
+  --hit-rate all \
+  --dtype both \
+  --trials 3 \
+  --output benchmarks/results/r3_shared_prefix_workload_trials3.csv
+
+python benchmarks/summarize_shared_prefix_trials.py \
+  --input benchmarks/results/r3_shared_prefix_workload_trials3.csv \
+  --output benchmarks/results/r3_shared_prefix_workload_trials3_summary.md
+```
+
+正式矩阵共 `4 hit rates x 2 dtypes x 3 trials = 24 rows`。`capacity_admitted_requests` 来自固定 60% bounded pool 的第一次调度；decode latency 使用独立的无共享基线容量，使四档 hit rate 始终运行相同 batch。context 构建、materialization correctness、extension/Triton warmup、registration 和 attach probe 均排除在 complete-step latency 外。共享 prefix 不改变 attention 算法，因此 latency 小幅变化不能单独解释为 kernel 加速。

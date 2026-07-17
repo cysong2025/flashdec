@@ -371,3 +371,5 @@ used_blocks <= committed_blocks <= schedulable_blocks
 waiting request 的 admission 只消耗 private lifetime commitment；prefix residency 已经包含在全局基数中。admission 后 Engine 将同一 prefix ids 挂到 request block table 开头，下一 token 位于 full-block boundary 并分配私有 tail。
 
 当前限制：scheduler-managed mode 不在 decision 内注册或淘汰 prefix。resident set 必须在 request submission 前建立，后续外部 Cache mutation 会触发 version mismatch。这样先闭合可验证的 capacity semantics，再在 R3-C workload 中衡量固定 hit-rate 下的显存节省。
+
+R3-B 已在 2026-07-17 RTX 5070 WSL 完成 focused `56 passed, 14 subtests passed in 5.29s` 与完整 `352 passed, 25 subtests passed in 9.37s` 回归。R3-C 使用 fixed bounded capacity 验证 admission 单调性，并在独立 fixed-full-batch 容量下测量 decode latency，避免把 admitted batch 差异混入性能解释。

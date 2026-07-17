@@ -6,7 +6,7 @@ FlashDec 是一个面向单 GPU LLM decode 的研究型运行时原型，覆盖 
 
 项目关注的核心问题是：在请求长度与 batch 持续变化的情况下，如何维护可验证的 KV 所有权和失败原子性，并证明底层 kernel 优化能够转化为完整 decode step 的系统收益。
 
-> 当前状态：R1 Block-aware Scheduler 与 R2 Multi-layer KV Token Transaction 已完成设计、correctness、RTX 5070 正式实验和文档闭环。R3-A Cache ownership core 已通过 WSL focused/full 回归；R3-B DecodeEngine/scheduler integration 已实现并等待 WSL 回归。仓库仍处于 `0.0.0`，clean-install 与正式版本发布留在最终 release gate。
+> 当前状态：R1 Block-aware Scheduler 与 R2 Multi-layer KV Token Transaction 已完成设计、correctness、RTX 5070 正式实验和文档闭环。R3-A Cache ownership core 与 R3-B DecodeEngine/scheduler integration 已通过 WSL focused/full 回归；R3-C hit-rate benchmark 已实现并等待 RTX 实测。仓库仍处于 `0.0.0`，clean-install 与正式版本发布留在最终 release gate。
 
 ## 架构
 
@@ -58,7 +58,8 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 | Dynamic DecodeEngine | p50/p90/TPS `1.0668x/1.0317x/1.0811x` | kernel 收益部分传递到完整 step |
 | Scheduler R1 | boundary case 完成率：lifetime 100%，cancel 50%，greedy 0% | 默认策略保证容量安全与进展，不宣称无条件更快 |
 | Multi-layer R2 | complete-token p50/p90/TPS `1.2101x/1.3826x/1.2800x` | 24 个 dtype/case 中 20 个三轮稳定胜出 |
-| 最终 RTX 回归 | `337 passed, 25 subtests passed` | 无 skipped 或 failure |
+| R2 最终 RTX 回归 | `337 passed, 25 subtests passed` | 无 skipped 或 failure |
+| R3-B RTX 回归 | focused `56 passed, 14 subtests passed`；full `352 passed, 25 subtests passed` | shared-prefix Engine/scheduler 集成验收通过 |
 
 R2 的 decode device ratio 为 `1.0024x`，而 append device 与 CUDA event ratio 分别为 `1.6103x` 和 `1.9784x`，说明系统收益主要来自 append/launch 路径。每轮仅 20 repeats，p99 接近单轮最大值，因此所有尾延迟结论都保留场景范围，不作生产级稳定性声明。
 

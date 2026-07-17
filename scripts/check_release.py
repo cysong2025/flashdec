@@ -36,6 +36,8 @@ REQUIRED_PATHS = (
     "benchmarks/summarize_scheduler_workload.py",
     "benchmarks/run_multi_layer_engine.py",
     "benchmarks/summarize_multi_layer_trials.py",
+    "benchmarks/run_shared_prefix_workload.py",
+    "benchmarks/summarize_shared_prefix_trials.py",
     "scripts/check_env.py",
     "scripts/check_docs.py",
     "scripts/check_release.py",
@@ -53,6 +55,8 @@ REQUIRED_PATHS = (
     "tests/test_multi_layer_engine.py",
     "tests/test_multi_layer_workload_benchmark.py",
     "tests/test_multi_layer_workload_summary.py",
+    "tests/test_shared_prefix_workload_benchmark.py",
+    "tests/test_shared_prefix_workload_summary.py",
 )
 
 RELEASE_EVIDENCE_PATHS = (

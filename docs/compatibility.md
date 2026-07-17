@@ -94,7 +94,7 @@
 - short-churn、mixed-steady、long-pressure synthetic workload 与完整 step p50/p90/p99/TPS/memory metrics。
 - 可选 `profile_ranges=True` 的 preflight/append/decode 归因；默认关闭。
 
-当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和正式 workload 已在 RTX 5070 验证。它仍不是完整模型执行器：Q/K/V 由调用方提供，不包含 multi-layer prompt prefill、model forward、sampling、prefix 内容构建或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成；R3-B WSL 回归仍待执行。
+当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和正式 workload 已在 RTX 5070 验证。它仍不是完整模型执行器：Q/K/V 由调用方提供，不包含 multi-layer prompt prefill、model forward、sampling、prefix 内容构建或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成；R3-B focused `56 passed, 14 subtests passed` 与完整 `352 passed, 25 subtests passed` 回归已完成。
 
 ### Week 11 Native CUDA KV Append
 
@@ -250,5 +250,5 @@ python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_de
 
 - kernel 配置已冻结为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
 - PagedKVCache runtime v2、RoPE/KV append、DecodeEngine、R1 Scheduler 与 R2 multi-layer transaction 均已完成 RTX 验证。
-- R3 Shared Prefix Blocks 已被选为当前优化方向；R3-A Cache core 的 WSL focused/full 回归已通过，R3-B scheduler integration 已实现并等待 WSL 回归，R3-C benchmark 仍待完成。
+- R3 Shared Prefix Blocks 已被选为当前优化方向；R3-A Cache core 与 R3-B scheduler integration 的 WSL focused/full 回归已通过，R3-C runner/summary 已实现并等待 RTX 实测。
 - clean-install、版本升级和 release tag 保留在 R3 闭合后的最终发布门禁；公开基线继续作为非阻塞选择性扩展。

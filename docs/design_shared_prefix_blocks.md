@@ -162,11 +162,18 @@ used physical blocks
 
 prefix 必须在 request submission 前通过 `DecodeEngine.register_prefix()` 注册，或在构造 Engine 前已经存在于 Cache。scheduler-managed mode 启动后，外部 register/evict/attach 会使 Cache version 与 Engine snapshot 不一致并被拒绝。第一版不会为了 admission 主动淘汰 inactive prefix；scheduler 将当前 resident set 视为固定物理占用。
 
-当前实现状态：dependency-free scheduler tests 已通过；DecodeEngine/PyTorch 与完整 WSL 回归待执行。
+验证状态：2026-07-17 RTX 5070 WSL focused 为 `56 passed, 14 subtests passed in 5.29s`，完整回归为 `352 passed, 25 subtests passed in 9.37s`。R3-B admission、commitment 与 stale-mutation 语义由此冻结。
 
 ### R3-C：Benchmark 与 RTX evidence
 
 固定 request 数和 context，构造 0%/25%/50%/75% hit rate，报告 physical blocks/bytes、saved blocks/bytes、admission、lookup/attach latency、decode latency 和 eviction count。验收重点是显存节省与所有权正确性，不宣称共享 prefix 会加速 attention kernel。
+
+runner 将实验分为两个互不混淆的探针：
+
+- fixed bounded capacity：所有 hit-rate 使用相同小容量，只记录第一次调度可接纳的请求数和 lifetime commitment；
+- fixed full batch：使用足以容纳无共享基线的相同容量，保证四档 hit-rate 的 decode batch 完全一致，再比较物理块、字节和完整 step 延迟。
+
+shared 与 private request 使用相同 K/V context。正式计时前逐行 materialize 并对齐；计时后再次检查 resident prefix 内容未被 private tail 改写。CSV validator 严格验证 matrix、trial 轮转、seed、容量单调性、block/byte 公式、prefix lifecycle 与最终 cleanup。代码已实现，RTX quick/formal evidence 待执行。
 
 ## 8. 验收测试
 
