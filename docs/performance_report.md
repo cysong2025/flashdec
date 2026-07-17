@@ -205,7 +205,11 @@ CUDA event 结果：
 - 每个 request 的 decode tail 始终私有，所以 75% 的 context saving 为 68.8%，完整 peak block reduction 为 55.0%，不能混为同一个百分比。
 - 非零 hit-rate 的 prefix attach p50 为 `0.388-0.736 us`，相对毫秒级 complete step 很小。
 
-限制与负结果：paired p50 显示 FP16 25% 为 `1.0672x [1.0076,1.1174]`，是唯一三轮稳定更快的非零 case；FP16/BF16 50% 与 BF16 25% 均跨过 1。75% hit 在 FP16/BF16 都三轮稳定更慢，p50 ratio 分别为 `0.9377x [0.9298,0.9870]` 与 `0.9054x [0.8602,0.9816]`，TPS ratio 分别为 `0.9569x [0.8416,0.9712]` 与 `0.9022x [0.8271,0.9795]`。shared prefix 不改变 attention 算法，当前证据不支持整体 latency 加速声明；下一步必须分离 scheduler host 与 engine-step 字段，再决定这是可优化开销还是需要冻结的 trade-off。
+这里的 saved MiB 是避免占用的 KV pool capacity，不是 fixed-full-batch probe 中直接观察到的进程显存下降。该 probe 为保持 tensor shape 相同，在每个 hit rate 下都预分配 80 blocks；实际用途是提高固定 pool admission，或在固定 request target 下将 pool right-size 到更小的 `max_blocks`。
+
+限制与负结果：paired p50 显示 FP16 25% 为 `1.0672x [1.0076,1.1174]`，是唯一三轮稳定更快的非零 case；FP16/BF16 50% 与 BF16 25% 均跨过 1。75% hit 在 FP16/BF16 都三轮稳定更慢，p50 ratio 分别为 `0.9377x [0.9298,0.9870]` 与 `0.9054x [0.8602,0.9816]`，TPS ratio 分别为 `0.9569x [0.8416,0.9712]` 与 `0.9022x [0.8271,0.9795]`。
+
+拆分 attribution 后，75% scheduler p50 ratio 在 FP16/BF16 分别为 `0.8716x` 与 `0.8958x`，均稳定回退；BF16 Engine p50 ratio 也稳定回退到 `0.9025x`，FP16 Engine ratio 则跨 1。R3-D submission-time metadata cache 针对前者；后者继续作为 GPU/Engine trade-off 独立复测。shared prefix 不改变 attention 算法，当前证据仍不支持整体 latency 加速声明。
 
 ## 后续工作边界
 

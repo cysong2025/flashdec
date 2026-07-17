@@ -230,4 +230,4 @@ python benchmarks/summarize_shared_prefix_trials.py \
 
 commit `fd36ed0` 的 RTX 5070 FP16 quick 已通过 4 行严格校验。0%/25%/50%/75% 的 context physical/logical blocks 分别为 `4/4`、`4/4`、`3/4`、`2/4`，bounded-pool admission 分别为 `2/4`、`2/4`、`3/4`、`3/4`。quick 每档只有 3 次正式 step 采样，latency/TPS 非单调，不形成正式性能结论。
 
-commit `1d5d8d0` 的 RTX 5070 FP16/BF16 三轮正式矩阵共 24 行并通过严格校验。0%/25%/50%/75% 的 context physical blocks 为 `64/52/36/20`，bounded-pool admission 为 `9/12/15/16`，75% hit 节省 `68.8%` context memory 和 `5.5 MiB` KV。summary 额外将每个 hit-rate 与同 dtype、同 trial 的 0% baseline 配对，报告 p50/p90/p99/TPS median `[min,max]`；只有全三轮同向才标记 `shared_faster` 或 `shared_slower`。
+commit `1d5d8d0` 的 RTX 5070 FP16/BF16 三轮正式矩阵共 24 行并通过严格校验。0%/25%/50%/75% 的 context physical blocks 为 `64/52/36/20`，bounded-pool admission 为 `9/12/15/16`，75% hit 避免占用 `68.8%` context KV capacity 和 `5.5 MiB`。summary 将每个 hit-rate 与同 dtype、同 trial 的 0% baseline 配对，报告 p50/p90/p99/TPS median `[min,max]`，并单独报告 scheduler/Engine p50 attribution。只有全三轮同向才标记 `shared_faster` 或 `shared_slower`。

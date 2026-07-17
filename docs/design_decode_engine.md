@@ -110,3 +110,5 @@ R2-B 新增 2/4-layer per-layer reference、异常自动 rollback、scheduler/op
 R2-D commit `fa0f89a` 的 144 行正式 multi-layer workload 已通过 matrix、pair trajectory、transaction、block、rollback、profiler、seed/order 校验。fused complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`；append device 为 `1.6103x`，decode device 为 `1.0024x`，说明系统收益主要来自 append 与 launch 减少，而不是 attention kernel 变化。证据提交 `67bee15` 的 RTX 5070 最终完整回归为 `337 passed, 25 subtests passed in 5.82s`，无 skipped 或 failure。详细结果见 `benchmarks/results/r2_multi_layer_engine_trials3_summary.md`。
 
 R3-B shared-prefix integration 已在 commit `08d0414` 的 RTX 5070 WSL 完成 focused `56 passed, 14 subtests passed in 5.29s` 与完整 `352 passed, 25 subtests passed in 9.37s` 回归。R3-C 只把 non-instrumented fixed-full-batch step 作为 decode latency，registration、attach 与 bounded-capacity admission 分别报告。
+
+R3-D 将 `submit_request()` 时从 resident registry 验证得到的 shared block 数缓存为 immutable request metadata。`scheduling_snapshot()`、commitment accounting 和 invariant 热路径使用该缓存，避免每个 step 重复构造 `prefix_state()` snapshot；active request 仍必须与 Cache authoritative `shared_block_count` 一致，Cache `state_version` 仍保护 resident set 不被外部静默修改。

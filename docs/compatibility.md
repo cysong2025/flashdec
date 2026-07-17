@@ -20,6 +20,7 @@
 - R2-A multi-layer token transaction：shared location、sequential layer write、commit/abort rollback。
 - R3-A Cache ownership core：opaque prefix id、immutable multi-layer full blocks、active refcount、request-private tail 与 inactive LRU。
 - R3-B scheduler integration：`RequestSpec.prefix_id`、Cache-derived shared block metadata、global residency + private lifetime commitment、admission attach 与 stale external mutation rejection。
+- R3-D hot-path metadata cache：shared block 数只在 submission 时从 resident registry 派生，后续 snapshot/commitment 使用 immutable Engine metadata，并继续与 Cache authoritative request state/version 对齐。
 
 当前限制：
 

@@ -144,6 +144,7 @@ class DecodeEngine:
         self._observed_cache_state_version = cache.state_version
         self._scheduler_managed = False
         self._request_specs = {}
+        self._request_shared_prefix_blocks: dict[Hashable, int] = {}
         self._stale_decision_count = 0
         self._applied_decision_count = 0
         self._pending_runnable_ids = None
@@ -191,7 +192,7 @@ class DecodeEngine:
         ):
             raise RuntimeError("cannot enable scheduler mode after external cache mutation")
         self._require_cache_synchronized()
-        self._shared_prefix_blocks_for_spec(spec)
+        shared_prefix_blocks = self._shared_prefix_blocks_for_spec(spec)
         if self._statuses and not self._scheduler_managed:
             raise RuntimeError("cannot mix legacy requests with scheduler-managed requests")
         if not self._scheduler_managed:
@@ -206,9 +207,13 @@ class DecodeEngine:
             ):
                 raise RuntimeError("scheduler-managed mode requires an empty PagedKVCache")
         self._scheduler_managed = True
-        return self._add_waiting_request(spec.request_id, spec=spec)
+        return self._add_waiting_request(
+            spec.request_id,
+            spec=spec,
+            shared_prefix_blocks=shared_prefix_blocks,
+        )
 
-    def _add_waiting_request(self, request_id, spec):
+    def _add_waiting_request(self, request_id, spec, shared_prefix_blocks=0):
         self._require_no_open_step("submit a request")
         self._check_request_id(request_id)
         if request_id in self._statuses:
@@ -220,6 +225,7 @@ class DecodeEngine:
             ):
                 raise ValueError("submission_order must be unique within one DecodeEngine")
             self._request_specs[request_id] = spec
+            self._request_shared_prefix_blocks[request_id] = shared_prefix_blocks
         self._statuses[request_id] = self.WAITING
         self._bump_state_version()
         return AdmissionResult(request_id=request_id, status=self.WAITING)
@@ -287,9 +293,7 @@ class DecodeEngine:
                 self._request_specs[request_id],
                 wait_steps=wait_steps[request_id],
                 skip_count=skip_counts[request_id],
-                shared_prefix_blocks=self._shared_prefix_blocks_for_spec(
-                    self._request_specs[request_id]
-                ),
+                shared_prefix_blocks=self._request_shared_prefix_blocks[request_id],
             )
             for request_id in sorted(
                 waiting_ids,
@@ -303,6 +307,11 @@ class DecodeEngine:
             if cache_state["prefix_id"] != spec.prefix_id:
                 raise RuntimeError(
                     "request prefix does not match scheduler specification"
+                )
+            shared_prefix_blocks = self._request_shared_prefix_blocks[request_id]
+            if cache_state["shared_block_count"] != shared_prefix_blocks:
+                raise RuntimeError(
+                    "request shared-prefix blocks do not match submission metadata"
                 )
             seq_len = cache_state["seq_len"]
             completed_tokens = seq_len - spec.initial_context_tokens
@@ -321,9 +330,11 @@ class DecodeEngine:
                     seq_len=seq_len,
                     remaining_tokens=remaining_tokens,
                     physical_blocks=len(cache_state["block_ids"]),
-                    committed_blocks=self._private_commitment_blocks_for_spec(spec),
+                    committed_blocks=self._private_commitment_blocks_for_request(
+                        request_id
+                    ),
                     service_wait_steps=service_wait[request_id],
-                    shared_prefix_blocks=cache_state["shared_block_count"],
+                    shared_prefix_blocks=shared_prefix_blocks,
                 )
             )
 
@@ -387,7 +398,7 @@ class DecodeEngine:
 
         committed_before = self._committed_blocks()
         committed_after = committed_before + sum(
-            self._private_commitment_blocks_for_spec(self._request_specs[request_id])
+            self._private_commitment_blocks_for_request(request_id)
             for request_id in admit_ids
         )
         if decision.committed_blocks_before != committed_before:
@@ -820,11 +831,20 @@ class DecodeEngine:
                 cache_state = self.cache.request_state(request_id)
                 if cache_state["prefix_id"] != spec.prefix_id:
                     raise RuntimeError("request prefix does not match scheduler specification")
+                if (
+                    cache_state["shared_block_count"]
+                    != self._request_shared_prefix_blocks[request_id]
+                ):
+                    raise RuntimeError(
+                        "request shared-prefix blocks do not match submission metadata"
+                    )
                 private_blocks = (
                     len(cache_state["block_ids"])
                     - cache_state["shared_block_count"]
                 )
-                if private_blocks > self._private_commitment_blocks_for_spec(spec):
+                if private_blocks > self._private_commitment_blocks_for_request(
+                    request_id
+                ):
                     raise RuntimeError(
                         "private physical ownership exceeds scheduler commitment"
                     )
@@ -866,7 +886,7 @@ class DecodeEngine:
             return 0
         resident_prefix_blocks = self.cache.metrics()["resident_prefix_blocks"]
         return resident_prefix_blocks + sum(
-            self._private_commitment_blocks_for_spec(self._request_specs[request_id])
+            self._private_commitment_blocks_for_request(request_id)
             for request_id in self.active_request_ids()
         )
 
@@ -885,9 +905,10 @@ class DecodeEngine:
             )
         return prefix["num_blocks"]
 
-    def _private_commitment_blocks_for_spec(self, spec):
+    def _private_commitment_blocks_for_request(self, request_id):
+        spec = self._request_specs[request_id]
         private_blocks = spec.commitment_blocks(self.cache.block_size)
-        private_blocks -= self._shared_prefix_blocks_for_spec(spec)
+        private_blocks -= self._request_shared_prefix_blocks[request_id]
         if private_blocks <= 0:
             raise RuntimeError("request-private lifetime commitment must be positive")
         return private_blocks

@@ -6,7 +6,7 @@ FlashDec 是一个面向单 GPU LLM decode 的研究型运行时原型，覆盖 
 
 项目关注的核心问题是：在请求长度与 batch 持续变化的情况下，如何维护可验证的 KV 所有权和失败原子性，并证明底层 kernel 优化能够转化为完整 decode step 的系统收益。
 
-> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction 与 R3 Shared Prefix Blocks 的实现、correctness 和 RTX 正式矩阵均已完成。R3-C 的 24 行 FP16/BF16 三轮矩阵通过严格校验；paired latency range 摘要归档后进入最终完整回归。仓库仍处于 `0.0.0`，clean-install 与正式版本发布留在最终 release gate。
+> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction 与 R3 Shared Prefix Blocks 的核心实现、correctness 和 RTX 正式矩阵均已完成。R3-C 的 24 行 FP16/BF16 三轮矩阵通过严格校验；R3-D 正在消除 shared metadata 的每步重复查询，并保留 BF16 engine-step 回退作为独立 GPU-path trade-off。仓库仍处于 `0.0.0`，clean-install 与正式版本发布留在最终 release gate。
 
 ## 架构
 

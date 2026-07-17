@@ -207,6 +207,31 @@ paired trial 结果进一步限定 latency 结论：
 
 因此当前稳定结论仍是 memory/admission 收益，而不是 latency 加速。75% 的双 dtype 稳定回退需要进一步区分 `scheduler_p50_ms` 与 `engine_step_p50_ms`；在 attribution 完成前不将原因归于 host metadata、block aliasing 或 GPU cache 行为。
 
+### R3-D：Hot-path metadata cache
+
+CSV attribution 显示 75% hit 的 scheduler p50 在 FP16/BF16 分别为 `0.8716x [0.6140,0.9435]` 与 `0.8958x [0.8223,0.8965]`，即两种 dtype 都三轮稳定回退。绝对跨轮中位数为：
+
+| dtype | 0% scheduler p50 | 75% scheduler p50 | 0% Engine p50 | 75% Engine p50 | Engine ratio |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| FP16 | 0.107920 ms | 0.123815 ms | 1.747613 ms | 1.811459 ms | `0.9648x [0.9377,1.0440]` |
+| BF16 | 0.102269 ms | 0.117288 ms | 1.486016 ms | 1.646606 ms | `0.9025x [0.8669,0.9929]` |
+
+旧路径在 request submission 时验证 prefix 后，仍通过 `_shared_prefix_blocks_for_spec()` 在每次 scheduling snapshot、commitment accounting 和 invariant validation 中重复调用 `cache.prefix_state()`。R3-D 将派生的 shared block 数缓存在 Engine request metadata：
+
+- 只在 `submit_request()` 时读取并验证 resident prefix；
+- waiting/active snapshot 与 commitment 使用 immutable cached count；
+- active request 每次 snapshot/invariant 仍将 cached count 与 Cache authoritative `shared_block_count` 交叉检查；
+- Cache 外部 mutation 仍由既有 `state_version` mismatch 拒绝。
+
+该优化只针对已定位的 host metadata 热路径。BF16 75% 的 Engine ratio 全三轮低于 1，说明 GPU/Engine 路径仍可能存在独立 trade-off；必须在优化后复测，不能承诺 metadata cache 会消除 complete-step 回退。
+
+### 容量字节与实际显存
+
+`saved_prefix_bytes` 表示相对每个 request 私有保存 prefix 时避免占用的 physical KV pool capacity。正式 latency probe 为保证 batch 与 tensor shape 完全相同，在四档 hit rate 下都预分配 80-block Cache tensor；所以 `5.5 MiB` 不是同一进程中直接观察到的 CUDA allocator 显存下降。它有两种实际价值：
+
+1. 固定大小 pool 中容纳更多请求，本次从 `9/16` 提高到 `16/16`；
+2. 固定 request target 下按 peak blocks right-size pool，可将 80-block pool 缩到 36 blocks，并把避免占用的 capacity 转化为实际 tensor allocation 缩减。
+
 ## 8. 验收测试
 
 ```text

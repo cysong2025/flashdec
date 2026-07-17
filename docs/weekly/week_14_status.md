@@ -39,6 +39,9 @@ Shared Prefix Blocks：从 Cache ownership core 扩展到 DecodeEngine 与 block
 - 正式 75% hit 将 context physical blocks 从 `64/64` 降至 `20/64`，节省 `68.8%`/`5.5 MiB`；包含 private tail 的 peak blocks 从 `80` 降至 `36`，减少 55%。
 - 固定 48-block bounded pool 下，admission 随 hit rate 从 `9/16`、`12/16`、`15/16` 提高到 `16/16`。
 - 非零 hit-rate 的 attach p50 均小于 `0.8 us`。paired p50 中只有 FP16 25% 三轮稳定更快；FP16/BF16 75% 均三轮稳定更慢，ratio 分别为 `0.9377x` 与 `0.9054x`，TPS ratio 为 `0.9569x` 与 `0.9022x`。
+- 75% scheduler p50 ratio 在 FP16/BF16 分别为 `0.8716x` 与 `0.8958x`，均三轮稳定回退；BF16 Engine p50 ratio 为 `0.9025x`，也稳定回退。
+- R3-D 已缓存 submission-time 验证得到的 shared block 数，移除 snapshot/commitment 热路径上的重复 prefix registry 查询，并保留 Cache metadata/version 交叉校验。
+- `saved_prefix_bytes` 是避免占用的 KV pool capacity；fixed-full-batch probe 的实际预分配 tensor 大小不随 hit rate 改变。
 
 ## 当前环境限制
 
@@ -46,9 +49,9 @@ macOS Codex 工作区没有项目 torch/pytest/CUDA 环境，只能执行 depend
 
 ## 需要在 RTX 5070 完成
 
-1. 将 CSV、log 与正式 summary 回传 Mac 并归档。
-2. 使用 CSV 的 `scheduler_p50_ms` 与 `engine_step_p50_ms` 分离 75% hit 回退来源。
-3. 根据 attribution 做有边界优化或冻结 trade-off，再完成完整 pytest 回归。
+1. 在 WSL 执行 R3-D focused/full correctness。
+2. 复跑 R3 quick/formal，验证 scheduler host 开销是否下降，并重新评估 BF16 Engine trade-off。
+3. 归档优化前后证据，再完成 R3 完整回归。
 
 ## 下一步
 

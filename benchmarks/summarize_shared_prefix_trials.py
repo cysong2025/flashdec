@@ -392,7 +392,7 @@ def write_summary(
         "",
         "## Cross-trial Medians",
         "",
-        "| dtype | hit rate | admitted | context physical/logical blocks | context saved | peak blocks | saved MiB | attach p50 us | complete p50 ms | p90 ms | p99 ms | TPS | evictions |",
+        "| dtype | hit rate | admitted | context physical/logical blocks | context saved | peak blocks | saved KV-capacity MiB | attach p50 us | complete p50 ms | p90 ms | p99 ms | TPS | evictions |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for dtype in expected_dtypes:
@@ -476,12 +476,60 @@ def write_summary(
                     )
                     + " |"
                 )
+        lines.extend(
+            [
+                "",
+                "## Paired Latency Attribution vs 0%",
+                "",
+                "Ratios above 1 favor the shared-prefix case. Scheduler and Engine p50 values are measured separately and are not added together.",
+                "",
+                "| dtype | hit rate | scheduler p50 ratio | Engine p50 ratio | scheduler p50 ms | Engine p50 ms |",
+                "| --- | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for dtype in expected_dtypes:
+            for rate in expected_hit_rates:
+                group = [
+                    row
+                    for row in rows
+                    if row["dtype"] == dtype
+                    and _integer(row, "hit_rate_percent") == int(rate)
+                ]
+                scheduler_ratio = _paired_ratios(
+                    rows,
+                    dtype,
+                    rate,
+                    "scheduler_p50_ms",
+                    higher_is_better=False,
+                )
+                engine_ratio = _paired_ratios(
+                    rows,
+                    dtype,
+                    rate,
+                    "engine_step_p50_ms",
+                    higher_is_better=False,
+                )
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            dtype,
+                            f"{int(rate)}%",
+                            _ratio_cell(scheduler_ratio),
+                            _ratio_cell(engine_ratio),
+                            f"{_median(group, 'scheduler_p50_ms'):.6f}",
+                            f"{_median(group, 'engine_step_p50_ms'):.6f}",
+                        ]
+                    )
+                    + " |"
+                )
     lines.extend(
         [
             "",
             "## Interpretation",
             "",
             "- The primary result is physical KV reduction and higher admission under the same bounded block pool.",
+            "- Saved blocks/bytes are occupied KV-pool capacity avoided relative to private copies. The fixed-full-batch latency probe preallocates the same maximum tensor pool in every case, so this is not a direct process-VRAM measurement.",
             "- Prefix attach is a host metadata lookup; registration copy and final eviction are reported separately.",
             "- Decode latency keeps the same request count in every hit-rate case. Shared prefixes do not change the attention algorithm, so small latency differences should be treated as system noise unless repeated evidence is stable.",
             "- `crosses_1` means the paired p50 direction changes across trials; do not claim a stable latency win. p99 uses few samples per trial and must be read with its full range.",

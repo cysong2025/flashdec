@@ -316,6 +316,49 @@ def test_scheduler_managed_engine_counts_shared_prefix_once_and_private_tail_per
     assert engine.validate_invariants()
 
 
+def test_scheduler_caches_validated_shared_prefix_blocks_off_the_step_hot_path(
+    monkeypatch,
+):
+    cache = _make_cache(
+        block_size=2,
+        max_blocks=6,
+        prefix_cache_capacity_blocks=2,
+    )
+    engine = DecodeEngine(cache)
+    prefix = torch.zeros(
+        (1, 2, 1, 2, 4),
+        dtype=cache.dtype,
+        device=cache.device,
+    )
+    engine.register_prefix("system", prefix, prefix)
+
+    prefix_state = cache.prefix_state
+    lookup_count = 0
+
+    def counted_prefix_state(prefix_id):
+        nonlocal lookup_count
+        lookup_count += 1
+        return prefix_state(prefix_id)
+
+    monkeypatch.setattr(cache, "prefix_state", counted_prefix_state)
+    scheduler = BlockAwareScheduler(
+        SchedulerConfig(max_active_requests=2, max_batch_requests=2)
+    )
+    engine.submit_request(RequestSpec("a", 4, 2, 0, prefix_id="system"))
+    engine.submit_request(RequestSpec("b", 4, 2, 1, prefix_id="system"))
+    assert lookup_count == 2
+
+    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
+    engine.apply_scheduler_decision(decision)
+    q, k, v = _step_inputs(2)
+    assert engine.step(q, k, v, request_ids=["a", "b"]).status == DecodeEngine.STEP_OK
+    scheduler.plan(engine.scheduling_snapshot(logical_step=1))
+    engine.metrics()
+    assert engine.validate_invariants()
+
+    assert lookup_count == 2
+
+
 def test_scheduler_prefix_spec_requires_resident_exact_full_context():
     cache = _make_cache(
         block_size=2,

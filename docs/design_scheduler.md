@@ -373,3 +373,5 @@ waiting request 的 admission 只消耗 private lifetime commitment；prefix res
 当前限制：scheduler-managed mode 不在 decision 内注册或淘汰 prefix。resident set 必须在 request submission 前建立，后续外部 Cache mutation 会触发 version mismatch。这样先闭合可验证的 capacity semantics，再在 R3-C workload 中衡量固定 hit-rate 下的显存节省。
 
 R3-B 已在 2026-07-17 RTX 5070 WSL 完成 focused `56 passed, 14 subtests passed in 5.29s` 与完整 `352 passed, 25 subtests passed in 9.37s` 回归。R3-C 使用 fixed bounded capacity 验证 admission 单调性，并在独立 fixed-full-batch 容量下测量 decode latency，避免把 admitted batch 差异混入性能解释。
+
+R3-C attribution 发现 75% hit 的 scheduler p50 在 FP16/BF16 都三轮稳定回退。R3-D 因此把 submission 时已验证的 `shared_prefix_blocks` 存入 Engine request metadata；纯调度热路径不再重复读取 prefix registry。Scheduler 仍只接收派生整数，不接触 K/V 或 physical ids；DecodeEngine 继续在 active snapshot/invariant 中将缓存值与 Cache request state 交叉校验，外部 registry mutation 仍触发 version mismatch。
