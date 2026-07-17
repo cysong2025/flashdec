@@ -78,8 +78,18 @@ def test_shared_prefix_reuses_blocks_and_keeps_request_tail_private():
     stored_prefix_v = cache.v_cache[:, list(prefix_ids)].clone()
     transaction = cache.begin_token(["first"])
     for layer_idx in range(cache.num_layers):
-        k = torch.full((1, 1, 3), 100 + layer_idx, device=cache.device)
-        v = torch.full((1, 1, 3), 200 + layer_idx, device=cache.device)
+        k = torch.full(
+            (1, 1, 3),
+            100 + layer_idx,
+            device=cache.device,
+            dtype=cache.dtype,
+        )
+        v = torch.full(
+            (1, 1, 3),
+            200 + layer_idx,
+            device=cache.device,
+            dtype=cache.dtype,
+        )
         cache.write_token_layer(transaction, layer_idx, k, v)
     cache.commit_token(transaction)
 
@@ -180,8 +190,8 @@ def test_shared_prefix_transaction_abort_returns_only_private_boundary_block():
     cache.write_token_layer(
         transaction,
         0,
-        torch.ones((1, 1, 3), device=cache.device),
-        torch.ones((1, 1, 3), device=cache.device),
+        torch.ones((1, 1, 3), device=cache.device, dtype=cache.dtype),
+        torch.ones((1, 1, 3), device=cache.device, dtype=cache.dtype),
     )
     cache.abort_token(transaction)
 
@@ -201,7 +211,7 @@ def test_shared_prefix_rejects_invalid_or_mutating_attach_inputs():
 
     cache.register_prefix("valid", prefix_k, prefix_v)
     cache.add_request("nonempty")
-    token = torch.zeros((1, 1, 3), device=cache.device)
+    token = torch.zeros((1, 1, 3), device=cache.device, dtype=cache.dtype)
     cache.append(0, ["nonempty"], token, token)
     before = cache.request_state("nonempty")
     with pytest.raises(RuntimeError, match="empty active request"):
