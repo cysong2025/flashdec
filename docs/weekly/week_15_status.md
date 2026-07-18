@@ -39,14 +39,16 @@ commit `4e18f5d` 的第三次 RTX 5070 FP16 quick 中，`l2_b4_c32` checked/trus
 
 commit `e88900a` 的正式矩阵在一个 l4 attribution probe 执行完 `2 steps x 4 layers`、得到 8 个 CPU append ranges 后，只捕获 7 个同名 CUDA user annotations。runner 在写 CSV 前按旧契约终止，因此没有正式性能数据。CPU `8/8` 证明 Engine 没有少执行 layer；问题位于 Kineto capture/证据定义。PyTorch 只保证 `record_function` CPU label，不能把同名 CUDA user annotation 当硬 peer。
 
-新契约使用 profiler `wait=0, warmup=1, active=1` schedule：warmup token完整执行后 abort，再进入 active evidence；CPU annotation 的 inclusive host 与 canonical correlated device total 分别提供 host/device attribution，CUDA activity count 排除 user annotation。range、device time 或 checked/trusted scalar count 任一不完整都重建整个 probe；只有这类 trace completeness 错误允许用相同 seed 和全新 engine/profiler最多重采集三次，attempt count写入 CSV，业务错误立即透传，`N-1` 和零值仍失败。同一 trial 的 checked/trusted 正式 wall 都在 attribution 前完成，retry 不会污染 paired wall 顺序。
+commit `5d2f9c0` 的 l4 FP16 stress 在三次全新 probe 中都得到首个 decode CPU range 的正 host time（`61.332/71.163/69.992 us`）与零 correlated device time；runner 三次后 fail closed且没有写 CSV。WARMUP→active 与 retry都不能修复该稳定缺口，因此不再把 `device_time_total=0` 误分类为偶发 trace loss，也不增加 retry 次数或加入 prime。
 
-该 quick 只有单 dtype、单缩小 case、单 trial；p90/p99 来自极小样本，不能形成稳定尾延迟或全矩阵结论。Profiler CPU/device totals 来自独立 instrumented run，不能彼此相加，也不能替代 non-instrumented wall。当前 commit 的完整回归和五轮正式 A/B 完成前，不把 R4-A 标记为完成。正式门槛仍是 complete-token p50 总体至少 `1.05x`，且全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1；未达到门槛就保留负结果并停止扩展到 CUDA Graph。
+新契约使用 CPU-only profiler `wait=0, warmup=1, active=1` schedule：warmup token完整执行后 abort，再进入 active evidence；CPU annotation 的 inclusive host提供 attribution，checked/trusted scalar count证明每层五次同步是否删除。range/scalar 少记时可用相同 seed和全新 probe最多重采集三次并记录 attempt count，多记或业务错误立即透传。append/decode device与 CUDA activity字段从 strict schema删除，未来需要时另建 CUDA Event/Nsight probe。同一 trial 的 checked/trusted 正式 wall都在 attribution前完成，retry不会污染 paired wall顺序。
+
+旧 quick 只有单 dtype、单缩小 case、单 trial；p90/p99 来自极小样本，不能形成稳定尾延迟或全矩阵结论。Profiler inclusive CPU total只能归因 host sync，不能替代 non-instrumented wall。当前 commit 的完整回归和五轮正式 A/B 完成前，不把 R4-A 标记为完成。正式门槛仍是 complete-token p50 总体至少 `1.05x`，且全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1；未达到门槛就保留负结果并停止扩展到 CUDA Graph。
 
 ## 下一步
 
-1. 在 canonical profiler 修复 commit 上运行 dependency-free tests、RTX focused/full correctness并保存日志。
-2. 先跑 l4 FP16 3-trial stress quick，验证 strict summary、canonical device time、non-user CUDA activity 和 `profile_attempt_count <= 3`。
+1. 在 CPU-only profiler 修复 commit 上运行 dependency-free tests、RTX focused/full correctness并保存日志。
+2. 先跑 l4 FP16 3-trial stress quick，验证 strict summary、CPU range/scalar evidence 和 `profile_attempt_count <= 3`。
 3. stress quick 通过后运行 FP16/BF16、8 cases、checked/trusted、5 trials 的 160-row 正式矩阵，并用 strict summary 验证 80 个配对 trial。
 4. 检查 overall p50 `>=1.05x`，并按所有 dtype/case 的五轮 `[min,max]` 审核是否穿过 1；保留 p90/p99 全范围。
 5. 根据门槛决定进入 R4-B persistent metadata，或直接转入 R4-C integrated scheduled multi-layer correctness workload。

@@ -32,7 +32,9 @@ WALL_TIMING_SCOPE = (
     "pure synchronized complete-token wall; no CUDA events or profiler in interval; "
     "inputs, context seed, JIT build, and attribution probe excluded"
 )
-PROFILE_TIMING_SCOPE = "separate instrumented attribution probe"
+PROFILE_TIMING_SCOPE = (
+    "separate CPU-only profiler attribution probe; device attribution excluded"
+)
 MAX_PROFILE_ATTEMPTS = 3
 
 
@@ -342,9 +344,6 @@ def _event_diagnostic(event):
         "cpu_time_total_us": _event_time_us(
             event, "cpu_time_total", "cpu_time_total"
         ),
-        "device_time_total_us": _event_time_us(
-            event, "device_time_total", "cuda_time_total"
-        ),
     }
 
 
@@ -376,25 +375,16 @@ def _raw_profile_range_totals(raw_events, key, expected_count):
         _event_time_us(event, "cpu_time_total", "cpu_time_total")
         for event in cpu_ranges
     )
-    device_times_us = tuple(
-        _event_time_us(event, "device_time_total", "cuda_time_total")
-        for event in cpu_ranges
-    )
-    for label, values, ranges in (
-        ("inclusive CPU time", cpu_times_us, cpu_ranges),
-        ("canonical correlated device time", device_times_us, cpu_ranges),
-    ):
-        for index, value in enumerate(values):
-            if value <= 0.0 or not math.isfinite(value):
-                raise IncompleteProfilerTrace(
-                    f"profiler range {key!r} event {index} {label} must be "
-                    f"positive and finite; value={value}, "
-                    f"range={_event_diagnostic(ranges[index])}"
-                )
+    for index, value in enumerate(cpu_times_us):
+        if value <= 0.0 or not math.isfinite(value):
+            raise IncompleteProfilerTrace(
+                f"profiler range {key!r} event {index} inclusive CPU time "
+                f"must be positive and finite; value={value}, "
+                f"range={_event_diagnostic(cpu_ranges[index])}"
+            )
     return {
         "count": len(cpu_ranges),
         "cpu_time_us": sum(cpu_times_us),
-        "device_time_us": sum(device_times_us),
     }
 
 
@@ -433,21 +423,9 @@ def _profile_scalar_counts(raw_events, transaction_path, expected_layers):
     return counts
 
 
-def _raw_cuda_event_count(raw_events):
-    return sum(
-        1
-        for event in raw_events
-        if _event_is_device(event, "cuda")
-        and getattr(event, "is_user_annotation", False) is not True
-    )
-
-
 def _profiler_kwargs(torch):
     return {
-        "activities": [
-            torch.profiler.ProfilerActivity.CPU,
-            torch.profiler.ProfilerActivity.CUDA,
-        ],
+        "activities": [torch.profiler.ProfilerActivity.CPU],
         "schedule": torch.profiler.schedule(
             wait=0,
             warmup=1,
@@ -550,14 +528,7 @@ def _profile_probe_once(
             f"fused transaction profiler range counts are invalid: {counts}"
         )
 
-    append_device_ms = append["device_time_us"] / 1_000.0
     append_cpu_ms = append["cpu_time_us"] / 1_000.0
-    decode_device_ms = decode["device_time_us"] / 1_000.0
-    cuda_event_count = _raw_cuda_event_count(raw_events)
-    if cuda_event_count <= 0:
-        raise IncompleteProfilerTrace(
-            "profiler recorded no non-annotation raw CUDA activities"
-        )
     scalar_counts = _profile_scalar_counts(
         raw_events,
         transaction_path,
@@ -566,10 +537,7 @@ def _profile_probe_once(
     return {
         "profile_steps": steps,
         **counts,
-        "profile_cuda_event_count": cuda_event_count,
         "profile_append_cpu_ms_per_layer": append_cpu_ms / expected_layers,
-        "profile_append_device_ms_per_layer": append_device_ms / expected_layers,
-        "profile_decode_device_ms_per_layer": decode_device_ms / expected_layers,
         **scalar_counts,
     }
 

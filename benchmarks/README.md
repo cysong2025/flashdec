@@ -270,9 +270,9 @@ python benchmarks/summarize_fused_transaction_fast_path.py \
   --expected-dtypes float16
 ```
 
-commit `4e18f5d` 的 RTX 5070 quick 保留 provisional FP16 `l2_b4_c32` complete-token p50/TPS `1.7856x/1.8755x`、append CPU `2.3751x` 与 item/local-scalar `20/20 -> 0/0`。随后 formal 在 CPU range `8/8`、同名 CUDA user annotation `7/8` 时严格停止，证明旧 device/event 口径依赖 PyTorch 未保证的 peer；旧 quick 的 device/event 数字撤回。canonical profiler 修复后必须先跑 l4 stress quick，不能直接复用旧 summary。
+commit `4e18f5d` 的 RTX 5070 quick 保留 provisional FP16 `l2_b4_c32` complete-token p50/TPS `1.7856x/1.8755x`、append CPU `2.3751x` 与 item/local-scalar `20/20 -> 0/0`。随后 formal 在 CPU range `8/8`、同名 CUDA user annotation `7/8` 时严格停止；commit `5d2f9c0` 加入 warmup/retry 后，l4 stress 的三次 probe 又稳定得到首个 decode CPU range 的正 host time与零 correlated device time。两次负结果共同证明 stage-device 关联不是稳定契约；旧 device/event 数字撤回，strict schema 改为 CPU-only。失败的 stress 没有 CSV，不能复用。
 
-canonical profiler l4 stress quick：
+CPU-only profiler l4 stress quick：
 
 ```bash
 python benchmarks/run_fused_transaction_fast_path.py \
@@ -305,4 +305,4 @@ python benchmarks/summarize_fused_transaction_fast_path.py \
   --expected-trials 5
 ```
 
-正式矩阵共 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`，strict summary 应报告 80 个 paired trials。`checked` 与 `trusted` 复用相同 Cache transaction API；runner 只在 benchmark context 中把 Cache 内部 raw launch 切换为 checked 或 trusted，因此状态机和 Engine 路由不变。每个 paired trial 先按轮换顺序完成两条 path 的 non-instrumented synchronized wall，再统一执行 profiler/rollback，避免 attribution 重采集夹在两侧 wall 之间。profiler 先在 WARMUP cycle 执行并 abort 一个同形 token，再在唯一 active cycle采集；每个 layer 必须有精确一个 CPU user annotation，host 使用 inclusive CPU total，device 使用该 CPU FunctionEvent 的 canonical correlated device total。checked 每个 profiled layer 必须有 5 次 `aten::item`/`aten::_local_scalar_dense`，trusted 为 0；这些 scalar count 与 range/device time 在单次 probe 内共同决定 capture completeness。CUDA activity count 只计 non-user device events。少记 range/scalar 或缺少有效时间可用相同 seed、全新 engine/profiler 重采集，固定最多三次并写入 `profile_attempt_count`；多出 range/scalar 则视为 active-work/fast-path 契约回归并立即终止，不能用重试掩盖。summary validator 负责证据完整性，不替代人工性能 gate：overall p50 至少 `1.05x`，且全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1。该证据只归因于 device-value validation，仍存在的 transaction-view H2D materialization/copy 留给独立 R4-B。
+正式矩阵共 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`，strict summary 应报告 80 个 paired trials。`checked` 与 `trusted` 复用相同 Cache transaction API；runner 只在 benchmark context 中把 Cache 内部 raw launch 切换为 checked 或 trusted，因此状态机和 Engine 路由不变。每个 paired trial 先按轮换顺序完成两条 path 的 non-instrumented synchronized wall，再统一执行 profiler/rollback，避免 attribution 重采集夹在两侧 wall 之间。CPU-only profiler 先在 WARMUP cycle 执行并 abort 一个同形 token，再在唯一 active cycle采集；每个 layer 必须有精确一个 CPU user annotation，其 inclusive CPU total保留 checked 路径 `.item()` 的 host/stream 等待。checked 每个 profiled layer 必须有 5 次 `aten::item`/`aten::_local_scalar_dense`，trusted 为 0。少记 range/scalar 或缺少有效 CPU time可用相同 seed、全新 engine/profiler 重采集，固定最多三次并写入 `profile_attempt_count`；多出 range/scalar 则视为 active-work/fast-path 契约回归并立即终止，不能用重试掩盖。append/decode device time与 CUDA activity不再属于该 strict schema；若未来需要分段 GPU attribution，使用独立 CUDA Event/Nsight probe。summary validator 负责证据完整性，不替代人工性能 gate：overall p50 至少 `1.05x`，且全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1。该证据只归因于 device-value validation，仍存在的 transaction-view H2D materialization/copy 留给独立 R4-B。

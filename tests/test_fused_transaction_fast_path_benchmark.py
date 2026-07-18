@@ -20,7 +20,6 @@ from benchmarks.run_fused_transaction_fast_path import (
     _profile_scalar_counts,
     _quick_case,
     _raw_cpu_operator_count,
-    _raw_cuda_event_count,
     _raw_profile_range_totals,
     _run_profile_token,
     _run_paired_trial,
@@ -163,14 +162,15 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
         )
         self.assertIn("no CUDA events", WALL_TIMING_SCOPE)
         self.assertEqual(
-            PROFILE_TIMING_SCOPE, "separate instrumented attribution probe"
+            PROFILE_TIMING_SCOPE,
+            "separate CPU-only profiler attribution probe; device attribution excluded",
         )
 
     def test_profiler_accumulates_events_across_internal_cycles(self):
         schedule_calls = []
         torch = SimpleNamespace(
             profiler=SimpleNamespace(
-                ProfilerActivity=SimpleNamespace(CPU="cpu", CUDA="cuda"),
+                ProfilerActivity=SimpleNamespace(CPU="cpu"),
                 schedule=lambda **kwargs: schedule_calls.append(kwargs)
                 or "warmup-active-schedule",
             )
@@ -178,7 +178,7 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
         self.assertEqual(
             _profiler_kwargs(torch),
             {
-                "activities": ["cpu", "cuda"],
+                "activities": ["cpu"],
                 "schedule": "warmup-active-schedule",
                 "acc_events": True,
             },
@@ -189,13 +189,13 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(TRANSACTION_PATHS, ("checked", "trusted"))
 
-    def test_raw_range_uses_cpu_annotation_host_and_correlated_device(self):
+    def test_raw_range_uses_only_cpu_annotation_inclusive_time(self):
         cpu = self._profile_event(
             "append",
             "DeviceType.CPU",
             is_user_annotation=True,
             cpu_time_total=400.0,
-            device_time_total=250.0,
+            device_time_total=0.0,
             self_cpu_time_total=0.0,
         )
         cuda = self._profile_event(
@@ -216,9 +216,9 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
                 totals = _raw_profile_range_totals(events, "append", 1)
                 self.assertEqual(totals["count"], 1)
                 self.assertEqual(totals["cpu_time_us"], 400.0)
-                self.assertEqual(totals["device_time_us"], 250.0)
+                self.assertNotIn("device_time_us", totals)
 
-    def test_raw_range_sums_paired_cpu_and_cuda_ranges(self):
+    def test_raw_range_sums_cpu_annotations(self):
         events = (
             self._profile_event(
                 "append",
@@ -238,9 +238,8 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
         totals = _raw_profile_range_totals(events, "append", 2)
         self.assertEqual(totals["count"], 2)
         self.assertEqual(totals["cpu_time_us"], 220.0)
-        self.assertEqual(totals["device_time_us"], 100.0)
 
-    def test_raw_range_rejects_missing_peer_or_nonpositive_time(self):
+    def test_raw_range_rejects_missing_extra_or_nonpositive_cpu_time(self):
         non_annotation = self._profile_event(
             "append",
             "cpu",
@@ -269,10 +268,8 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
             cpu_time_total=100.0,
             device_time_total=float("nan"),
         )
-        with self.assertRaisesRegex(
-            IncompleteProfilerTrace, "canonical correlated device time"
-        ):
-            _raw_profile_range_totals((cpu,), "append", 1)
+        totals = _raw_profile_range_totals((cpu,), "append", 1)
+        self.assertEqual(totals["cpu_time_us"], 100.0)
 
         extra_cpu = self._profile_event(
             "append",
@@ -284,7 +281,7 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "exceeded"):
             _raw_profile_range_totals((extra_cpu, extra_cpu), "append", 1)
 
-    def test_raw_range_rejects_real_eight_cpu_seven_cuda_shape(self):
+    def test_raw_range_accepts_eight_cpu_ranges_despite_seven_cuda_peers(self):
         cpu_ranges = tuple(
             self._profile_event(
                 "append",
@@ -304,16 +301,15 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
             )
             for index in range(7)
         )
-        with self.assertRaisesRegex(
-            IncompleteProfilerTrace, "canonical correlated device time"
-        ):
-            _raw_profile_range_totals(
-                cpu_ranges + cuda_ranges,
-                "append",
-                8,
-            )
+        totals = _raw_profile_range_totals(
+            cpu_ranges + cuda_ranges,
+            "append",
+            8,
+        )
+        self.assertEqual(totals["count"], 8)
+        self.assertEqual(totals["cpu_time_us"], 2828.0)
 
-    def test_raw_operator_and_cuda_counts_do_not_collapse_device_groups(self):
+    def test_raw_operator_count_does_not_collapse_device_groups(self):
         events = (
             self._profile_event("aten::item", "cpu"),
             self._profile_event("aten::item", "cpu"),
@@ -326,7 +322,6 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
             ),
         )
         self.assertEqual(_raw_cpu_operator_count(events, "aten::item"), 2)
-        self.assertEqual(_raw_cuda_event_count(events), 2)
 
     def test_profile_scalar_counts_are_part_of_capture_completeness(self):
         checked_events = tuple(
@@ -484,12 +479,7 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
                 return_value={
                     "count": 4,
                     "cpu_time_us": 400.0,
-                    "device_time_us": 200.0,
                 },
-            ),
-            patch(
-                "benchmarks.run_fused_transaction_fast_path._raw_cuda_event_count",
-                return_value=8,
             ),
             patch(
                 "benchmarks.run_fused_transaction_fast_path._profile_scalar_counts",
@@ -701,10 +691,7 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
             "profile_token_count": 2,
             "profile_append_count": 4,
             "profile_decode_count": 4,
-            "profile_cuda_event_count": 80,
             "profile_append_cpu_ms_per_layer": 0.4,
-            "profile_append_device_ms_per_layer": 0.4,
-            "profile_decode_device_ms_per_layer": 0.8,
             "profile_item_count": 20,
             "profile_local_scalar_dense_count": 20,
         }
@@ -746,6 +733,13 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
         )
         row = _with_speedup(result, result).as_row()
         self.assertEqual(set(row), REQUIRED_FIELDS)
+        self.assertTrue(
+            {
+                "profile_cuda_event_count",
+                "profile_append_device_ms_per_layer",
+                "profile_decode_device_ms_per_layer",
+            }.isdisjoint(row)
+        )
 
 
 if __name__ == "__main__":

@@ -39,9 +39,6 @@ RATIO_METRICS = (
     "begin_host_p50",
     "commit_host_p50",
     "profile_append_cpu",
-    "profile_append_device",
-    "profile_decode_device",
-    "profile_cuda_events",
 )
 
 PAIR_IDENTITY_FIELDS = (
@@ -140,10 +137,7 @@ REQUIRED_FIELDS = set(PAIR_IDENTITY_FIELDS) | {
     "commit_host_p50_ms",
     "decode_tokens_per_second",
     "layer_steps_per_second",
-    "profile_cuda_event_count",
     "profile_append_cpu_ms_per_layer",
-    "profile_append_device_ms_per_layer",
-    "profile_decode_device_ms_per_layer",
     "profile_item_count",
     "profile_local_scalar_dense_count",
     "profile_attempt_count",
@@ -188,18 +182,6 @@ class PairedTrial:
                 checked, "profile_append_cpu_ms_per_layer"
             )
             / _positive_float(trusted, "profile_append_cpu_ms_per_layer"),
-            "profile_append_device": _positive_float(
-                checked, "profile_append_device_ms_per_layer"
-            )
-            / _positive_float(trusted, "profile_append_device_ms_per_layer"),
-            "profile_decode_device": _positive_float(
-                checked, "profile_decode_device_ms_per_layer"
-            )
-            / _positive_float(trusted, "profile_decode_device_ms_per_layer"),
-            "profile_cuda_events": _positive_float(
-                checked, "profile_cuda_event_count"
-            )
-            / _positive_float(trusted, "profile_cuda_event_count"),
         }
 
 
@@ -250,10 +232,7 @@ def _validate_numeric_row(row, key):
         "commit_host_p50_ms",
         "decode_tokens_per_second",
         "layer_steps_per_second",
-        "profile_cuda_event_count",
         "profile_append_cpu_ms_per_layer",
-        "profile_append_device_ms_per_layer",
-        "profile_decode_device_ms_per_layer",
         "speedup_vs_checked_p50",
     ):
         _positive_float(row, field)
@@ -531,9 +510,6 @@ def aggregate(pairs):
         "begin_host_p50_ms",
         "commit_host_p50_ms",
         "profile_append_cpu_ms_per_layer",
-        "profile_append_device_ms_per_layer",
-        "profile_decode_device_ms_per_layer",
-        "profile_cuda_event_count",
         "profile_item_count",
         "profile_local_scalar_dense_count",
         "profile_attempt_count",
@@ -613,16 +589,16 @@ def render_markdown(input_path, pairs, aggregates, overall):
         f"- PyTorch/CUDA: {first['torch']} / {first['cuda']}.",
         f"- Git commit: `{first['git_commit']}`.",
         "- Checked and trusted paths used identical fused CUDA/Triton math; only the Cache-owned validation boundary differed.",
-        "- Matrix, seed/order, pure-wall timing scope, block accounting, Engine/transaction trajectory, canonical profiler ranges, bounded capture attempts, and invariants were validated.",
+        "- Matrix, seed/order, pure-wall timing scope, block accounting, Engine/transaction trajectory, CPU profiler ranges, bounded capture attempts, and invariants were validated.",
         f"- Profiler capture attempts: {sum(profile_attempts)} total; extra retries: {sum(value - 1 for value in profile_attempts)}; maximum per row: {max(profile_attempts)}.",
-        "- Complete-token latency is pure synchronized wall time with no CUDA events in its interval; profiler fields are attribution-only.",
+        "- Complete-token latency is pure synchronized wall time with no CUDA events in its interval; the separate profiler is CPU-only and excludes device attribution.",
         "",
-        "Ratios above 1 favor trusted dispatch. Latency ratios are checked/trusted; throughput is trusted/checked; CUDA-activity ratio means fewer non-annotation device activities for trusted.",
+        "Ratios above 1 favor trusted dispatch. Latency and append-CPU ratios are checked/trusted; throughput is trusted/checked.",
         "",
         "## Cross-trial Cases",
         "",
-        "| dtype | case | p50 median [min,max] | p90 | p99 [min,max] | TPS | append CPU | append device | decode device | CUDA activities | direction |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| dtype | case | p50 median [min,max] | p90 | p99 [min,max] | TPS | append CPU | direction |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in aggregates:
         metrics = row["metrics"]
@@ -635,9 +611,6 @@ def render_markdown(input_path, pairs, aggregates, overall):
             f"[{metrics['p99']['min']:.4f},{metrics['p99']['max']:.4f}] | "
             f"{metrics['decode_tokens_per_second']['median']:.4f}x | "
             f"{metrics['profile_append_cpu']['median']:.4f}x | "
-            f"{metrics['profile_append_device']['median']:.4f}x | "
-            f"{metrics['profile_decode_device']['median']:.4f}x | "
-            f"{metrics['profile_cuda_events']['median']:.4f}x | "
             f"{row['direction']} |"
         )
     lines.extend(
@@ -645,8 +618,8 @@ def render_markdown(input_path, pairs, aggregates, overall):
             "",
             "## Absolute Attribution Medians",
             "",
-            "| dtype | case | path | token p50 ms | begin host ms | commit host ms | append CPU ms/layer | append device ms/layer | decode device ms/layer | CUDA activities | item | local scalar | capture attempts |",
-            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| dtype | case | path | token p50 ms | begin host ms | commit host ms | append CPU ms/layer | item | local scalar | capture attempts |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for row in aggregates:
@@ -658,9 +631,6 @@ def render_markdown(input_path, pairs, aggregates, overall):
                 f"{absolute['begin_host_p50_ms']:.6f} | "
                 f"{absolute['commit_host_p50_ms']:.6f} | "
                 f"{absolute['profile_append_cpu_ms_per_layer']:.6f} | "
-                f"{absolute['profile_append_device_ms_per_layer']:.6f} | "
-                f"{absolute['profile_decode_device_ms_per_layer']:.6f} | "
-                f"{absolute['profile_cuda_event_count']:.0f} | "
                 f"{absolute['profile_item_count']:.0f} | "
                 f"{absolute['profile_local_scalar_dense_count']:.0f} | "
                 f"{absolute['profile_attempt_count']:.1f} |"
@@ -680,15 +650,12 @@ def render_markdown(input_path, pairs, aggregates, overall):
             f"| begin host p50 | {overall['begin_host_p50']:.4f}x |",
             f"| commit host p50 | {overall['commit_host_p50']:.4f}x |",
             f"| profiler append CPU/layer | {overall['profile_append_cpu']:.4f}x |",
-            f"| profiler append device/layer | {overall['profile_append_device']:.4f}x |",
-            f"| profiler decode device/layer | {overall['profile_decode_device']:.4f}x |",
-            f"| profiler CUDA activities | {overall['profile_cuda_events']:.4f}x |",
             "",
             "## Interpretation",
             "",
             "- `unstable_crosses_1` means the complete-token p50 direction changes across trials; do not claim a stable win.",
             "- The trusted path is accepted only for Cache-owned transaction metadata; public raw CUDA calls retain checked validation.",
-            "- Profiler CPU/correlated-device totals, item counts, non-annotation CUDA activities, and bounded recapture attempts explain the removed synchronization boundary but are not release latency.",
+            "- Profiler inclusive CPU totals, scalar-extraction counts, and bounded recapture attempts explain the removed synchronization boundary but are not release latency; device attribution is intentionally excluded.",
             "- p99 must be reported with its full range, and a ratio below 1 remains a negative result.",
             "",
         ]

@@ -99,16 +99,9 @@ def _row(dtype, trial, transaction_path):
             "profile_token_count": str(profile_steps),
             "profile_append_count": str(profile_steps * layers),
             "profile_decode_count": str(profile_steps * layers),
-            "profile_cuda_event_count": (
-                "80" if transaction_path == "checked" else "20"
-            ),
             "profile_append_cpu_ms_per_layer": (
                 "0.400000" if transaction_path == "checked" else "0.200000"
             ),
-            "profile_append_device_ms_per_layer": (
-                "0.400000" if transaction_path == "checked" else "0.200000"
-            ),
-            "profile_decode_device_ms_per_layer": "0.800000",
             "profile_item_count": "20" if transaction_path == "checked" else "0",
             "profile_local_scalar_dense_count": (
                 "20" if transaction_path == "checked" else "0"
@@ -180,7 +173,7 @@ class FusedTransactionFastPathSummaryTests(unittest.TestCase):
         self.assertAlmostEqual(overall["p50"], 1.25)
         self.assertAlmostEqual(overall["decode_tokens_per_second"], 1.25)
         self.assertAlmostEqual(overall["profile_append_cpu"], 2.0)
-        self.assertAlmostEqual(overall["profile_cuda_events"], 4.0)
+        self.assertNotIn("profile_cuda_events", overall)
         self.assertEqual(aggregates[0]["direction"], "trusted_faster")
         self.assertEqual(
             aggregates[0]["absolute"]["trusted"]["profile_item_count"], 0
@@ -190,6 +183,10 @@ class FusedTransactionFastPathSummaryTests(unittest.TestCase):
         self.assertIn("extra retries: 0", markdown)
         self.assertIn("trusted_faster", markdown)
         self.assertIn("Absolute Attribution Medians", markdown)
+        self.assertIn("CPU-only", markdown)
+        self.assertNotIn("append device", markdown)
+        self.assertNotIn("decode device", markdown)
+        self.assertNotIn("CUDA activities", markdown)
 
         aggregates[0]["absolute"]["checked"][
             "profile_attempt_count"
@@ -224,6 +221,19 @@ class FusedTransactionFastPathSummaryTests(unittest.TestCase):
         rows = _rows()
         for row in rows:
             row["unexpected"] = "value"
+        with self.assertRaisesRegex(FastPathValidationError, "unexpected"):
+            _validate(rows)
+
+    def test_old_device_attribution_columns_are_not_in_strict_schema(self):
+        old_fields = {
+            "profile_cuda_event_count",
+            "profile_append_device_ms_per_layer",
+            "profile_decode_device_ms_per_layer",
+        }
+        self.assertTrue(old_fields.isdisjoint(REQUIRED_FIELDS))
+        rows = _rows()
+        for row in rows:
+            row.update({field: "1" for field in old_fields})
         with self.assertRaisesRegex(FastPathValidationError, "unexpected"):
             _validate(rows)
 

@@ -36,7 +36,7 @@
 - GPU Engine 明确使用 fused CUDA append policy；公开 reference API 默认仍保持 PyTorch 路径。
 - DecodeEngine workload CSV、multi-trial summary 和 profiler evidence 现在绑定生成时的 Git commit。
 - Release artifact/evidence gate 现在同时要求 R1 Scheduler、R2 Multi-layer 与 R3 Shared Prefix runner、validator、focused tests 和最终 Markdown summary。
-- R4-A profiler attribution 改用 WARMUP→active schedule；active CPU user annotation 同时提供 inclusive host 与 canonical correlated device time，CUDA activity count 排除 user annotations。range/device/scalar-count completeness 错误可用相同 seed、全新 probe 最多重采集三次并记录 attempt count；缺 range、零值和非有限值仍严格失败。paired trial 先完成两条 path 的正式 wall，再运行 attribution/rollback，避免 retry 介入配对计时。
+- R4-A profiler attribution 改用 CPU-only WARMUP→active schedule；active CPU user annotation 提供 inclusive host time，并严格验证 checked/trusted scalar extraction。少记 range/scalar 可用相同 seed、全新 probe 最多重采集三次并记录 attempt count，多记立即失败。paired trial 先完成两条 path 的正式 wall，再运行 attribution/rollback，避免 retry 介入配对计时。未稳定关联的 append/decode device 与 CUDA-activity 字段从 strict schema 删除。
 
 ### Performance evidence
 
@@ -54,7 +54,8 @@
 - R3-D submission-time shared metadata cache：移除 scheduling snapshot、commitment 与 invariant 热路径中的重复 prefix registry lookup，同时保留 Cache shared-block/version authoritative cross-check；新增 lookup-count correctness test。
 - R3-D commit `fe72e27` 的 RTX 5070 8-trial confirmation 共 64 行并通过严格校验。75% hit 仍将 context physical blocks 从 `64/64` 降至 `20/64`、节省 `68.8%`/`5.5 MiB`，并将 bounded-pool admission 从 `9/16` 提高到 `16/16`。所有非零 hit-rate 的 complete、scheduler 与 Engine p50 paired range 均跨过 1，因此冻结为 near-neutral/no stable direction，不声明稳定加速或回退。
 - confirmation 保留离群点：BF16 trial 1 的 25% case 主要是 Engine 整行变慢，FP16 trial 7 的 25% case 是尾部尖峰；相同执行顺序的第二轮均未复现，端点 `nvidia-smi` 快照也不足以确定根因。
-- R4-A commit `4e18f5d` 的 RTX 5070 FP16 `l2_b4_c32` quick 保留 provisional complete-token p50/TPS `1.7856x/1.8755x`、append CPU `2.3751x` 与 item/local-scalar `20/20 -> 0/0`。旧 append/decode device 与 CUDA-event 字段来自非强契约的 CUDA user spans，已撤回并等待 canonical profiler 复测；单 trial 不构成稳定 speedup 或尾延迟结论。
+- R4-A commit `4e18f5d` 的 RTX 5070 FP16 `l2_b4_c32` quick 保留 provisional complete-token p50/TPS `1.7856x/1.8755x`、append CPU `2.3751x` 与 item/local-scalar `20/20 -> 0/0`。旧 append/decode device 与 CUDA-event 字段来自非强契约的 CUDA user spans，已撤回；单 trial 不构成稳定 speedup 或尾延迟结论。
+- R4-A commit `5d2f9c0` 的 l4 stress 在三次全新 probe 中都得到首个 decode CPU range 的正 host time（`61.332/71.163/69.992 us`）和零 correlated device time，随后 fail closed 且未写 CSV。该重复负结果使 R4 strict attribution 改为 CPU-only；不以 prime、补值或增加 retry 次数掩盖 profiler 关联缺口。
 
 ### Correctness evidence
 
@@ -69,6 +70,7 @@
 - R4-A commit `4ee5fab` 的第二次 quick 在 `flashdec::paged_decode` CPU annotation 记录 `116.108 us` host time，但其自身 device total 为 0；runner 在写 CSV 前严格失败。该结果用于修正 CPU/CUDA range 归因契约，不构成性能结论。
 - R4-A commit `4e18f5d` 的第三次 quick strict summary 已通过；当前 commit 的完整 RTX 回归仍待执行，因此 correctness 完成状态仍以 `1169cb8` 的 focused CUDA suite 为限。
 - R4-A commit `e88900a` 的 formal 在一个 l4 probe 捕获 8 个 CPU append ranges、7 个同名 CUDA user annotations 后于写 CSV 前严格停止；该结果证明 profiler peer 契约错误，不表示 Engine 少执行 layer，也不产生正式性能数据。
+- R4-A commit `5d2f9c0` 的 l4 stress 三次均在首个 decode CPU range 得到零 correlated device time并停止；没有 CSV/summary，不能形成性能结论。
 
 ### Pending before v0.1.0
 
