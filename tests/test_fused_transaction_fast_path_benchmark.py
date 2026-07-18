@@ -1,26 +1,36 @@
 """Dependency-free configuration tests for the fused transaction A/B runner."""
 
+import io
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from benchmarks.run_fused_transaction_fast_path import (
     CASES,
     FastPathCase,
+    IncompleteProfilerTrace,
+    MAX_PROFILE_ATTEMPTS,
     PROFILE_TIMING_SCOPE,
     TRANSACTION_PATHS,
     WALL_TIMING_SCOPE,
     _max_blocks,
     _profiler_kwargs,
+    _profile_probe,
+    _profile_probe_once,
+    _profile_scalar_counts,
     _quick_case,
     _raw_cpu_operator_count,
     _raw_cuda_event_count,
     _raw_profile_range_totals,
+    _run_profile_token,
+    _run_paired_trial,
     _run_tokens,
     _selected_cases,
     _selected_fused_append,
     _summarize_row,
     _transaction_path_context,
     _trial_path_order,
+    _validate_profile_warmup_abort,
     _with_speedup,
 )
 from benchmarks.summarize_fused_transaction_fast_path import REQUIRED_FIELDS
@@ -50,6 +60,9 @@ class _FakeEngine:
 
     def commit_step(self, transaction):
         self.calls.append(("commit",))
+
+    def abort_step(self, transaction):
+        self.calls.append(("abort",))
 
 
 class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
@@ -154,24 +167,35 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
         )
 
     def test_profiler_accumulates_events_across_internal_cycles(self):
+        schedule_calls = []
         torch = SimpleNamespace(
             profiler=SimpleNamespace(
-                ProfilerActivity=SimpleNamespace(CPU="cpu", CUDA="cuda")
+                ProfilerActivity=SimpleNamespace(CPU="cpu", CUDA="cuda"),
+                schedule=lambda **kwargs: schedule_calls.append(kwargs)
+                or "warmup-active-schedule",
             )
         )
         self.assertEqual(
             _profiler_kwargs(torch),
-            {"activities": ["cpu", "cuda"], "acc_events": True},
+            {
+                "activities": ["cpu", "cuda"],
+                "schedule": "warmup-active-schedule",
+                "acc_events": True,
+            },
+        )
+        self.assertEqual(
+            schedule_calls,
+            [{"wait": 0, "warmup": 1, "active": 1, "repeat": 1}],
         )
         self.assertEqual(TRANSACTION_PATHS, ("checked", "trusted"))
 
-    def test_raw_range_pairs_cpu_host_and_cuda_device_in_any_order(self):
+    def test_raw_range_uses_cpu_annotation_host_and_correlated_device(self):
         cpu = self._profile_event(
             "append",
             "DeviceType.CPU",
             is_user_annotation=True,
             cpu_time_total=400.0,
-            device_time_total=0.0,
+            device_time_total=250.0,
             self_cpu_time_total=0.0,
         )
         cuda = self._profile_event(
@@ -187,11 +211,10 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
             is_user_annotation=False,
             device_time_total=999.0,
         )
-        for events in ((cpu, cuda, decoy), (decoy, cuda, cpu)):
+        for events in ((cpu, cuda, decoy), (decoy, cuda, cpu), (cpu,)):
             with self.subTest(order=events):
                 totals = _raw_profile_range_totals(events, "append", 1)
                 self.assertEqual(totals["count"], 1)
-                self.assertEqual(totals["device_count"], 1)
                 self.assertEqual(totals["cpu_time_us"], 400.0)
                 self.assertEqual(totals["device_time_us"], 250.0)
 
@@ -202,31 +225,18 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
                 "cpu",
                 is_user_annotation=True,
                 cpu_time_total=100.0,
-                device_time_total=0.0,
+                device_time_total=60.0,
             ),
             self._profile_event(
                 "append",
                 "cpu",
                 is_user_annotation=True,
                 cpu_time_total=120.0,
-                device_time_total=0.0,
-            ),
-            self._profile_event(
-                "append",
-                "cuda",
-                is_user_annotation=True,
-                device_time_total=60.0,
-            ),
-            self._profile_event(
-                "append",
-                "cuda",
-                is_user_annotation=True,
                 device_time_total=40.0,
             ),
         )
         totals = _raw_profile_range_totals(events, "append", 2)
         self.assertEqual(totals["count"], 2)
-        self.assertEqual(totals["device_count"], 2)
         self.assertEqual(totals["cpu_time_us"], 220.0)
         self.assertEqual(totals["device_time_us"], 100.0)
 
@@ -237,7 +247,7 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
             cpu_time_total=100.0,
             device_time_total=50.0,
         )
-        with self.assertRaisesRegex(RuntimeError, "CPU=0 and CUDA=0"):
+        with self.assertRaisesRegex(IncompleteProfilerTrace, "found CPU=0"):
             _raw_profile_range_totals((non_annotation,), "append", 1)
 
         zero_cpu = self._profile_event(
@@ -247,35 +257,61 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
             cpu_time_total=0.0,
             device_time_total=0.0,
         )
-        cuda = self._profile_event(
-            "append",
-            "cuda",
-            is_user_annotation=True,
-            device_time_total=50.0,
-        )
-        with self.assertRaisesRegex(RuntimeError, "inclusive CPU time"):
-            _raw_profile_range_totals((zero_cpu, cuda), "append", 1)
+        with self.assertRaisesRegex(
+            IncompleteProfilerTrace, "inclusive CPU time"
+        ):
+            _raw_profile_range_totals((zero_cpu,), "append", 1)
 
         cpu = self._profile_event(
             "append",
             "cpu",
             is_user_annotation=True,
             cpu_time_total=100.0,
-            device_time_total=999.0,
-        )
-        invalid_device = self._profile_event(
-            "append",
-            "cuda",
-            is_user_annotation=True,
             device_time_total=float("nan"),
         )
-        with self.assertRaisesRegex(RuntimeError, "CUDA range device time"):
-            _raw_profile_range_totals(
-                (cpu, invalid_device), "append", 1
-            )
-
-        with self.assertRaisesRegex(RuntimeError, "CPU=1 and CUDA=0"):
+        with self.assertRaisesRegex(
+            IncompleteProfilerTrace, "canonical correlated device time"
+        ):
             _raw_profile_range_totals((cpu,), "append", 1)
+
+        extra_cpu = self._profile_event(
+            "append",
+            "cpu",
+            is_user_annotation=True,
+            cpu_time_total=100.0,
+            device_time_total=50.0,
+        )
+        with self.assertRaisesRegex(RuntimeError, "exceeded"):
+            _raw_profile_range_totals((extra_cpu, extra_cpu), "append", 1)
+
+    def test_raw_range_rejects_real_eight_cpu_seven_cuda_shape(self):
+        cpu_ranges = tuple(
+            self._profile_event(
+                "append",
+                "cpu",
+                is_user_annotation=True,
+                cpu_time_total=350.0 + index,
+                device_time_total=0.0 if index == 0 else 3.5,
+            )
+            for index in range(8)
+        )
+        cuda_ranges = tuple(
+            self._profile_event(
+                "append",
+                "cuda",
+                is_user_annotation=True,
+                device_time_total=300.0 + index,
+            )
+            for index in range(7)
+        )
+        with self.assertRaisesRegex(
+            IncompleteProfilerTrace, "canonical correlated device time"
+        ):
+            _raw_profile_range_totals(
+                cpu_ranges + cuda_ranges,
+                "append",
+                8,
+            )
 
     def test_raw_operator_and_cuda_counts_do_not_collapse_device_groups(self):
         events = (
@@ -283,9 +319,329 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
             self._profile_event("aten::item", "cpu"),
             self._profile_event("aten::item", "cuda"),
             self._profile_event("kernel", "cuda"),
+            self._profile_event(
+                "ProfilerStep#1",
+                "cuda",
+                is_user_annotation=True,
+            ),
         )
         self.assertEqual(_raw_cpu_operator_count(events, "aten::item"), 2)
         self.assertEqual(_raw_cuda_event_count(events), 2)
+
+    def test_profile_scalar_counts_are_part_of_capture_completeness(self):
+        checked_events = tuple(
+            self._profile_event("aten::item", "cpu") for _ in range(10)
+        ) + tuple(
+            self._profile_event("aten::_local_scalar_dense", "cpu")
+            for _ in range(10)
+        )
+        self.assertEqual(
+            _profile_scalar_counts(checked_events, "checked", 2),
+            {
+                "profile_item_count": 10,
+                "profile_local_scalar_dense_count": 10,
+            },
+        )
+        self.assertEqual(
+            _profile_scalar_counts((), "trusted", 2),
+            {
+                "profile_item_count": 0,
+                "profile_local_scalar_dense_count": 0,
+            },
+        )
+        with self.assertRaisesRegex(IncompleteProfilerTrace, "incomplete"):
+            _profile_scalar_counts(checked_events[:-1], "checked", 2)
+        with self.assertRaisesRegex(RuntimeError, "exceeded"):
+            _profile_scalar_counts(checked_events[:1], "trusted", 2)
+        with self.assertRaisesRegex(RuntimeError, "exceeded"):
+            _profile_scalar_counts(
+                checked_events
+                + (self._profile_event("aten::item", "cpu"),),
+                "checked",
+                2,
+            )
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            _profile_scalar_counts((), "unknown", 2)
+
+    def test_profile_token_commits_or_aborts_through_public_engine_api(self):
+        token = (("q0", "k0", "v0"), ("q1", "k1", "v1"))
+        engine = _FakeEngine()
+        _run_profile_token(engine, (1, 2), token, commit=False)
+        self.assertEqual(
+            [call[0] for call in engine.calls],
+            ["begin", "layer", "layer", "abort"],
+        )
+
+        engine = _FakeEngine()
+        _run_profile_token(engine, (1, 2), token, commit=True)
+        self.assertEqual(
+            [call[0] for call in engine.calls],
+            ["begin", "layer", "layer", "commit"],
+        )
+
+    def test_profile_warmup_abort_restores_committed_state(self):
+        class Cache:
+            def request_state(self, _request_id):
+                return {"seq_len": 128}
+
+        class Engine:
+            cache = Cache()
+
+            def metrics(self):
+                return {
+                    "open_step_transaction_count": 0,
+                    "cache": {"open_transaction_count": 0},
+                }
+
+            def validate_invariants(self):
+                return True
+
+        _validate_profile_warmup_abort(Engine(), (1, 2), 128)
+
+        engine = Engine()
+        engine.metrics = lambda: {
+            "open_step_transaction_count": 1,
+            "cache": {"open_transaction_count": 0},
+        }
+        with self.assertRaisesRegex(RuntimeError, "open Engine"):
+            _validate_profile_warmup_abort(engine, (1, 2), 128)
+
+        engine = Engine()
+        engine.cache.request_state = lambda _request_id: {"seq_len": 129}
+        with self.assertRaisesRegex(RuntimeError, "committed request length"):
+            _validate_profile_warmup_abort(engine, (1, 2), 128)
+
+    def test_profile_probe_uses_discarded_warmup_then_one_active_window(self):
+        events = (object(),)
+        calls = []
+
+        class FakeProfiler:
+            exited = False
+
+            def __enter__(self):
+                calls.append("enter")
+                return self
+
+            def step(self):
+                calls.append("step")
+
+            def __exit__(self, *_args):
+                self.exited = True
+                calls.append("exit")
+
+            def events(self):
+                self.assert_exited()
+                calls.append("events")
+                return events
+
+            def assert_exited(self):
+                if not self.exited:
+                    raise AssertionError("events parsed before profiler exit")
+
+        profiler = FakeProfiler()
+        torch = SimpleNamespace(
+            cuda=SimpleNamespace(
+                synchronize=lambda: calls.append("synchronize")
+            ),
+            profiler=SimpleNamespace(profile=lambda **_kwargs: profiler),
+        )
+        case = FastPathCase("l2_b4_c128", 2, 4, 128)
+        active_inputs = (("active-1",), ("active-2",))
+        warmup_inputs = (("warmup",),)
+
+        def generate_inputs(_torch, _case, _dtype, count, _seed):
+            return active_inputs if count == 2 else warmup_inputs
+
+        def run_token(_engine, _request_ids, token, *, commit):
+            calls.append(("token", token[0], commit))
+
+        with (
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._make_engine",
+                return_value=(object(), (1, 2, 3, 4)),
+            ),
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._seed_context"
+            ),
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._generate_inputs",
+                side_effect=generate_inputs,
+            ),
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._profiler_kwargs",
+                return_value={},
+            ),
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._run_profile_token",
+                side_effect=run_token,
+            ),
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._validate_profile_warmup_abort",
+                side_effect=lambda *_args: calls.append("validate-abort"),
+            ),
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._raw_profile_range_totals",
+                return_value={
+                    "count": 4,
+                    "cpu_time_us": 400.0,
+                    "device_time_us": 200.0,
+                },
+            ),
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._raw_cuda_event_count",
+                return_value=8,
+            ),
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._profile_scalar_counts",
+                return_value={
+                    "profile_item_count": 20,
+                    "profile_local_scalar_dense_count": 20,
+                },
+            ),
+        ):
+            result = _profile_probe_once(
+                torch,
+                case,
+                "dtype",
+                2,
+                701,
+                "checked",
+            )
+
+        self.assertEqual(
+            calls,
+            [
+                "enter",
+                ("token", "warmup", False),
+                "synchronize",
+                "validate-abort",
+                "step",
+                ("token", "active-1", True),
+                ("token", "active-2", True),
+                "synchronize",
+                "step",
+                "exit",
+                "events",
+            ],
+        )
+        self.assertEqual(result["profile_token_count"], 2)
+        self.assertEqual(result["profile_append_count"], 4)
+
+    def test_profile_probe_retries_only_incomplete_traces(self):
+        success = {"profile_steps": 2}
+        with (
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._profile_probe_once",
+                side_effect=[
+                    IncompleteProfilerTrace("missing first event"),
+                    success,
+                ],
+            ) as probe_once,
+            patch("sys.stderr", new=io.StringIO()),
+        ):
+            result = _profile_probe(
+                "torch", "case", "dtype", 2, 701, "checked"
+            )
+        self.assertEqual(result["profile_attempt_count"], 2)
+        self.assertEqual(result["profile_steps"], 2)
+        self.assertEqual(
+            probe_once.call_args_list[0],
+            probe_once.call_args_list[1],
+        )
+
+        with (
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._profile_probe_once",
+                side_effect=IncompleteProfilerTrace("still incomplete"),
+            ) as probe_once,
+            patch("sys.stderr", new=io.StringIO()),
+        ):
+            with self.assertRaisesRegex(
+                IncompleteProfilerTrace,
+                f"after {MAX_PROFILE_ATTEMPTS} attempts",
+            ):
+                _profile_probe(
+                    "torch", "case", "dtype", 2, 701, "checked"
+                )
+        self.assertEqual(probe_once.call_count, MAX_PROFILE_ATTEMPTS)
+
+        with patch(
+            "benchmarks.run_fused_transaction_fast_path._profile_probe_once",
+            side_effect=RuntimeError("engine failure"),
+        ) as probe_once:
+            with self.assertRaisesRegex(RuntimeError, "engine failure"):
+                _profile_probe(
+                    "torch", "case", "dtype", 2, 701, "checked"
+                )
+        self.assertEqual(probe_once.call_count, 1)
+
+        with self.assertRaisesRegex(ValueError, "max_attempts"):
+            _profile_probe(
+                "torch",
+                "case",
+                "dtype",
+                2,
+                701,
+                "checked",
+                max_attempts=MAX_PROFILE_ATTEMPTS + 1,
+            )
+
+    def test_paired_trial_finishes_both_wall_runs_before_attribution(self):
+        calls = []
+        args = SimpleNamespace(
+            seed=701,
+            transaction_paths=("checked", "trusted"),
+            parity_steps=2,
+        )
+        case = FastPathCase("l2_b4_c128", 2, 4, 128)
+
+        def wall(*call_args):
+            path = call_args[4]
+            calls.append(("wall", path))
+            return {"path": path}
+
+        def attribution(*call_args):
+            path = call_args[5]
+            wall_evidence = call_args[-1]
+            self.assertEqual(wall_evidence["path"], path)
+            calls.append(("attribution", path))
+            return SimpleNamespace(metadata={"transaction_path": path})
+
+        with (
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._parity_probe",
+                return_value={"validated": True},
+            ),
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._run_wall_case",
+                side_effect=wall,
+            ),
+            patch(
+                "benchmarks.run_fused_transaction_fast_path._run_case_attribution",
+                side_effect=attribution,
+            ),
+        ):
+            paired = _run_paired_trial(
+                "torch",
+                args,
+                case,
+                "float16",
+                "dtype",
+                0,
+                "abc1234",
+                "run-abc1234",
+            )
+
+        self.assertEqual(
+            calls,
+            [
+                ("wall", "checked"),
+                ("wall", "trusted"),
+                ("attribution", "checked"),
+                ("attribution", "trusted"),
+            ],
+        )
+        self.assertEqual(len(paired), 2)
 
     def test_runner_row_schema_matches_strict_summary_schema(self):
         case = FastPathCase("l2_b4_c128", 2, 4, 128)
@@ -341,6 +697,7 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
         args = SimpleNamespace(warmup=3, trials=3)
         profile = {
             "profile_steps": 2,
+            "profile_attempt_count": 1,
             "profile_token_count": 2,
             "profile_append_count": 4,
             "profile_decode_count": 4,

@@ -301,6 +301,20 @@ R4-A 不比较两个不同 commit。runner 在同一进程、同一 commit 和�
 
 ```bash
 python benchmarks/run_fused_transaction_fast_path.py \
+  --case l4_b4_c128 \
+  --dtype float16 \
+  --trials 3 \
+  --quick \
+  --output benchmarks/results/r4_fused_transaction_fast_path_l4_stress.csv
+
+python benchmarks/summarize_fused_transaction_fast_path.py \
+  --input benchmarks/results/r4_fused_transaction_fast_path_l4_stress.csv \
+  --output benchmarks/results/r4_fused_transaction_fast_path_l4_stress_summary.md \
+  --expected-trials 3 \
+  --expected-cases l4_b4_c32 \
+  --expected-dtypes float16
+
+python benchmarks/run_fused_transaction_fast_path.py \
   --case all \
   --dtype both \
   --trials 5 \
@@ -312,7 +326,7 @@ python benchmarks/summarize_fused_transaction_fast_path.py \
   --expected-trials 5
 ```
 
-正式矩阵必须是 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`。complete-token latency 使用 `synchronize + perf_counter + synchronize`，计时区间不创建 CUDA event；profiler 是独立 attribution probe。Validator 必须确认 checked 每个 profiled layer 恰有 5 次 `aten::item` 与 `_local_scalar_dense`，trusted 为 0，同时继续验证 block/transaction/Engine accounting、exact parity、rollback 和交替顺序。当前 RTX 证据尚未生成，因此该 summary 还不是 release evidence。
+先通过 l4 3-trial stress quick，再运行正式矩阵。正式矩阵必须是 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`。complete-token latency 使用 `synchronize + perf_counter + synchronize`，计时区间不创建 CUDA event；同一 trial 必须先完成两条 path 的 wall，再开始任一 attribution/rollback，不能让 profiler retry 插在 paired wall 中间。profiler 是独立 attribution probe，使用 WARMUP→active schedule。active CPU user annotation 的 inclusive host/canonical correlated device time必须逐 layer 正且有限，CUDA activity count排除 user annotations；checked 每个 profiled layer恰有 5 次 `aten::item` 与 `_local_scalar_dense`、trusted 为 0。少记 range/scalar 属于 capture incompleteness并触发整 probe 重建，最多三次且写入 `profile_attempt_count`；多出 range/scalar 属于 active-work/fast-path 契约错误，必须立即失败而不能重试。Validator 还必须验证 block/transaction/Engine accounting、exact parity、rollback 和交替顺序。commit `4e18f5d` 的旧 quick 只保留 provisional wall/CPU/scalar 字段，旧 device/event attribution已撤回；正式 RTX 证据尚未生成。
 
 ## 结果文件与提交规则
 
@@ -369,7 +383,7 @@ python scripts/check_release.py --require-clean
 | R3 Shared Prefix correctness | 已完成 | commit `fe72e27` 的 targeted `1 passed`、focused `61 passed, 8 subtests passed` 与 full `361 passed, 25 subtests passed` |
 | R3 Shared Prefix benchmark | 已完成 | commit `fe72e27` 的 8-trial/64-row FP16/BF16 RTX confirmation + strict paired/attribution summary |
 | R3 metadata hot path | 已完成 | submission-time shared-block cache、lookup-count test 与 authoritative Cache cross-check；性能 near-neutral/no stable direction |
-| R4-A trusted transaction | 进行中 | 实现与同 commit strict A/B harness 已准备；RTX correctness、quick 与 5-trial evidence 待执行 |
+| R4-A trusted transaction | 进行中 | 实现与 RTX focused correctness完成；旧 quick保留 provisional wall/CPU/scalar，canonical l4 stress与 5-trial evidence待执行 |
 | Clean WSL editable install | 暂停 | 仓库继续 private；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

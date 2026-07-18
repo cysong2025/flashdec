@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from benchmarks.run_fused_transaction_fast_path import (
+    MAX_PROFILE_ATTEMPTS,
     PROFILE_TIMING_SCOPE,
     TRANSACTION_PATHS,
     WALL_TIMING_SCOPE,
@@ -145,6 +146,7 @@ REQUIRED_FIELDS = set(PAIR_IDENTITY_FIELDS) | {
     "profile_decode_device_ms_per_layer",
     "profile_item_count",
     "profile_local_scalar_dense_count",
+    "profile_attempt_count",
     "rollback_p50_ms",
     "speedup_vs_checked_p50",
 }
@@ -258,6 +260,11 @@ def _validate_numeric_row(row, key):
     for field in ("profile_item_count", "profile_local_scalar_dense_count"):
         if _integer(row, field) < 0:
             raise FastPathValidationError(f"{field} must be non-negative: {key}")
+    profile_attempt_count = _integer(row, "profile_attempt_count")
+    if not 1 <= profile_attempt_count <= MAX_PROFILE_ATTEMPTS:
+        raise FastPathValidationError(
+            f"profile_attempt_count must be in [1, {MAX_PROFILE_ATTEMPTS}]: {key}"
+        )
 
 
 def validate_rows(
@@ -529,6 +536,7 @@ def aggregate(pairs):
         "profile_cuda_event_count",
         "profile_item_count",
         "profile_local_scalar_dense_count",
+        "profile_attempt_count",
     )
     for (dtype, case), group in sorted(grouped.items()):
         values = {
@@ -589,6 +597,11 @@ def aggregate(pairs):
 def render_markdown(input_path, pairs, aggregates, overall):
     pairs = list(pairs)
     first = pairs[0].checked_row
+    profile_attempts = [
+        _integer(row, "profile_attempt_count")
+        for pair in pairs
+        for row in (pair.checked_row, pair.trusted_row)
+    ]
     lines = [
         "# Fused Transaction Fast-path Summary",
         "",
@@ -600,14 +613,15 @@ def render_markdown(input_path, pairs, aggregates, overall):
         f"- PyTorch/CUDA: {first['torch']} / {first['cuda']}.",
         f"- Git commit: `{first['git_commit']}`.",
         "- Checked and trusted paths used identical fused CUDA/Triton math; only the Cache-owned validation boundary differed.",
-        "- Matrix, seed/order, pure-wall timing scope, block accounting, Engine/transaction trajectory, profiler ranges, and invariants were validated.",
+        "- Matrix, seed/order, pure-wall timing scope, block accounting, Engine/transaction trajectory, canonical profiler ranges, bounded capture attempts, and invariants were validated.",
+        f"- Profiler capture attempts: {sum(profile_attempts)} total; extra retries: {sum(value - 1 for value in profile_attempts)}; maximum per row: {max(profile_attempts)}.",
         "- Complete-token latency is pure synchronized wall time with no CUDA events in its interval; profiler fields are attribution-only.",
         "",
-        "Ratios above 1 favor trusted dispatch. Latency ratios are checked/trusted; throughput is trusted/checked; CUDA-event ratio means fewer events for trusted.",
+        "Ratios above 1 favor trusted dispatch. Latency ratios are checked/trusted; throughput is trusted/checked; CUDA-activity ratio means fewer non-annotation device activities for trusted.",
         "",
         "## Cross-trial Cases",
         "",
-        "| dtype | case | p50 median [min,max] | p90 | p99 [min,max] | TPS | append CPU | append device | decode device | CUDA events | direction |",
+        "| dtype | case | p50 median [min,max] | p90 | p99 [min,max] | TPS | append CPU | append device | decode device | CUDA activities | direction |",
         "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in aggregates:
@@ -631,8 +645,8 @@ def render_markdown(input_path, pairs, aggregates, overall):
             "",
             "## Absolute Attribution Medians",
             "",
-            "| dtype | case | path | token p50 ms | begin host ms | commit host ms | append CPU ms/layer | append device ms/layer | decode device ms/layer | CUDA events | item | local scalar |",
-            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| dtype | case | path | token p50 ms | begin host ms | commit host ms | append CPU ms/layer | append device ms/layer | decode device ms/layer | CUDA activities | item | local scalar | capture attempts |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for row in aggregates:
@@ -648,7 +662,8 @@ def render_markdown(input_path, pairs, aggregates, overall):
                 f"{absolute['profile_decode_device_ms_per_layer']:.6f} | "
                 f"{absolute['profile_cuda_event_count']:.0f} | "
                 f"{absolute['profile_item_count']:.0f} | "
-                f"{absolute['profile_local_scalar_dense_count']:.0f} |"
+                f"{absolute['profile_local_scalar_dense_count']:.0f} | "
+                f"{absolute['profile_attempt_count']:.1f} |"
             )
     lines.extend(
         [
@@ -667,13 +682,13 @@ def render_markdown(input_path, pairs, aggregates, overall):
             f"| profiler append CPU/layer | {overall['profile_append_cpu']:.4f}x |",
             f"| profiler append device/layer | {overall['profile_append_device']:.4f}x |",
             f"| profiler decode device/layer | {overall['profile_decode_device']:.4f}x |",
-            f"| profiler CUDA events | {overall['profile_cuda_events']:.4f}x |",
+            f"| profiler CUDA activities | {overall['profile_cuda_events']:.4f}x |",
             "",
             "## Interpretation",
             "",
             "- `unstable_crosses_1` means the complete-token p50 direction changes across trials; do not claim a stable win.",
             "- The trusted path is accepted only for Cache-owned transaction metadata; public raw CUDA calls retain checked validation.",
-            "- Profiler CPU/device totals, item counts, and event counts explain the removed synchronization boundary but are not release latency.",
+            "- Profiler CPU/correlated-device totals, item counts, non-annotation CUDA activities, and bounded recapture attempts explain the removed synchronization boundary but are not release latency.",
             "- p99 must be reported with its full range, and a ratio below 1 remains a negative result.",
             "",
         ]

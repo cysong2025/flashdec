@@ -33,15 +33,20 @@ RTX 5070 WSL 已完成 commit `1169cb8` 的 focused CUDA suite：`40 passed in 2
 
 第一次 FP16 quick 已写出 CSV，但 strict summary 拒绝 `profile_append_cpu_ms_per_layer=0`。审计确认运行时并非零 host cost：runner 先调用 `key_averages()`，随后用 `{event.key: event}` 再次压平，而 PyTorch 会按 device type 与 user annotation 分组；同名 CUDA group 覆盖 CPU user annotation 后，读取其 `cpu_time_total` 合法得到 0。第一版修复改读 unaggregated events 并精确选择 CPU user annotation，但仍错误假设同一个 CPU range 必须携带 device total；`.item()` 与 CUDA event 已改为按原始事件计数。validator 始终保持严格，修复前 CSV 作废。
 
-commit `4ee5fab` 的第二次 quick 进一步发现：`flashdec::paged_decode` CPU user annotation 的 host time 为 `116.108 us`，但该 CPU event 的 `device_time_total=0`。这是 Triton launch 的 device event 没有关联成 CPU annotation child，并非 decode 没有执行。最终取数契约改为：CPU user annotation 只提供 inclusive host time；同名 CUDA user range 独立提供 device time；两类原始 range 数都必须等于 `steps * layers`。二者不相加，零值仍失败。第二次运行在写 CSV 前终止，同样没有性能结论。
+commit `4ee5fab` 的第二次 quick 进一步发现：fresh capture 的第一个 `flashdec::paged_decode` CPU user annotation 有效 host time 为 `116.108 us`，但 correlated device total 为 0。commit `4e18f5d` 随后改用同名 CUDA user annotation 作为 device source；这使 quick 能写出 summary，但正式矩阵证明该 CUDA peer 并不是 PyTorch 保证的一一契约。
 
-commit `4e18f5d` 的第三次 RTX 5070 FP16 quick 已通过严格 2-row summary。`l2_b4_c32` checked/trusted token p50 为 `2.403638/1.346150 ms`，trusted p50/TPS ratio 为 `1.7856x/1.8755x`；append CPU/device ratio 为 `2.3751x/2.4540x`，CUDA events 从 `166` 降至 `106`，item/local-scalar 从 `20/20` 降至 `0/0`，decode device ratio 为 `1.0062x`。完整 token p50 绝对减少 `1.057488 ms`（约 `44.0%`），与 append attribution 和 scalar extraction 消失方向一致；begin 接近中性，commit 略慢且绝对量很小，不是主要收益来源。
+commit `4e18f5d` 的第三次 RTX 5070 FP16 quick 中，`l2_b4_c32` checked/trusted token p50 为 `2.403638/1.346150 ms`，trusted p50/TPS ratio 为 `1.7856x/1.8755x`；append CPU ratio 为 `2.3751x`，item/local-scalar 从 `20/20` 降至 `0/0`。完整 token p50 绝对减少 `1.057488 ms`（约 `44.0%`）。这些 wall/CPU/scalar 字段保留为 provisional 方向；旧 append/decode device 和 CUDA-event 字段依赖同名 CUDA user spans，撤回并等待重算。
+
+commit `e88900a` 的正式矩阵在一个 l4 attribution probe 执行完 `2 steps x 4 layers`、得到 8 个 CPU append ranges 后，只捕获 7 个同名 CUDA user annotations。runner 在写 CSV 前按旧契约终止，因此没有正式性能数据。CPU `8/8` 证明 Engine 没有少执行 layer；问题位于 Kineto capture/证据定义。PyTorch 只保证 `record_function` CPU label，不能把同名 CUDA user annotation 当硬 peer。
+
+新契约使用 profiler `wait=0, warmup=1, active=1` schedule：warmup token完整执行后 abort，再进入 active evidence；CPU annotation 的 inclusive host 与 canonical correlated device total 分别提供 host/device attribution，CUDA activity count 排除 user annotation。range、device time 或 checked/trusted scalar count 任一不完整都重建整个 probe；只有这类 trace completeness 错误允许用相同 seed 和全新 engine/profiler最多重采集三次，attempt count写入 CSV，业务错误立即透传，`N-1` 和零值仍失败。同一 trial 的 checked/trusted 正式 wall 都在 attribution 前完成，retry 不会污染 paired wall 顺序。
 
 该 quick 只有单 dtype、单缩小 case、单 trial；p90/p99 来自极小样本，不能形成稳定尾延迟或全矩阵结论。Profiler CPU/device totals 来自独立 instrumented run，不能彼此相加，也不能替代 non-instrumented wall。当前 commit 的完整回归和五轮正式 A/B 完成前，不把 R4-A 标记为完成。正式门槛仍是 complete-token p50 总体至少 `1.05x`，且全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1；未达到门槛就保留负结果并停止扩展到 CUDA Graph。
 
 ## 下一步
 
-1. 在 quick 证据 commit 上运行 RTX 5070 完整 pytest，并保存 commit-bound 日志；不得用旧 focused 结果替代。
-2. 运行 FP16/BF16、8 cases、checked/trusted、5 trials 的 160-row 正式矩阵，并用 strict summary 验证 80 个配对 trial。
-3. 检查 overall p50 `>=1.05x`，并按所有 dtype/case 的五轮 `[min,max]` 审核是否穿过 1；保留 p90/p99 全范围。
-4. 根据门槛决定进入 R4-B persistent metadata，或直接转入 R4-C integrated scheduled multi-layer correctness workload。
+1. 在 canonical profiler 修复 commit 上运行 dependency-free tests、RTX focused/full correctness并保存日志。
+2. 先跑 l4 FP16 3-trial stress quick，验证 strict summary、canonical device time、non-user CUDA activity 和 `profile_attempt_count <= 3`。
+3. stress quick 通过后运行 FP16/BF16、8 cases、checked/trusted、5 trials 的 160-row 正式矩阵，并用 strict summary 验证 80 个配对 trial。
+4. 检查 overall p50 `>=1.05x`，并按所有 dtype/case 的五轮 `[min,max]` 审核是否穿过 1；保留 p90/p99 全范围。
+5. 根据门槛决定进入 R4-B persistent metadata，或直接转入 R4-C integrated scheduled multi-layer correctness workload。

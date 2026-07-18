@@ -54,7 +54,7 @@ R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享�
 
 ## 当前目标：R4 Trusted CUDA Transaction Fast Path
 
-状态：R4-A 代码、配对 benchmark harness、dependency-free validator tests 与 RTX focused CUDA correctness（`40 passed in 2.34s`）已完成。两次无效 quick 修正 profiler 取数契约后，commit `4e18f5d` 的第三次 FP16 `l2_b4_c32` quick 已通过严格 2-row summary：complete-token p50 `1.7856x`、TPS `1.8755x`、append CPU/device `2.3751x/2.4540x`，checked 的 `20/20` 次 item/local-scalar 在 trusted 路径降为 `0/0`，decode device 为 `1.0062x`。该单 trial 只通过方向 gate；当前 commit 的完整回归和 5-trial 正式 performance 尚待执行。仓库继续保持 private。
+状态：R4-A 代码、配对 benchmark harness 与 RTX focused CUDA correctness（`40 passed in 2.34s`）已完成。commit `4e18f5d` quick 的 provisional complete-token p50/TPS `1.7856x/1.8755x`、append CPU `2.3751x` 和 item/local-scalar `20/20 -> 0/0` 仍可保留；旧 device/event attribution 依赖 PyTorch 未保证的一一 CUDA user annotation，已撤回。commit `e88900a` 的正式矩阵在 l4 probe 捕获 CPU `8/8`、CUDA peer `7/8` 后严格终止，没有写出 CSV。canonical profiler 修复与本地 dependency-free/release 门禁已完成；当前 commit 的 RTX 完整回归、l4 stress quick 和 5-trial 正式 performance 尚待执行。仓库继续保持 private。
 
 R2 profiler 显示 multi-layer fused path 的系统收益主要来自 append/launch，而 attention device time 基本不变。进一步审计发现，cache-owned transaction 每个 layer 仍通过公开 raw primitive 执行五次 CUDA index reduction + `.item()`：block id 上下界、offset 上下界和 position 非负。这些值已经由 Cache allocator 在 host 侧构造并证明范围，因此内部路径存在重复的 host/stream synchronization。
 
@@ -69,12 +69,12 @@ R4-A 的边界：
 验证顺序：
 
 1. public invalid-index、trusted/checked parity、detached-view tampering、Engine public-API routing 与 rollback tests。
-2. RTX focused correctness 已通过；在 quick 修复 commit 上补跑完整回归并保存日志。
-3. 同 commit checked/trusted quick A/B 已通过；下一步执行 FP16/BF16、8 cases、5 trials、160 rows 的正式矩阵。正式 wall 使用同步后的 `perf_counter`，CUDA event/profiler 独立归因。
+2. RTX focused correctness 已通过；在 canonical profiler 修复 commit 上补跑完整回归并保存日志。
+3. 先执行 l4、FP16、3 trials stress quick，验证每行 canonical CPU/device range 完整且 `profile_attempt_count <= 3`；通过后再执行 FP16/BF16、8 cases、5 trials、160 rows 的正式矩阵。正式 wall 使用同步后的 `perf_counter`，profiler 独立归因。
 4. strict summary 完整验证后，只有 p50 总体至少 `1.05x`，且正式矩阵全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1，才进入 transaction metadata reuse；否则记录负结果并停止该优化线。
 5. R4-A 冻结后，再实现统一 scheduled multi-layer workload，组合验证 R1/R2/R3。
 
-Profiler quick 必须从 `profiler.events()` 原始事件中分别筛选同名 CPU user annotation 与 CUDA user range：前者提供 inclusive host time，后者提供 device time，两者数量都必须等于 `steps * layers`。不能用同名 key 字典压平分组，也不能要求 Triton kernel 一定成为 CPU annotation 的 child。validator 仍拒绝零 host/device attribution；修复前证据必须重新生成。
+Profiler 使用 `wait=0, warmup=1, active=1` 的独立 capture cycle：warmup token 完整执行后 abort，不进入 active evidence。active raw events 只接受精确 `steps * layers` 个 CPU user annotations；其 `cpu_time_total` 提供 inclusive host time，canonical `device_time_total` 提供 correlated device time。CUDA activity count 排除 user annotations。少记结构/scalar、零值或非有限值会整体重建 probe，最多三次，并把 `profile_attempt_count` 写入 CSV；多记 range/scalar 则立即按契约错误终止。不能接受 `N-1`、复制邻近值或使用旧同名 CUDA span。
 
 详细信任边界见[Multi-layer KV Transaction 设计](design_multi_layer_kv_transaction.md)。
 

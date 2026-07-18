@@ -333,9 +333,12 @@ capacity failure -> refcount and ownership unchanged
 - trusted path 仍验证 shape、dtype、device、contiguity、RoPE 参数和 `int64` metadata。
 - 本 slice 只删除 device reduction + `.item()`；每层 transaction-view H2D materialization/copy 留给 R4-B。
 - 同 commit、交替顺序比较 checked/trusted；正式 wall 区间不 record CUDA event，profiler 单独归因。
+- profiler 使用 WARMUP→active capture、CPU FunctionEvent canonical device time和 non-user CUDA activity count；少记 evidence 最多重采集三次并记录 attempt count，多出 range/scalar 立即失败。
 - 第一 slice 不同时修改 transaction metadata materialization、output buffer 或 CUDA Graph。
 
-验收门槛：correctness/rollback/trajectory 完全一致；complete-token p50 总体至少 `1.05x`，且目标 l2/l4 case 跨 trial 不穿过 1。未达到门槛则记录负结果并停止扩展到 CUDA Graph。
+当前证据：focused CUDA correctness已通过；旧单 trial quick仅保留 provisional wall/CPU/scalar 方向。第一次 formal因错误要求同名 CUDA user peer而 fail closed，未生成 CSV；canonical profiler修复已完成本地门禁，下一步先执行 RTX l4 stress quick。
+
+验收门槛：correctness/rollback/trajectory完全一致；complete-token p50总体至少 `1.05x`，且全部 16 个 `dtype x case` 分组的五轮 p50范围不穿过 1。未达到门槛则记录负结果并停止扩展到 CUDA Graph。
 
 ### R4-B：Persistent transaction metadata
 

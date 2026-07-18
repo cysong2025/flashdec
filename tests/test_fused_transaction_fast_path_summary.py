@@ -187,8 +187,17 @@ class FusedTransactionFastPathSummaryTests(unittest.TestCase):
         )
         self.assertIn("Rows: 12; paired trials: 6", markdown)
         self.assertIn("pure synchronized wall time", markdown)
+        self.assertIn("extra retries: 0", markdown)
         self.assertIn("trusted_faster", markdown)
         self.assertIn("Absolute Attribution Medians", markdown)
+
+        aggregates[0]["absolute"]["checked"][
+            "profile_attempt_count"
+        ] = 1.5
+        markdown = render_markdown(
+            "results.csv", pairs, aggregates, overall
+        )
+        self.assertIn("| 1.5 |", markdown)
 
     def test_rejects_incomplete_or_unknown_matrix(self):
         with self.assertRaisesRegex(FastPathValidationError, "matrix incomplete"):
@@ -300,6 +309,23 @@ class FusedTransactionFastPathSummaryTests(unittest.TestCase):
                         FastPathValidationError, f"{field} mismatch"
                     ):
                         _validate(rows)
+
+    def test_validates_bounded_profiler_capture_attempts(self):
+        for value in ("1", "2", "3"):
+            with self.subTest(value=value):
+                rows = _rows()
+                rows[0]["profile_attempt_count"] = value
+                _validate(rows)
+
+        for value in ("0", "4"):
+            with self.subTest(value=value):
+                rows = _rows()
+                rows[0]["profile_attempt_count"] = value
+                with self.assertRaisesRegex(
+                    FastPathValidationError,
+                    "profile_attempt_count must be in",
+                ):
+                    _validate(rows)
 
     def test_aggregate_marks_p50_direction_crossing_one_as_unstable(self):
         rows = _rows()

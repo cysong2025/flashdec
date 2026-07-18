@@ -33,6 +33,11 @@ WALL_TIMING_SCOPE = (
     "inputs, context seed, JIT build, and attribution probe excluded"
 )
 PROFILE_TIMING_SCOPE = "separate instrumented attribution probe"
+MAX_PROFILE_ATTEMPTS = 3
+
+
+class IncompleteProfilerTrace(RuntimeError):
+    """Raised when Kineto did not capture a complete attribution trace."""
 
 
 @dataclass(frozen=True)
@@ -353,21 +358,18 @@ def _raw_profile_range_totals(raw_events, key, expected_count):
         if _event_is_device(event, "cpu")
         and getattr(event, "is_user_annotation", False) is True
     )
-    cuda_ranges = tuple(
-        event
-        for event in candidates
-        if _event_is_device(event, "cuda")
-        and getattr(event, "is_user_annotation", False) is True
-    )
-    if (
-        len(cpu_ranges) != expected_count
-        or len(cuda_ranges) != expected_count
-    ):
+    if len(cpu_ranges) > expected_count:
         diagnostics = [_event_diagnostic(event) for event in candidates]
         raise RuntimeError(
+            f"profiler range {key!r} exceeded the active-work contract: "
+            f"expected {expected_count} raw CPU user annotations, found "
+            f"CPU={len(cpu_ranges)}; candidates={diagnostics}"
+        )
+    if len(cpu_ranges) < expected_count:
+        diagnostics = [_event_diagnostic(event) for event in candidates]
+        raise IncompleteProfilerTrace(
             f"profiler range {key!r} expected {expected_count} raw CPU user "
-            f"annotations and CUDA user ranges, found CPU={len(cpu_ranges)} and "
-            f"CUDA={len(cuda_ranges)}; candidates={diagnostics}"
+            f"annotations, found CPU={len(cpu_ranges)}; candidates={diagnostics}"
         )
 
     cpu_times_us = tuple(
@@ -376,22 +378,21 @@ def _raw_profile_range_totals(raw_events, key, expected_count):
     )
     device_times_us = tuple(
         _event_time_us(event, "device_time_total", "cuda_time_total")
-        for event in cuda_ranges
+        for event in cpu_ranges
     )
     for label, values, ranges in (
         ("inclusive CPU time", cpu_times_us, cpu_ranges),
-        ("CUDA range device time", device_times_us, cuda_ranges),
+        ("canonical correlated device time", device_times_us, cpu_ranges),
     ):
         for index, value in enumerate(values):
             if value <= 0.0 or not math.isfinite(value):
-                raise RuntimeError(
+                raise IncompleteProfilerTrace(
                     f"profiler range {key!r} event {index} {label} must be "
                     f"positive and finite; value={value}, "
                     f"range={_event_diagnostic(ranges[index])}"
                 )
     return {
         "count": len(cpu_ranges),
-        "device_count": len(cuda_ranges),
         "cpu_time_us": sum(cpu_times_us),
         "device_time_us": sum(device_times_us),
     }
@@ -406,9 +407,38 @@ def _raw_cpu_operator_count(raw_events, key):
     )
 
 
+def _profile_scalar_counts(raw_events, transaction_path, expected_layers):
+    if transaction_path not in TRANSACTION_PATHS:
+        raise ValueError(f"unsupported transaction path: {transaction_path}")
+    counts = {
+        "profile_item_count": _raw_cpu_operator_count(
+            raw_events, "aten::item"
+        ),
+        "profile_local_scalar_dense_count": _raw_cpu_operator_count(
+            raw_events, "aten::_local_scalar_dense"
+        ),
+    }
+    expected = 5 * expected_layers if transaction_path == "checked" else 0
+    if any(value > expected for value in counts.values()):
+        raise RuntimeError(
+            f"profiler scalar extraction counts exceeded the "
+            f"{transaction_path} path contract: expected {expected}, "
+            f"found {counts}"
+        )
+    if any(value < expected for value in counts.values()):
+        raise IncompleteProfilerTrace(
+            f"profiler scalar extraction counts are incomplete for "
+            f"{transaction_path}: expected {expected}, found {counts}"
+        )
+    return counts
+
+
 def _raw_cuda_event_count(raw_events):
     return sum(
-        1 for event in raw_events if _event_is_device(event, "cuda")
+        1
+        for event in raw_events
+        if _event_is_device(event, "cuda")
+        and getattr(event, "is_user_annotation", False) is not True
     )
 
 
@@ -418,11 +448,49 @@ def _profiler_kwargs(torch):
             torch.profiler.ProfilerActivity.CPU,
             torch.profiler.ProfilerActivity.CUDA,
         ],
+        "schedule": torch.profiler.schedule(
+            wait=0,
+            warmup=1,
+            active=1,
+            repeat=1,
+        ),
         "acc_events": True,
     }
 
 
-def _profile_probe(torch, case, dtype, steps, seed):
+def _run_profile_token(engine, request_ids, token_inputs, *, commit):
+    transaction = engine.begin_step(request_ids)
+    for layer_idx, (q, k, v) in enumerate(token_inputs):
+        engine.step_layer(transaction, layer_idx, q, k, v)
+    if commit:
+        engine.commit_step(transaction)
+    else:
+        engine.abort_step(transaction)
+
+
+def _validate_profile_warmup_abort(engine, request_ids, expected_seq_len):
+    metrics = engine.metrics()
+    if metrics["open_step_transaction_count"] != 0:
+        raise RuntimeError("profile warmup left an open Engine transaction")
+    if metrics["cache"]["open_transaction_count"] != 0:
+        raise RuntimeError("profile warmup left an open Cache transaction")
+    if any(
+        engine.cache.request_state(request_id)["seq_len"] != expected_seq_len
+        for request_id in request_ids
+    ):
+        raise RuntimeError("profile warmup changed committed request length")
+    if not engine.validate_invariants():
+        raise RuntimeError("profile warmup violated Engine invariants")
+
+
+def _profile_probe_once(
+    torch,
+    case,
+    dtype,
+    steps,
+    seed,
+    transaction_path,
+):
     engine, request_ids = _make_engine(
         torch,
         case,
@@ -432,15 +500,32 @@ def _profile_probe(torch, case, dtype, steps, seed):
     )
     _seed_context(torch, engine, request_ids, case.context_tokens)
     inputs = _generate_inputs(torch, case, dtype, steps, seed)
+    warmup_input = _generate_inputs(torch, case, dtype, 1, seed + 1_000_000)[0]
     completed_tokens = 0
     with torch.profiler.profile(**_profiler_kwargs(torch)) as profiler:
+        _run_profile_token(
+            engine,
+            request_ids,
+            warmup_input,
+            commit=False,
+        )
+        torch.cuda.synchronize()
+        _validate_profile_warmup_abort(
+            engine,
+            request_ids,
+            case.context_tokens,
+        )
+        profiler.step()
         for token_inputs in inputs:
-            transaction = engine.begin_step(request_ids)
-            for layer_idx, (q, k, v) in enumerate(token_inputs):
-                engine.step_layer(transaction, layer_idx, q, k, v)
-            engine.commit_step(transaction)
+            _run_profile_token(
+                engine,
+                request_ids,
+                token_inputs,
+                commit=True,
+            )
             completed_tokens += 1
         torch.cuda.synchronize()
+        profiler.step()
 
     raw_events = tuple(profiler.events())
     expected_layers = steps * case.num_layers
@@ -461,7 +546,7 @@ def _profile_probe(torch, case, dtype, steps, seed):
         "profile_decode_count": expected_layers,
     }
     if counts != expected_counts:
-        raise RuntimeError(
+        raise IncompleteProfilerTrace(
             f"fused transaction profiler range counts are invalid: {counts}"
         )
 
@@ -470,7 +555,14 @@ def _profile_probe(torch, case, dtype, steps, seed):
     decode_device_ms = decode["device_time_us"] / 1_000.0
     cuda_event_count = _raw_cuda_event_count(raw_events)
     if cuda_event_count <= 0:
-        raise RuntimeError("profiler recorded no raw CUDA events")
+        raise IncompleteProfilerTrace(
+            "profiler recorded no non-annotation raw CUDA activities"
+        )
+    scalar_counts = _profile_scalar_counts(
+        raw_events,
+        transaction_path,
+        expected_layers,
+    )
     return {
         "profile_steps": steps,
         **counts,
@@ -478,13 +570,53 @@ def _profile_probe(torch, case, dtype, steps, seed):
         "profile_append_cpu_ms_per_layer": append_cpu_ms / expected_layers,
         "profile_append_device_ms_per_layer": append_device_ms / expected_layers,
         "profile_decode_device_ms_per_layer": decode_device_ms / expected_layers,
-        "profile_item_count": _raw_cpu_operator_count(
-            raw_events, "aten::item"
-        ),
-        "profile_local_scalar_dense_count": _raw_cpu_operator_count(
-            raw_events, "aten::_local_scalar_dense"
-        ),
+        **scalar_counts,
     }
+
+
+def _profile_probe(
+    torch,
+    case,
+    dtype,
+    steps,
+    seed,
+    transaction_path,
+    *,
+    max_attempts=MAX_PROFILE_ATTEMPTS,
+):
+    max_attempts = int(max_attempts)
+    if max_attempts <= 0 or max_attempts > MAX_PROFILE_ATTEMPTS:
+        raise ValueError(
+            f"max_attempts must be in [1, {MAX_PROFILE_ATTEMPTS}]"
+        )
+    failures = []
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = _profile_probe_once(
+                torch,
+                case,
+                dtype,
+                steps,
+                seed,
+                transaction_path,
+            )
+        except IncompleteProfilerTrace as exc:
+            failures.append(str(exc))
+            if attempt == max_attempts:
+                raise IncompleteProfilerTrace(
+                    f"profiler attribution remained incomplete after "
+                    f"{max_attempts} attempts: {' | '.join(failures)}"
+                ) from exc
+            print(
+                f"Profiler attribution attempt {attempt}/{max_attempts} was "
+                f"incomplete; rebuilding the probe: {exc}",
+                file=sys.stderr,
+            )
+            continue
+        result = dict(result)
+        result["profile_attempt_count"] = attempt
+        return result
+    raise AssertionError("unreachable profiler retry state")
 
 
 def _rollback_probe(torch, case, dtype, repeats, seed):
@@ -654,19 +786,13 @@ def _summarize_row(
     )
 
 
-def _run_case(
+def _run_wall_case(
     torch,
     args,
     case,
-    dtype_name,
     dtype,
     transaction_path,
-    trial,
     trial_seed,
-    path_order,
-    parity,
-    commit,
-    run_id,
 ):
     with _transaction_path_context(transaction_path):
         warmup_engine, warmup_ids = _make_engine(
@@ -692,12 +818,32 @@ def _run_case(
         _seed_context(torch, engine, request_ids, case.context_tokens)
         inputs = _generate_inputs(torch, case, dtype, args.repeat, trial_seed)
         timings = _run_tokens(torch, engine, request_ids, inputs)
+    return {"timings": timings, "engine": engine}
+
+
+def _run_case_attribution(
+    torch,
+    args,
+    case,
+    dtype_name,
+    dtype,
+    transaction_path,
+    trial,
+    trial_seed,
+    path_order,
+    parity,
+    commit,
+    run_id,
+    wall_evidence,
+):
+    with _transaction_path_context(transaction_path):
         profile = _profile_probe(
             torch,
             case,
             dtype,
             args.profile_steps,
             trial_seed + 200_000,
+            transaction_path,
         )
         rollback = _rollback_probe(
             torch,
@@ -716,14 +862,69 @@ def _run_case(
         trial,
         trial_seed,
         path_order,
-        timings,
+        wall_evidence["timings"],
         profile,
         rollback,
         parity,
-        engine,
+        wall_evidence["engine"],
         commit,
         run_id,
     )
+
+
+def _run_paired_trial(
+    torch,
+    args,
+    case,
+    dtype_name,
+    dtype,
+    trial_index,
+    commit,
+    run_id,
+):
+    trial = trial_index + 1
+    trial_seed = args.seed + trial_index
+    path_order = _trial_path_order(args.transaction_paths, trial_index)
+    parity = _parity_probe(
+        torch,
+        case,
+        dtype,
+        args.parity_steps,
+        trial_seed + 400_000,
+    )
+
+    # Finish both non-instrumented wall measurements before either path can
+    # enter a profiler retry or rollback probe. This keeps paired wall timing
+    # symmetric even when Kineto needs a fresh attribution capture.
+    wall_evidence = {
+        transaction_path: _run_wall_case(
+            torch,
+            args,
+            case,
+            dtype,
+            transaction_path,
+            trial_seed,
+        )
+        for transaction_path in path_order
+    }
+    return [
+        _run_case_attribution(
+            torch,
+            args,
+            case,
+            dtype_name,
+            dtype,
+            transaction_path,
+            trial,
+            trial_seed,
+            path_order,
+            parity,
+            commit,
+            run_id,
+            wall_evidence[transaction_path],
+        )
+        for transaction_path in path_order
+    ]
 
 
 def _with_speedup(result, checked_result):
@@ -802,33 +1003,16 @@ def main():
     for dtype_name, dtype in _requested_dtypes(torch, args.dtype):
         for case in cases:
             for trial_index in range(args.trials):
-                trial = trial_index + 1
-                trial_seed = args.seed + trial_index
-                path_order = _trial_path_order(args.transaction_paths, trial_index)
-                parity = _parity_probe(
+                paired = _run_paired_trial(
                     torch,
+                    args,
                     case,
+                    dtype_name,
                     dtype,
-                    args.parity_steps,
-                    trial_seed + 400_000,
+                    trial_index,
+                    commit,
+                    run_id,
                 )
-                paired = [
-                    _run_case(
-                        torch,
-                        args,
-                        case,
-                        dtype_name,
-                        dtype,
-                        transaction_path,
-                        trial,
-                        trial_seed,
-                        path_order,
-                        parity,
-                        commit,
-                        run_id,
-                    )
-                    for transaction_path in path_order
-                ]
                 checked = next(
                     row
                     for row in paired
