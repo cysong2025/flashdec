@@ -54,6 +54,7 @@
 - R3-D submission-time shared metadata cache：移除 scheduling snapshot、commitment 与 invariant 热路径中的重复 prefix registry lookup，同时保留 Cache shared-block/version authoritative cross-check；新增 lookup-count correctness test。
 - R3-D commit `fe72e27` 的 RTX 5070 8-trial confirmation 共 64 行并通过严格校验。75% hit 仍将 context physical blocks 从 `64/64` 降至 `20/64`、节省 `68.8%`/`5.5 MiB`，并将 bounded-pool admission 从 `9/16` 提高到 `16/16`。所有非零 hit-rate 的 complete、scheduler 与 Engine p50 paired range 均跨过 1，因此冻结为 near-neutral/no stable direction，不声明稳定加速或回退。
 - confirmation 保留离群点：BF16 trial 1 的 25% case 主要是 Engine 整行变慢，FP16 trial 7 的 25% case 是尾部尖峰；相同执行顺序的第二轮均未复现，端点 `nvidia-smi` 快照也不足以确定根因。
+- R4-A commit `4e18f5d` 的 RTX 5070 FP16 `l2_b4_c32` quick 通过严格 2-row 配对校验：trusted 相对 checked 的 complete-token p50/TPS 为 `1.7856x/1.8755x`，append CPU/device 为 `2.3751x/2.4540x`，CUDA events 从 `166` 降至 `106`，item/local-scalar 从 `20/20` 降至 `0/0`，decode device 为近中性的 `1.0062x`。该单 trial 只允许进入正式矩阵，不构成稳定 speedup 或尾延迟结论。
 
 ### Correctness evidence
 
@@ -66,6 +67,7 @@
 - R3-D commit `fe72e27` RTX 5070 targeted hot-path test：`1 passed`；focused：`61 passed, 8 subtests passed`；完整回归：`361 passed, 25 subtests passed in 6.28s`。
 - R4-A commit `1169cb8` RTX 5070 focused CUDA suite：`40 passed in 2.34s`。第一次 quick CSV 因 profiler CPU/CUDA 分组选择缺陷未通过严格 summary，性能证据作废并等待修复后重跑。
 - R4-A commit `4ee5fab` 的第二次 quick 在 `flashdec::paged_decode` CPU annotation 记录 `116.108 us` host time，但其自身 device total 为 0；runner 在写 CSV 前严格失败。该结果用于修正 CPU/CUDA range 归因契约，不构成性能结论。
+- R4-A commit `4e18f5d` 的第三次 quick strict summary 已通过；当前 commit 的完整 RTX 回归仍待执行，因此 correctness 完成状态仍以 `1169cb8` 的 focused CUDA suite 为限。
 
 ### Pending before v0.1.0
 

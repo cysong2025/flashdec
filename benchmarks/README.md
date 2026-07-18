@@ -270,6 +270,8 @@ python benchmarks/summarize_fused_transaction_fast_path.py \
   --expected-dtypes float16
 ```
 
+commit `4e18f5d` 的 RTX 5070 quick 已严格验证 2 rows：FP16 `l2_b4_c32` trusted 相对 checked 的 complete-token p50/TPS 为 `1.7856x/1.8755x`，checked 的 item/local-scalar 计数为 `20/20`、trusted 为 `0/0`，decode device 为 `1.0062x`。这只通过单 trial 方向 gate；不能把 quick p90/p99 或该 case 的比例当作全矩阵稳定结论，正式执行前还需在证据 commit 上完成 full pytest。
+
 正式矩阵使用五轮以降低 host/stream 抖动对微优化判断的影响：
 
 ```bash
@@ -285,4 +287,4 @@ python benchmarks/summarize_fused_transaction_fast_path.py \
   --expected-trials 5
 ```
 
-正式矩阵共 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`。`checked` 与 `trusted` 复用相同 Cache transaction API；runner 只在 benchmark context 中把 Cache 内部 raw launch 切换为 checked 或 trusted，因此状态机和 Engine 路由不变。完整 token latency 使用 non-instrumented synchronized wall；profiler 必须证明 checked 每个 profiled layer 有 5 次 `aten::item`/`aten::_local_scalar_dense`、trusted 为 0。append/decode attribution 从 `profiler.events()` 原始事件中分别选择 CPU user annotation 与同名 CUDA user range，二者数量都必须匹配真实 layer 调用；host 使用 CPU range 的 inclusive total，device 使用 CUDA range total，不依赖 Triton kernel 与 CPU event 的 child 关联。CUDA event 和 scalar operator 也按原始事件计数，不能用同名 key 字典压平 CPU/CUDA 分组。零 host/device attribution 仍是无效证据，不能放宽 validator 或手工修 CSV。该证据只归因于 device-value validation，仍存在的 transaction-view H2D materialization/copy 留给独立 R4-B。
+正式矩阵共 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`，strict summary 应报告 80 个 paired trials。`checked` 与 `trusted` 复用相同 Cache transaction API；runner 只在 benchmark context 中把 Cache 内部 raw launch 切换为 checked 或 trusted，因此状态机和 Engine 路由不变。完整 token latency 使用 non-instrumented synchronized wall；profiler 必须证明 checked 每个 profiled layer 有 5 次 `aten::item`/`aten::_local_scalar_dense`、trusted 为 0。append/decode attribution 从 `profiler.events()` 原始事件中分别选择 CPU user annotation 与同名 CUDA user range，二者数量都必须匹配真实 layer 调用；host 使用 CPU range 的 inclusive total，device 使用 CUDA range total，不依赖 Triton kernel 与 CPU event 的 child 关联。CUDA event 和 scalar operator 也按原始事件计数，不能用同名 key 字典压平 CPU/CUDA 分组。零 host/device attribution 仍是无效证据，不能放宽 validator 或手工修 CSV。summary validator 负责证据完整性，不替代人工性能 gate：overall p50 至少 `1.05x`，且全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1。该证据只归因于 device-value validation，仍存在的 transaction-view H2D materialization/copy 留给独立 R4-B。
