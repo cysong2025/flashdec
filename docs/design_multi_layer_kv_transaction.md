@@ -526,6 +526,7 @@ trusted raw 路径仍检查 shape、dtype、device、contiguity、RoPE 参数，
 - layer failure 后仍无 visible token、block leak 或 open transaction。
 - 同 commit benchmark 交替 checked/trusted 顺序；正式 wall 仅使用 `synchronize + perf_counter + synchronize`，不在计时区间 record CUDA event。
 - profiler attribution 与正式 wall 分离，报告 append host/device time 和 CUDA event count。
+- profiler range 证据来自原始 CPU user annotation；同名 CUDA event 不参与 host range 选择，range 数量按真实调用逐个验证。append host time 使用 inclusive `cpu_time_total`，以保留 checked 路径子 `.item()` 的同步等待。
 - 只有 complete-token p50 跨 trial 稳定且总体至少 `1.05x`，才冻结为性能收益；否则记录负结果并停止扩展到 CUDA Graph。
 
-当前实现、benchmark harness 与 dependency-free validator tests 已完成，RTX 5070 correctness 和配对性能证据尚未执行，不提前声明 speedup。transaction metadata 每 token 只 materialize 一次是后续独立 slice，必须在 R4-A 因果结论之后再评估。
+当前实现、benchmark harness 与 dependency-free validator tests 已完成；commit `1169cb8` 的 RTX 5070 focused CUDA correctness 为 `40 passed in 2.34s`。第一次 quick 的 strict summary 正确拒绝了零 append CPU attribution，根因是 runner 用同名 key 字典压平 profiler 的 CPU/CUDA 分组，而非运行时 host cost 为零。runner 改为读取原始事件后必须重新执行 quick；旧 CSV 不能手工修补。完整回归和配对性能证据仍未完成，不提前声明 speedup。transaction metadata 每 token 只 materialize 一次是后续独立 slice，必须在 R4-A 因果结论之后再评估。

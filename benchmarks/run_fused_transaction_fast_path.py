@@ -321,6 +321,88 @@ def _event_time_us(event, primary, fallback):
     return float(value or 0.0)
 
 
+def _event_is_device(event, device_name):
+    return device_name.lower() in str(
+        getattr(event, "device_type", "")
+    ).lower()
+
+
+def _event_diagnostic(event):
+    return {
+        "key": str(getattr(event, "key", "")),
+        "device_type": str(getattr(event, "device_type", "")),
+        "is_user_annotation": bool(
+            getattr(event, "is_user_annotation", False)
+        ),
+        "cpu_time_total_us": _event_time_us(
+            event, "cpu_time_total", "cpu_time_total"
+        ),
+        "device_time_total_us": _event_time_us(
+            event, "device_time_total", "cuda_time_total"
+        ),
+    }
+
+
+def _raw_user_range_totals(raw_events, key, expected_count):
+    candidates = tuple(
+        event for event in raw_events if getattr(event, "key", None) == key
+    )
+    ranges = tuple(
+        event
+        for event in candidates
+        if _event_is_device(event, "cpu")
+        and getattr(event, "is_user_annotation", False) is True
+    )
+    if len(ranges) != expected_count:
+        diagnostics = [_event_diagnostic(event) for event in candidates]
+        raise RuntimeError(
+            f"profiler range {key!r} expected {expected_count} raw CPU user "
+            f"annotations, found {len(ranges)}; candidates={diagnostics}"
+        )
+
+    cpu_times_us = tuple(
+        _event_time_us(event, "cpu_time_total", "cpu_time_total")
+        for event in ranges
+    )
+    device_times_us = tuple(
+        _event_time_us(event, "device_time_total", "cuda_time_total")
+        for event in ranges
+    )
+    for index, (cpu_time_us, device_time_us) in enumerate(
+        zip(cpu_times_us, device_times_us)
+    ):
+        for label, value in (
+            ("inclusive CPU time", cpu_time_us),
+            ("inclusive device time", device_time_us),
+        ):
+            if value <= 0.0 or not math.isfinite(value):
+                raise RuntimeError(
+                    f"profiler range {key!r} event {index} {label} must be "
+                    f"positive and finite; value={value}, "
+                    f"range={_event_diagnostic(ranges[index])}"
+                )
+    return {
+        "count": len(ranges),
+        "cpu_time_us": sum(cpu_times_us),
+        "device_time_us": sum(device_times_us),
+    }
+
+
+def _raw_cpu_operator_count(raw_events, key):
+    return sum(
+        1
+        for event in raw_events
+        if getattr(event, "key", None) == key
+        and _event_is_device(event, "cpu")
+    )
+
+
+def _raw_cuda_event_count(raw_events):
+    return sum(
+        1 for event in raw_events if _event_is_device(event, "cuda")
+    )
+
+
 def _profiler_kwargs(torch):
     return {
         "activities": [
@@ -351,15 +433,18 @@ def _profile_probe(torch, case, dtype, steps, seed):
             completed_tokens += 1
         torch.cuda.synchronize()
 
-    key_averages = profiler.key_averages()
-    events = {event.key: event for event in key_averages}
-    append = events.get(PROFILE_RANGE_APPEND)
-    decode = events.get(PROFILE_RANGE_DECODE)
+    raw_events = tuple(profiler.events())
     expected_layers = steps * case.num_layers
+    append = _raw_user_range_totals(
+        raw_events, PROFILE_RANGE_APPEND, expected_layers
+    )
+    decode = _raw_user_range_totals(
+        raw_events, PROFILE_RANGE_DECODE, expected_layers
+    )
     counts = {
         "profile_token_count": completed_tokens,
-        "profile_append_count": int(getattr(append, "count", 0)),
-        "profile_decode_count": int(getattr(decode, "count", 0)),
+        "profile_append_count": append["count"],
+        "profile_decode_count": decode["count"],
     }
     expected_counts = {
         "profile_token_count": steps,
@@ -371,29 +456,24 @@ def _profile_probe(torch, case, dtype, steps, seed):
             f"fused transaction profiler range counts are invalid: {counts}"
         )
 
-    append_device_ms = _event_time_us(
-        append, "device_time_total", "cuda_time_total"
-    ) / 1_000.0
-    append_cpu_ms = _event_time_us(
-        append, "cpu_time_total", "cpu_time_total"
-    ) / 1_000.0
-    decode_device_ms = _event_time_us(
-        decode, "device_time_total", "cuda_time_total"
-    ) / 1_000.0
+    append_device_ms = append["device_time_us"] / 1_000.0
+    append_cpu_ms = append["cpu_time_us"] / 1_000.0
+    decode_device_ms = decode["device_time_us"] / 1_000.0
+    cuda_event_count = _raw_cuda_event_count(raw_events)
+    if cuda_event_count <= 0:
+        raise RuntimeError("profiler recorded no raw CUDA events")
     return {
         "profile_steps": steps,
         **counts,
-        "profile_cuda_event_count": sum(
-            int(event.count)
-            for event in key_averages
-            if "cuda" in str(getattr(event, "device_type", "")).lower()
-        ),
+        "profile_cuda_event_count": cuda_event_count,
         "profile_append_cpu_ms_per_layer": append_cpu_ms / expected_layers,
         "profile_append_device_ms_per_layer": append_device_ms / expected_layers,
         "profile_decode_device_ms_per_layer": decode_device_ms / expected_layers,
-        "profile_item_count": int(getattr(events.get("aten::item"), "count", 0)),
-        "profile_local_scalar_dense_count": int(
-            getattr(events.get("aten::_local_scalar_dense"), "count", 0)
+        "profile_item_count": _raw_cpu_operator_count(
+            raw_events, "aten::item"
+        ),
+        "profile_local_scalar_dense_count": _raw_cpu_operator_count(
+            raw_events, "aten::_local_scalar_dense"
         ),
     }
 

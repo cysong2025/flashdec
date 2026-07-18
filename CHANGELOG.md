@@ -36,6 +36,7 @@
 - GPU Engine 明确使用 fused CUDA append policy；公开 reference API 默认仍保持 PyTorch 路径。
 - DecodeEngine workload CSV、multi-trial summary 和 profiler evidence 现在绑定生成时的 Git commit。
 - Release artifact/evidence gate 现在同时要求 R1 Scheduler、R2 Multi-layer 与 R3 Shared Prefix runner、validator、focused tests 和最终 Markdown summary。
+- R4-A profiler attribution 改为读取 unaggregated events，显式选择 CPU user annotation 并逐个验证 append/decode range；避免同名 CUDA event 覆盖 CPU host time，同时保留 summary 对零 attribution 的严格拒绝。
 
 ### Performance evidence
 
@@ -63,6 +64,7 @@
 - R3-A commit `e1bb6a8` 的 WSL focused 与完整回归均报告通过；本轮未提供精确计数，因此不增加新的定量 pytest 基线。
 - R3-B commit `08d0414` RTX 5070 focused：`56 passed, 14 subtests passed in 5.29s`；完整回归：`352 passed, 25 subtests passed in 9.37s`。
 - R3-D commit `fe72e27` RTX 5070 targeted hot-path test：`1 passed`；focused：`61 passed, 8 subtests passed`；完整回归：`361 passed, 25 subtests passed in 6.28s`。
+- R4-A commit `1169cb8` RTX 5070 focused CUDA suite：`40 passed in 2.34s`。第一次 quick CSV 因 profiler CPU/CUDA 分组选择缺陷未通过严格 summary，性能证据作废并等待修复后重跑。
 
 ### Pending before v0.1.0
 

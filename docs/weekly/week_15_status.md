@@ -23,19 +23,21 @@ R4 Trusted CUDA Transaction Fast Path：删除 Cache-owned multi-layer fused app
 
 Mac 工作区已执行以下本地 gate：
 
-- 新 R4 benchmark/summary 与既有 multi-layer benchmark/summary dependency-free tests：`29 tests` 全部通过。
+- 新 R4 benchmark/summary 与既有 multi-layer benchmark/summary dependency-free tests：修复后 `34 tests` 全部通过。
 - `python3 -m compileall -q flashdec tests benchmarks scripts`：通过。
 - `python3 scripts/check_docs.py`：`Documentation check: PASS (66 files)`。
 - `python3 scripts/check_release.py --require-evidence`：private `0.0.0` tree gate 通过。
 - `git diff --check` 与 runner/summary `--help`：通过。
 
-Mac 没有项目 torch/pytest/CUDA 环境，因此真实 public safety、FP16/BF16 kernel parity、detached-view tampering、focused/full regression 与 paired performance 尚待 RTX 5070 WSL 执行。
+RTX 5070 WSL 已完成 commit `1169cb8` 的 focused CUDA suite：`40 passed in 2.34s`，覆盖 fused raw dispatch、multi-layer transaction 与 multi-layer Engine。完整回归仍待执行。
 
-在 RTX 证据完成前，不记录 speedup，也不把 R4-A 标记为完成。正式门槛是 complete-token p50 总体至少 `1.05x`，且目标 l2/l4 case 跨 trial 不穿过 1；未达到门槛就保留负结果并停止扩展到 CUDA Graph。
+第一次 FP16 quick 已写出 CSV，但 strict summary 拒绝 `profile_append_cpu_ms_per_layer=0`。审计确认运行时并非零 host cost：runner 先调用 `key_averages()`，随后用 `{event.key: event}` 再次压平，而 PyTorch 会按 device type 与 user annotation 分组；同名 CUDA group 覆盖 CPU user annotation 后，读取其 `cpu_time_total` 合法得到 0。修复使用 unaggregated events，精确选择 CPU user annotation，逐个验证 append/decode range，并从该 range 读取 inclusive CPU/device total；`.item()` 与 CUDA event 同样按原始事件计数。validator 保持严格，修复前 CSV 作废并必须重跑。
+
+在修复后 quick、完整回归与正式 A/B 完成前，不记录 speedup，也不把 R4-A 标记为完成。正式门槛是 complete-token p50 总体至少 `1.05x`，且目标 l2/l4 case 跨 trial 不穿过 1；未达到门槛就保留负结果并停止扩展到 CUDA Graph。
 
 ## 下一步
 
-1. 在 RTX 5070 执行 targeted、focused 与完整 correctness。
-2. 先运行单 case FP16 quick A/B 并用 strict summary 校验 profiler item/local-scalar 计数。
+1. 拉取 profiler event-selection 修复，在 RTX 5070 重跑 focused 与完整 correctness。
+2. 重新运行单 case FP16 quick A/B，并用 strict summary 校验 CPU range 与 item/local-scalar 计数；不复用旧 CSV。
 3. quick 通过后运行 FP16/BF16、l2/l4 五轮正式矩阵。
 4. 根据门槛决定进入 R4-B persistent metadata，或直接转入 R4-C integrated scheduled multi-layer correctness workload。

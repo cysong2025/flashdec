@@ -54,7 +54,7 @@ R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享�
 
 ## 当前目标：R4 Trusted CUDA Transaction Fast Path
 
-状态：R4-A 代码、配对 benchmark harness 与 dependency-free validator tests 已完成，RTX correctness/performance 尚未执行。仓库继续保持 private。
+状态：R4-A 代码、配对 benchmark harness、dependency-free validator tests 与 RTX focused CUDA correctness（`40 passed in 2.34s`）已完成。第一次 quick 的 strict summary 暴露 profiler 同名 CPU/CUDA 分组覆盖问题；修复后的 quick、完整回归和正式 performance 尚待执行。仓库继续保持 private。
 
 R2 profiler 显示 multi-layer fused path 的系统收益主要来自 append/launch，而 attention device time 基本不变。进一步审计发现，cache-owned transaction 每个 layer 仍通过公开 raw primitive 执行五次 CUDA index reduction + `.item()`：block id 上下界、offset 上下界和 position 非负。这些值已经由 Cache allocator 在 host 侧构造并证明范围，因此内部路径存在重复的 host/stream synchronization。
 
@@ -73,6 +73,8 @@ R4-A 的边界：
 3. 同 commit checked/trusted quick A/B；正式 wall 使用同步后的 `perf_counter`，CUDA event/profiler 独立归因。
 4. 只有 p50 总体至少 `1.05x` 且目标 case 跨 trial 稳定，才进入 transaction metadata reuse；否则记录负结果并停止该优化线。
 5. R4-A 冻结后，再实现统一 scheduled multi-layer workload，组合验证 R1/R2/R3。
+
+Profiler quick 必须从 `profiler.events()` 原始事件中精确筛选 CPU user annotation，并验证每个真实 append/decode range；不能用同名 key 字典压平 CPU/CUDA 分组，也不能放宽 validator 接受零 host time。修复前 CSV 不具备可恢复的 CPU attribution，必须重新生成。
 
 详细信任边界见[Multi-layer KV Transaction 设计](design_multi_layer_kv_transaction.md)。
 

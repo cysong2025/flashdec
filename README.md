@@ -6,7 +6,7 @@ FlashDec 是一个面向单 GPU LLM decode 的研究型运行时原型，覆盖 
 
 项目关注的核心问题是：在请求长度与 batch 持续变化的情况下，如何维护可验证的 KV 所有权和失败原子性，并证明底层 kernel 优化能够转化为完整 decode step 的系统收益。
 
-> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction 与 R3 Shared Prefix Blocks 均已完成。private R4 正在优化 cache-owned fused transaction 的重复 CUDA index synchronization：public raw op 保持 checked，`PagedKVCache` 在 `begin_token` 用 host allocator invariant 证明位置后，current-transaction API 内部使用 trusted raw launch；RTX correctness 与同 commit A/B 尚未执行，不提前声明 speedup。仓库继续保持 private 和 `0.0.0`，clean-install、版本与正式发布暂停在最终 release gate。
+> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction 与 R3 Shared Prefix Blocks 均已完成。private R4 正在优化 cache-owned fused transaction 的重复 CUDA index synchronization：public raw op 保持 checked，`PagedKVCache` 在 `begin_token` 用 host allocator invariant 证明位置后，current-transaction API 内部使用 trusted raw launch。RTX focused CUDA correctness 已通过 `40 tests`；第一次 quick 的严格汇总发现 profiler 同名 CPU/CUDA 分组取错，取数逻辑修复后仍需重跑 quick、完整回归与正式 A/B，因此不提前声明 speedup。仓库继续保持 private 和 `0.0.0`，clean-install、版本与正式发布暂停在最终 release gate。
 
 ## 架构
 
@@ -63,6 +63,7 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 | R3-B RTX 回归 | focused `56 passed, 14 subtests passed`；full `352 passed, 25 subtests passed` | shared-prefix Engine/scheduler 集成验收通过 |
 | R3-D RTX 回归 | targeted `1 passed`；focused `61 passed, 8 subtests passed`；full `361 passed, 25 subtests passed` | hot-path lookup invariant 与完整功能回归通过 |
 | R3 最终 confirmation | 75% hit：context 节省 `68.8%`/`5.5 MiB`，admission `9/16 -> 16/16` | 64 行通过；所有非零 complete/scheduler/Engine p50 range 均跨 1，无稳定性能方向 |
+| R4-A RTX focused | `40 passed in 2.34s` | checked/trusted fused transaction correctness 通过；quick profiler 证据修复后待重跑 |
 
 R2 的 decode device ratio 为 `1.0024x`，而 append device 与 CUDA event ratio 分别为 `1.6103x` 和 `1.9784x`，说明系统收益主要来自 append/launch 路径。每轮仅 20 repeats，p99 接近单轮最大值，因此所有尾延迟结论都保留场景范围，不作生产级稳定性声明。
 

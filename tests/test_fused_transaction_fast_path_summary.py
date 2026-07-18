@@ -255,6 +255,18 @@ class FusedTransactionFastPathSummaryTests(unittest.TestCase):
                 with self.assertRaisesRegex(FastPathValidationError, message):
                     _validate(rows)
 
+    def test_rejects_zero_profiler_append_cpu_time(self):
+        rows = _rows()
+        target = next(
+            row for row in rows if row["transaction_path"] == "trusted"
+        )
+        target["profile_append_cpu_ms_per_layer"] = "0"
+        with self.assertRaisesRegex(
+            FastPathValidationError,
+            "profile_append_cpu_ms_per_layer must be positive and finite",
+        ):
+            _validate(rows)
+
     def test_rejects_seed_or_order_drift(self):
         rows = _rows()
         for row in rows:

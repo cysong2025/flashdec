@@ -12,6 +12,9 @@ from benchmarks.run_fused_transaction_fast_path import (
     _max_blocks,
     _profiler_kwargs,
     _quick_case,
+    _raw_cpu_operator_count,
+    _raw_cuda_event_count,
+    _raw_user_range_totals,
     _run_tokens,
     _selected_cases,
     _selected_fused_append,
@@ -50,6 +53,25 @@ class _FakeEngine:
 
 
 class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
+    @staticmethod
+    def _profile_event(
+        key,
+        device_type,
+        *,
+        is_user_annotation=False,
+        cpu_time_total=0.0,
+        device_time_total=0.0,
+        self_cpu_time_total=0.0,
+    ):
+        return SimpleNamespace(
+            key=key,
+            device_type=device_type,
+            is_user_annotation=is_user_annotation,
+            cpu_time_total=cpu_time_total,
+            device_time_total=device_time_total,
+            self_cpu_time_total=self_cpu_time_total,
+        )
+
     def test_matrix_is_bounded_to_l2_l4_representative_shapes(self):
         self.assertEqual(len(CASES), 8)
         self.assertEqual(
@@ -142,6 +164,99 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
             {"activities": ["cpu", "cuda"], "acc_events": True},
         )
         self.assertEqual(TRANSACTION_PATHS, ("checked", "trusted"))
+
+    def test_raw_range_uses_cpu_annotation_inclusive_time_in_any_order(self):
+        cpu = self._profile_event(
+            "append",
+            "DeviceType.CPU",
+            is_user_annotation=True,
+            cpu_time_total=400.0,
+            device_time_total=250.0,
+            self_cpu_time_total=0.0,
+        )
+        cuda = self._profile_event(
+            "append",
+            "DeviceType.CUDA",
+            cpu_time_total=0.0,
+            device_time_total=250.0,
+        )
+        for events in ((cpu, cuda), (cuda, cpu)):
+            with self.subTest(order=events):
+                totals = _raw_user_range_totals(events, "append", 1)
+                self.assertEqual(totals["count"], 1)
+                self.assertEqual(totals["cpu_time_us"], 400.0)
+                self.assertEqual(totals["device_time_us"], 250.0)
+
+    def test_raw_range_sums_multiple_cpu_annotations(self):
+        events = (
+            self._profile_event(
+                "append",
+                "cpu",
+                is_user_annotation=True,
+                cpu_time_total=100.0,
+                device_time_total=40.0,
+            ),
+            self._profile_event(
+                "append",
+                "cpu",
+                is_user_annotation=True,
+                cpu_time_total=120.0,
+                device_time_total=60.0,
+            ),
+        )
+        totals = _raw_user_range_totals(events, "append", 2)
+        self.assertEqual(totals["count"], 2)
+        self.assertEqual(totals["cpu_time_us"], 220.0)
+        self.assertEqual(totals["device_time_us"], 100.0)
+
+    def test_raw_range_rejects_missing_annotation_or_nonpositive_time(self):
+        non_annotation = self._profile_event(
+            "append",
+            "cpu",
+            cpu_time_total=100.0,
+            device_time_total=50.0,
+        )
+        with self.assertRaisesRegex(RuntimeError, "raw CPU user annotations"):
+            _raw_user_range_totals((non_annotation,), "append", 1)
+
+        zero_cpu = self._profile_event(
+            "append",
+            "cpu",
+            is_user_annotation=True,
+            cpu_time_total=0.0,
+            device_time_total=50.0,
+        )
+        with self.assertRaisesRegex(RuntimeError, "inclusive CPU time"):
+            _raw_user_range_totals((zero_cpu,), "append", 1)
+
+        positive = self._profile_event(
+            "append",
+            "cpu",
+            is_user_annotation=True,
+            cpu_time_total=100.0,
+            device_time_total=50.0,
+        )
+        invalid_device = self._profile_event(
+            "append",
+            "cpu",
+            is_user_annotation=True,
+            cpu_time_total=100.0,
+            device_time_total=float("nan"),
+        )
+        with self.assertRaisesRegex(RuntimeError, "inclusive device time"):
+            _raw_user_range_totals(
+                (positive, invalid_device), "append", 2
+            )
+
+    def test_raw_operator_and_cuda_counts_do_not_collapse_device_groups(self):
+        events = (
+            self._profile_event("aten::item", "cpu"),
+            self._profile_event("aten::item", "cpu"),
+            self._profile_event("aten::item", "cuda"),
+            self._profile_event("kernel", "cuda"),
+        )
+        self.assertEqual(_raw_cpu_operator_count(events, "aten::item"), 2)
+        self.assertEqual(_raw_cuda_event_count(events), 2)
 
     def test_runner_row_schema_matches_strict_summary_schema(self):
         case = FastPathCase("l2_b4_c128", 2, 4, 128)
