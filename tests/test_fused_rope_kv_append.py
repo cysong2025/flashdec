@@ -59,6 +59,9 @@ def test_checked_and_trusted_raw_dispatch_differ_only_in_value_validation(
     validated = []
     launched = []
     sentinel = object()
+    q = torch.zeros((1, 2, 4), dtype=torch.float32)
+    k = torch.zeros((1, 1, 4), dtype=torch.float32)
+    cache = torch.zeros((1, 1, 2, 4), dtype=torch.float32)
     indices = torch.zeros((1,), dtype=torch.int64)
 
     def prepare(*_args, **_kwargs):
@@ -76,7 +79,7 @@ def test_checked_and_trusted_raw_dispatch_differ_only_in_value_validation(
     monkeypatch.setattr(fused_module, "_validate_index_values", validate)
     monkeypatch.setattr(fused_module, "_launch_fused_rope_kv_append", launch)
 
-    raw_args = (object(), object(), object(), object(), object())
+    raw_args = (q, k, k, cache, cache)
     assert fused_rope_kv_append(
         *raw_args,
         indices,
