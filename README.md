@@ -6,7 +6,7 @@ FlashDec 是一个面向单 GPU LLM decode 的研究型运行时原型，覆盖 
 
 项目关注的核心问题是：在请求长度与 batch 持续变化的情况下，如何维护可验证的 KV 所有权和失败原子性，并证明底层 kernel 优化能够转化为完整 decode step 的系统收益。
 
-> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction 与 R3 Shared Prefix Blocks 均已完成。R3-D commit `fe72e27` 通过 targeted、focused 和完整 RTX correctness；优化后的 8-trial/64-row confirmation 证明容量与 admission 收益稳定，但 complete、scheduler 和 Engine p50 均无稳定快慢方向。仓库按所有者要求继续保持 private 和 `0.0.0`，clean-install、版本与正式发布暂停在最终 release gate。
+> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction 与 R3 Shared Prefix Blocks 均已完成。private R4 正在优化 cache-owned fused transaction 的重复 CUDA index synchronization：public raw op 保持 checked，`PagedKVCache` 在 `begin_token` 用 host allocator invariant 证明位置后，current-transaction API 内部使用 trusted raw launch；RTX correctness 与同 commit A/B 尚未执行，不提前声明 speedup。仓库继续保持 private 和 `0.0.0`，clean-install、版本与正式发布暂停在最终 release gate。
 
 ## 架构
 
@@ -45,6 +45,7 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 - **DecodeEngine**：稳定 request-row 映射、动态 admission、显式 backpressure、append → paged decode 执行链。
 - **Block-aware Scheduler**：lifetime block commitment、FIFO + aging、公平 runnable subset、stale decision 拒绝和 boundary-deadlock 对照实验。
 - **Multi-layer transaction**：一个 token 只预留一次位置；各 layer 共用 block id/offset；全部成功后 seq_len 只增长一次；任一 layer 失败自动 rollback。
+- **Trusted transaction R4**：公开 fused primitive 保留完整索引检查；Cache-owned transaction path 可跳过 allocator 已证明的 device-value reduction，避免每 layer 的重复 host/stream sync。
 - **证据链**：固定 commit/seed/trial/shape/timing scope 的 benchmark、严格 summary validator、独立 profiler attribution 和 release gate。
 
 ## 结果摘要

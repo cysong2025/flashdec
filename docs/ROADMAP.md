@@ -28,6 +28,7 @@ FlashDec 后续不再通过增加零散算子或重复参数 sweep 扩充内容�
 - 正式 36 行 multi-trial 与 12-case profiler 已在 commit `3708b87` 完成；fused p50/p90/TPS 几何平均为 1.0668x/1.0317x/1.0811x，short-churn p50 与 p99 仍不稳定。
 - R1 Block-aware Scheduler v2 正式 36 行策略矩阵与容量安全/进展保证结论。
 - R2 Multi-layer KV Token Transaction 的 Cache、Engine、fused CUDA correctness，以及 commit `fa0f89a` 的 144 行正式性能矩阵。
+- R3 Shared Prefix Blocks 的 ownership、scheduler integration、64-row RTX confirmation 与容量/admission 结论。
 
 ### 当前代码暴露出的缺口
 
@@ -36,8 +37,8 @@ FlashDec 后续不再通过增加零散算子或重复参数 sweep 扩充内容�
 | 结果稳定性 | 36 行正式 3-trial 已通过严格配对/invariant 校验 | short-churn p50 跨 1.0，p99 范围很宽，必须继续按场景报告 |
 | 阶段耗时归因 | 12-case profiler 已验证 Engine ranges 与 CUDA event | fusion 主要减少 append/launch/runtime 开销，attention device time 基本不变 |
 | 调度策略 | R1 lifetime commitment 已解决 boundary deadlock，并保留 cancel/greedy 负对照 | 后续重点是表达容量安全与公平性，不宣称所有普通 workload 更快 |
-| 多 layer 事务 | R2 事务语义与正式性能证据已闭合 | 20/24 case 稳定胜出，但 p99 与少数 profiler attribution 仍需保守解释 |
-| 共享前缀 | 每个请求独占所有 physical blocks | 无法研究重复 prompt 下的显存节省、refcount 和 eviction |
+| 多 layer fused host 同步 | cache-owned transaction 每 layer 仍执行五次 device reduction + `.item()` 索引检查 | allocator 已在 host 证明索引范围；重复同步可能掩盖 kernel 收益，应做同 commit checked/trusted A/B |
+| 系统能力组合 | R1/R2/R3 分别闭合，但正式 workload 尚未同时覆盖 scheduler、multi-layer transaction、shared-prefix hit/miss 与 churn | README 的完整链路需要由统一 trajectory 和 strict validator 证明，而不能只拼接独立实验 |
 | 发布证据 | 缺少 clean-install reproduction、CHANGELOG 和正式 tag | 代码可运行不等于第三方可以复现 |
 
 ## 3. 目标架构
@@ -321,9 +322,43 @@ capacity failure -> refcount and ownership unchanged
 
 验收重点是显存节省和所有权正确性，不要求 prefix lookup 本身带来 decode kernel 加速。
 
-## 8. 阶段 R4：公开基线与项目表达
+## 8. 阶段 R4：Trusted Transaction Fast Path 与统一多层调度
 
-优先级：P2，可与 R3 二选一；如果时间有限，优先做公开基线而不是同时扩展更多功能。
+优先级：P1，private 优化阶段。先消除 cache-owned fused transaction 的确定性 host sync，再用组合 workload 验证 R1-R3 主链路；不重新 sweep 已冻结 kernel 参数。
+
+### R4-A：Trusted CUDA Transaction Fast Path
+
+- public raw `fused_rope_kv_append()` 继续验证调用方提供的 CUDA index values。
+- `PagedKVCache.begin_token()` 用纯 host invariant 证明 allocator 位置；Cache public transaction API 回查该 authoritative state 后使用 private trusted raw launch，DecodeEngine 不跨越 Cache 抽象边界。
+- trusted path 仍验证 shape、dtype、device、contiguity、RoPE 参数和 `int64` metadata。
+- 本 slice 只删除 device reduction + `.item()`；每层 transaction-view H2D materialization/copy 留给 R4-B。
+- 同 commit、交替顺序比较 checked/trusted；正式 wall 区间不 record CUDA event，profiler 单独归因。
+- 第一 slice 不同时修改 transaction metadata materialization、output buffer 或 CUDA Graph。
+
+验收门槛：correctness/rollback/trajectory 完全一致；complete-token p50 总体至少 `1.05x`，且目标 l2/l4 case 跨 trial 不穿过 1。未达到门槛则记录负结果并停止扩展到 CUDA Graph。
+
+### R4-B：Persistent transaction metadata
+
+只有 R4-A 稳定通过后，才评估 positions、block ids/offsets、effective seq lens 和 block table 每 token materialize 一次并跨 layer 复用。它必须作为独立 A/B，不能与去同步混成一次提交。
+
+### R4-C：Integrated scheduled multi-layer workload
+
+统一验证：
+
+```text
+dynamic arrivals
+  -> lifetime scheduler
+  -> caller-supplied multi-layer context
+  -> fixed resident shared-prefix hit / private miss
+  -> begin_step / step_layer / commit_step
+  -> finish/cancel / block reuse
+```
+
+第一版保持 prefix resident set 固定，不同时引入在线 prefix registration/eviction。主验收是组合 correctness、completion、transaction/block trajectory 与零泄漏 cleanup，不要求 shared prefix 自身带来 latency 加速。
+
+## 9. 阶段 R5：公开基线与项目表达
+
+优先级：P2，保持 private 时暂停；完成 R4 并由所有者明确启动后再执行。
 
 ### 有限公开对比
 
@@ -340,7 +375,7 @@ capacity failure -> refcount and ownership unchanged
 
 验收门槛：任何对比数字都绑定版本、shape、计时边界和命令；无法公平对齐的项目明确标记为不可比。
 
-## 9. 优先级与截止线
+## 10. 优先级与截止线
 
 | 优先级 | 内容 | 是否影响“深度项目”完成 |
 | --- | --- | --- |
@@ -348,12 +383,13 @@ capacity failure -> refcount and ownership unchanged
 | P1 | block-aware scheduler | 必须，最重要的系统扩展 |
 | P1 | multi-layer KV transaction | 必须，修复当前架构边界 |
 | P2 | shared prefix blocks | 已完成 R3-A 至 R3-D |
+| P1 | trusted transaction fast path + integrated workload | 当前 private R4；先做单变量 A/B，再组合验证 |
 | P2 | FlashInfer/vLLM 有限公开对比 | 未启动；private 维护期间暂停 |
 | 不做 | HTTP server、完整模型、sampling、TP/PP、多机、swap/offload | 不影响项目完成 |
 
 如果时间不足，项目应在 R2 后停止增加功能，集中完成复现和文章。Scheduler + multi-layer transaction 比再增加三个小 kernel 更能证明 AI Infra 深度。
 
-## 10. 每阶段统一 Definition of Done
+## 11. 每阶段统一 Definition of Done
 
 每项功能只有同时满足以下证据才算完成：
 
@@ -366,12 +402,12 @@ capacity failure -> refcount and ownership unchanged
 7. README/NEXT_STEPS/weekly status 与真实状态一致。
 8. clean worktree、完整回归、结果绑定 commit。
 
-## 11. 当前立即执行顺序
+## 12. 当前立即执行顺序
 
 1. R1 Scheduler、R2 Multi-layer 与 R3 Shared Prefix 的实现、正式 summary、RTX correctness 和负结果归档均已完成。
 2. R3 最终 8-trial summary 已成为 release evidence；旧 3-trial summary 继续作为优化前历史基线。
-3. 仓库继续保持 private，当前只做证据维护和回归修复，不自动扩大功能或重新调参。
-4. 收到所有者明确指令后，再执行 clean-machine install、release quick workload 与 release checker。
-5. release gate 全部通过后才讨论仓库可见性、许可证、`0.1.0` 版本与 tag。
+3. 执行 R4-A checked/trusted 单变量优化：保持 public safety，先完成 correctness 与配对 benchmark，再决定是否进入 metadata reuse。
+4. R4-A 冻结后，用 integrated scheduled multi-layer workload 组合验证 R1-R3；在线 prefix eviction 留到组合基线之后。
+5. 仓库继续保持 private；收到所有者明确指令后，才执行 clean-machine install、公开基线、版本与 tag。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

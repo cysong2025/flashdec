@@ -16,5 +16,6 @@
 - [Stage 12](week_12_status.md)：dynamic workload 与完整 step 证据
 - [Stage 13](week_13_status.md)：Scheduler R1 与 Multi-layer R2
 - [Stage 14](week_14_status.md)：Shared Prefix R3
+- [Stage 15](week_15_status.md)：Trusted Transaction Fast Path R4
 
 当前设计与结果入口见[文档索引](../INDEX.md)。

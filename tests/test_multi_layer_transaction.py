@@ -46,6 +46,9 @@ def test_multi_layer_transaction_commits_seq_len_once_and_reuses_locations(num_l
     assert transaction.positions.tolist() == [0, 0]
     assert transaction.block_offsets.tolist() == [0, 0]
     assert transaction.effective_seq_lens.tolist() == [1, 1]
+    assert transaction.positions.dtype == torch.int64
+    assert transaction.physical_block_ids.dtype == torch.int64
+    assert transaction.block_offsets.dtype == torch.int64
     assert cache.seq_lens_tensor([10, 20]).tolist() == [0, 0]
 
     physical_ids = transaction.physical_block_ids.tolist()
@@ -121,6 +124,44 @@ def test_transaction_capacity_failure_has_no_request_or_ownership_mutation():
     assert cache.num_used_blocks == 0
     assert cache.metrics()["open_transaction_count"] == 0
     assert cache.metrics()["transaction_failure_count"] == 1
+    assert cache.validate_invariants()
+
+
+def test_begin_token_location_proof_failure_rolls_back_reservation(monkeypatch):
+    cache = _cache(num_layers=2, block_size=1, max_blocks=2)
+    cache.add_request("request")
+    before_version = cache.state_version
+    before_failures = cache.metrics()["transaction_failure_count"]
+    validate_locations = cache._validate_reserved_transaction_locations
+
+    def fail_location_proof(*_args, **_kwargs):
+        raise RuntimeError("injected transaction location proof failure")
+
+    monkeypatch.setattr(
+        cache,
+        "_validate_reserved_transaction_locations",
+        fail_location_proof,
+    )
+    with pytest.raises(RuntimeError, match="injected transaction location proof"):
+        cache.begin_token(["request"])
+
+    assert cache.state_version == before_version
+    assert cache.request_state("request")["seq_len"] == 0
+    assert cache.request_block_ids("request") == ()
+    assert cache.num_free_blocks == cache.max_blocks
+    assert cache.metrics()["open_transaction_count"] == 0
+    assert cache.metrics()["transaction_begin_count"] == 0
+    assert cache.metrics()["transaction_failure_count"] == before_failures + 1
+    assert cache.validate_invariants()
+
+    monkeypatch.setattr(
+        cache,
+        "_validate_reserved_transaction_locations",
+        validate_locations,
+    )
+    transaction = cache.begin_token(["request"])
+    assert transaction.physical_block_ids.tolist() == [0]
+    cache.abort_token(transaction)
     assert cache.validate_invariants()
 
 
@@ -209,4 +250,3 @@ def test_single_layer_legacy_append_is_rejected_while_transaction_is_open():
     cache.append(0, [1], token, token)
     assert cache.request_state(1)["seq_len"] == 1
     assert cache.validate_invariants()
-

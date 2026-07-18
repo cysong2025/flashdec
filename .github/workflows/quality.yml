@@ -38,3 +38,5 @@ jobs:
           tests/test_scheduler_workload_summary.py
           tests/test_multi_layer_workload_benchmark.py
           tests/test_multi_layer_workload_summary.py
+          tests/test_fused_transaction_fast_path_benchmark.py
+          tests/test_fused_transaction_fast_path_summary.py

@@ -62,6 +62,8 @@ cache = flashdec.PagedKVCache(
 
 Cache 是 request seq_len、physical block ownership、shared-prefix residency 和 transaction 状态的唯一事实来源。容量失败必须发生在 mutation 前；finish/cancel 释放 request-private blocks 并减少 prefix reference；multi-layer transaction 只在全部 layer 完成后增长一次 seq_len。
 
+`begin_token()` 返回的是 detached snapshot。Cache 在 host allocator 完成 reservation 后会验证 position、block offset、physical block id 与 request block table 的一致性；`write_token_layer_fused_cuda()` 根据 transaction id 回查该内部状态，不使用调用方可修改的 snapshot 位置 tensor。这样 Cache-owned fused path 可以跳过 raw CUDA index 的 device reduction + `.item()`，但公开低层 `fused_rope_kv_append()` 仍保留完整的值域检查。private trusted raw primitive 不属于 `flashdec` 顶层 API。
+
 Shared-prefix API 接收已经构建的 immutable full blocks，shape 为 `[num_layers, num_prefix_blocks, num_kv_heads, block_size, head_dim]`。多个 request 可以共享同一组 physical ids，prefix 后的 tail 始终私有；无 active owner 的 prefix 才能被显式或 LRU 淘汰。`prefix_cache_capacity_blocks=0` 是默认值，表示关闭该功能。完整所有权说明见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
 ## RoPE 与 Append
@@ -83,7 +85,7 @@ result = flashdec.rope_paged_kv_append(
 
 `result` 包含 rotated Q、pre-append positions、block tables 和 committed seq_lens。公开 helper 默认使用 torch 语义基线；GPU Engine 显式选择 fused CUDA。该 helper 属于 legacy single-layer append，multi-layer 路径由 Engine transaction 管理。
 
-低层 `cuda_kv_append()` 与 `fused_rope_kv_append()` 只接收已经验证的 tensor、physical block ids 和 offsets，不拥有 allocator 或 request lifecycle。对应的 `load_*_extension()` 显式触发 lazy JIT，主要用于环境检查和测试；普通调用方应优先使用 Cache 或 Engine API。
+低层 `cuda_kv_append()` 与 `fused_rope_kv_append()` 接收调用方提供的 tensor、physical block ids 和 offsets，自行执行结构与索引值检查，但不拥有 allocator 或 request lifecycle。对应的 `load_*_extension()` 显式触发 lazy JIT，主要用于环境检查和测试；普通调用方应优先使用 Cache 或 Engine API。
 
 ## DecodeEngine
 

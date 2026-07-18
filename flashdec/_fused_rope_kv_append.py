@@ -59,7 +59,18 @@ def _check_cuda_contiguous_tensor(name, tensor):
         raise ValueError(f"{name} must be contiguous")
 
 
-def _validate_inputs(q, k, v, k_cache, v_cache, block_ids, block_offsets, positions, rotary_dim, base):
+def _validate_structure(
+    q,
+    k,
+    v,
+    k_cache,
+    v_cache,
+    block_ids,
+    block_offsets,
+    positions,
+    rotary_dim,
+    base,
+):
     torch = _torch()
     for name, tensor in [
         ("q", q),
@@ -111,13 +122,89 @@ def _validate_inputs(q, k, v, k_cache, v_cache, block_ids, block_offsets, positi
     if not math.isfinite(base) or base <= 0.0:
         raise ValueError("base must be a positive finite number")
 
-    if bool(torch.any(block_ids < 0).item()) or bool(torch.any(block_ids >= k_cache.shape[0]).item()):
+    return base
+
+
+def _validate_index_values(block_ids, block_offsets, positions, num_blocks, block_size):
+    """Synchronously validate caller-owned CUDA index values.
+
+    This check deliberately remains on the public raw primitive. Cache-owned
+    transaction metadata uses a separate internal entry point because the
+    allocator already proves these bounds on the host before materialization.
+    """
+    torch = _torch()
+    if bool(torch.any(block_ids < 0).item()) or bool(
+        torch.any(block_ids >= num_blocks).item()
+    ):
         raise ValueError("block_ids must be within [0, num_blocks)")
-    if bool(torch.any(block_offsets < 0).item()) or bool(torch.any(block_offsets >= k_cache.shape[2]).item()):
+    if bool(torch.any(block_offsets < 0).item()) or bool(
+        torch.any(block_offsets >= block_size).item()
+    ):
         raise ValueError("block_offsets must be within [0, block_size)")
     if bool(torch.any(positions < 0).item()):
         raise ValueError("positions must be non-negative")
-    return base
+
+
+def _launch_fused_rope_kv_append(
+    q,
+    k,
+    v,
+    k_cache,
+    v_cache,
+    block_ids,
+    block_offsets,
+    positions,
+    rotary_dim,
+    base,
+):
+    torch = _torch()
+    q_out = torch.empty_like(q)
+    extension = load_fused_rope_kv_append_extension()
+    extension.fused_rope_kv_append(
+        q_out,
+        q,
+        k,
+        v,
+        k_cache,
+        v_cache,
+        block_ids.to(dtype=torch.int64).contiguous(),
+        block_offsets.to(dtype=torch.int64).contiguous(),
+        positions.to(dtype=torch.int64).contiguous(),
+        int(rotary_dim),
+        float(base),
+    )
+    return q_out
+
+
+def _prepare_fused_rope_kv_append(
+    q,
+    k,
+    v,
+    k_cache,
+    v_cache,
+    block_ids,
+    block_offsets,
+    positions,
+    rotary_dim,
+    base,
+):
+    if rotary_dim is None:
+        if not isinstance(q, _torch().Tensor):
+            raise TypeError("q must be a torch.Tensor")
+        rotary_dim = q.shape[-1]
+    base = _validate_structure(
+        q,
+        k,
+        v,
+        k_cache,
+        v_cache,
+        block_ids,
+        block_offsets,
+        positions,
+        rotary_dim,
+        base,
+    )
+    return rotary_dim, base
 
 
 def fused_rope_kv_append(
@@ -138,11 +225,7 @@ def fused_rope_kv_append(
     The returned Q has the same shape/dtype as ``q``; K/V cache writes happen
     in-place. This primitive does not mutate Python request or allocator state.
     """
-    if rotary_dim is None:
-        if not isinstance(q, _torch().Tensor):
-            raise TypeError("q must be a torch.Tensor")
-        rotary_dim = q.shape[-1]
-    base = _validate_inputs(
+    rotary_dim, base = _prepare_fused_rope_kv_append(
         q,
         k,
         v,
@@ -154,19 +237,73 @@ def fused_rope_kv_append(
         rotary_dim,
         base,
     )
-    q_out = _torch().empty_like(q)
-    extension = load_fused_rope_kv_append_extension()
-    extension.fused_rope_kv_append(
-        q_out,
+    _validate_index_values(
+        block_ids,
+        block_offsets,
+        positions,
+        k_cache.shape[0],
+        k_cache.shape[2],
+    )
+    return _launch_fused_rope_kv_append(
         q,
         k,
         v,
         k_cache,
         v_cache,
-        block_ids.to(dtype=_torch().int64).contiguous(),
-        block_offsets.to(dtype=_torch().int64).contiguous(),
-        positions.to(dtype=_torch().int64).contiguous(),
-        int(rotary_dim),
-        float(base),
+        block_ids,
+        block_offsets,
+        positions,
+        rotary_dim,
+        base,
     )
-    return q_out
+
+
+def _fused_rope_kv_append_trusted(
+    q,
+    k,
+    v,
+    k_cache,
+    v_cache,
+    block_ids,
+    block_offsets,
+    positions,
+    rotary_dim=None,
+    base=10_000.0,
+):
+    """Launch with Cache-owned transaction metadata without device reductions.
+
+    This is intentionally private. ``PagedKVCache`` may use it only for the
+    current open transaction, whose physical block ids, offsets, and positions
+    were derived from validated host allocator state. Shape, dtype, device,
+    contiguity, RoPE, and extension-side checks remain enabled.
+    """
+    rotary_dim, base = _prepare_fused_rope_kv_append(
+        q,
+        k,
+        v,
+        k_cache,
+        v_cache,
+        block_ids,
+        block_offsets,
+        positions,
+        rotary_dim,
+        base,
+    )
+    torch = _torch()
+    if any(
+        tensor.dtype != torch.int64
+        for tensor in (block_ids, block_offsets, positions)
+    ):
+        raise ValueError("trusted transaction metadata must use int64")
+    return _launch_fused_rope_kv_append(
+        q,
+        k,
+        v,
+        k_cache,
+        v_cache,
+        block_ids,
+        block_offsets,
+        positions,
+        rotary_dim,
+        base,
+    )

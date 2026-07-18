@@ -52,7 +52,31 @@ R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享�
 
 所有权与验收细节见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
-## 后续目标：private 维护与可选 v0.1.0 Release Gate
+## 当前目标：R4 Trusted CUDA Transaction Fast Path
+
+状态：R4-A 代码、配对 benchmark harness 与 dependency-free validator tests 已完成，RTX correctness/performance 尚未执行。仓库继续保持 private。
+
+R2 profiler 显示 multi-layer fused path 的系统收益主要来自 append/launch，而 attention device time 基本不变。进一步审计发现，cache-owned transaction 每个 layer 仍通过公开 raw primitive 执行五次 CUDA index reduction + `.item()`：block id 上下界、offset 上下界和 position 非负。这些值已经由 Cache allocator 在 host 侧构造并证明范围，因此内部路径存在重复的 host/stream synchronization。
+
+R4-A 的边界：
+
+- `flashdec.fused_rope_kv_append()` 保留完整 device-value 检查，public safety 不变。
+- `PagedKVCache.begin_token()` 以纯 host invariant 证明 allocator 位置，public transaction API 根据 id 回查该内部状态并使用 private trusted raw launch；DecodeEngine 继续只调用 Cache public API。
+- trusted path 继续检查 shape、dtype、device、contiguity、RoPE 参数和 `int64` metadata。
+- 本 slice 只删除 device reduction + `.item()`，不把仍存在的 transaction-view H2D materialization/copy 表述为完全无同步。
+- 不同时修改 transaction buffer reuse、Triton kernel、Scheduler、shared-prefix metadata 或 CUDA Graph。
+
+验证顺序：
+
+1. public invalid-index、trusted/checked parity、detached-view tampering、Engine public-API routing 与 rollback tests。
+2. RTX focused/full correctness。
+3. 同 commit checked/trusted quick A/B；正式 wall 使用同步后的 `perf_counter`，CUDA event/profiler 独立归因。
+4. 只有 p50 总体至少 `1.05x` 且目标 case 跨 trial 稳定，才进入 transaction metadata reuse；否则记录负结果并停止该优化线。
+5. R4-A 冻结后，再实现统一 scheduled multi-layer workload，组合验证 R1/R2/R3。
+
+详细信任边界见[Multi-layer KV Transaction 设计](design_multi_layer_kv_transaction.md)。
+
+## 暂停目标：private 维护与可选 v0.1.0 Release Gate
 
 状态：R3 技术目标已经完成；按所有者要求暂不公开、不升级版本、不创建 tag。只有收到明确指令后才启动以下 release gate。
 
@@ -74,7 +98,7 @@ R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享�
 - 采用 MIT、Apache-2.0，或继续保留无开源授权状态；
 - GitHub `quality` workflow 和公开链接是否正常。
 
-R4 FlashInfer/vLLM 有限公开对比仍是选择性扩展，不阻塞 R3 或 v0.1.0。
+R5 FlashInfer/vLLM 有限公开对比仍是选择性扩展，在 private R4 与 release gate 完成前不启动。
 
 不在范围内：HTTP 服务、tokenizer、sampling、完整模型 forward、swap/offload、TP/PP 和多机执行。
 

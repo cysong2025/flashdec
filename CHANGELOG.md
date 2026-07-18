@@ -27,6 +27,7 @@
 - R3-A shared-prefix ownership core：opaque prefix id、immutable multi-layer full blocks、request reference counting、private tail、inactive LRU、容量失败原子性和 shared-memory metrics。
 - R3-B Engine/scheduler integration：`RequestSpec.prefix_id`、authoritative prefix metadata、admission attach、global residency + request-private commitment accounting，以及共享请求 lifecycle/invariant tests。
 - R3-C shared-prefix workload runner 与严格 trial summary：0%/25%/50%/75% hit rate、bounded-capacity admission、fixed-full-batch decode、block/byte savings、attach/registration/eviction latency、trial-order rotation 与 lifecycle/accounting validator。
+- R4-A trusted fused transaction boundary：public raw append 保留 CUDA index 值域检查，Cache 在 host allocator reservation 时验证 provenance，public transaction API 回查内部状态后使用 private trusted raw launch；新增 detached-view tampering、checked/trusted parity、rollback 与配对 benchmark/summary 骨架。
 
 ### Changed
 

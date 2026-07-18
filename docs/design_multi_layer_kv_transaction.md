@@ -470,3 +470,62 @@ finish after commit -> releases block once for all layer storage
 ## 17. 当前状态
 
 本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。R2-A/R2-B/R2-C correctness 与 R2-D 正式性能证据均已完成；稳定结论是 fused append/launch 优化能够转化为 multi-layer complete-token 收益，限制是小样本 p99 波动和少数 profiler attribution anomaly。证据提交 `67bee15` 已在 RTX 5070 通过 `337 passed, 25 subtests passed in 5.82s` 的无跳过完整回归，R2 项目闭环完成；clean-install、版本号与 tag 属于后续 release gate。
+
+## 18. R4-A：Trusted CUDA Transaction Fast Path
+
+### 18.1 动机
+
+R2 的 fused transaction 每个 layer 都调用公开 raw primitive。该入口必须防御调用方提供的非法 CUDA 索引，因此同步检查：
+
+```text
+block id lower/upper bound
+block offset lower/upper bound
+position non-negative
+```
+
+这些检查通过五次 device reduction + `.item()` 完成，会让 host 等待当前 CUDA stream。对公开 `flashdec.fused_rope_kv_append()`，该安全语义必须保留；但 Engine transaction 的 block id、offset 和 position 全部来自当前 `PagedKVCache` allocator：
+
+```text
+block_id in deterministic free pool
+block_offset = committed_seq_len % block_size
+position = committed_seq_len >= 0
+```
+
+因此同一组 device-value 检查在 Cache-owned 路径中是重复验证。
+
+### 18.2 信任边界
+
+R4-A 将 fused append 拆成 checked 与 trusted 两条入口：
+
+| 调用路径 | 结构检查 | device-value 检查 | 可见性 |
+| --- | --- | --- | --- |
+| `flashdec.fused_rope_kv_append()` | 保留 | 保留 | public raw primitive |
+| `PagedKVCache.write_token_layer_fused_cuda()` | 保留 | 跳过 | authoritative public transaction API |
+| `DecodeEngine -> PagedKVCache.write_token_layer_fused_cuda()` | 保留 | 跳过 | 只依赖 Cache public API |
+
+trusted raw 路径仍检查 shape、dtype、device、contiguity、RoPE 参数，并要求 transaction metadata 为 contiguous `int64`。`begin_token()` 在 host 上一次性验证 block id/offset/position 与 request block table 的关系；后续 Cache API 不信任调用方修改过的 detached tensor，而是根据 transaction id 回查当前 open internal state，再 materialize allocator 生成的位置。公开 `flashdec` namespace 不导出 trusted raw primitive。
+
+### 18.3 状态与失败语义不变
+
+本优化只删除重复的 device reduction + `.item()` 检查，不改变：
+
+- begin/preflight 与 physical block reservation；
+- layer 顺序和 request row mapping；
+- commit 时单次 `seq_len` 增长；
+- exception 自动 abort、boundary block rollback 和 state version；
+- Triton decode、kernel 配置或 shared-prefix ownership。
+
+第一 slice 不同时修改 transaction metadata tensor materialization、output buffer、CUDA Graph、Scheduler 或 kernel launch geometry。每层 transaction view 仍可能产生 H2D materialization/copy，因此不能称为完全 sync/copy-free；这样 checked/trusted A/B 的差异可以收窄归因到 host-blocking device-value validation。
+
+### 18.4 验收边界
+
+- checked public primitive 对越界 block id/offset 与负 position 继续报错。
+- trusted primitive 不进入 `flashdec` public namespace。
+- 修改 detached transaction view 的位置 tensor 不改变 Cache 实际写入位置或 rollback ownership。
+- checked/trusted 在 FP16/BF16、GQA、tail/boundary case 的 Q output 与 K/V cache 完全对齐。
+- layer failure 后仍无 visible token、block leak 或 open transaction。
+- 同 commit benchmark 交替 checked/trusted 顺序；正式 wall 仅使用 `synchronize + perf_counter + synchronize`，不在计时区间 record CUDA event。
+- profiler attribution 与正式 wall 分离，报告 append host/device time 和 CUDA event count。
+- 只有 complete-token p50 跨 trial 稳定且总体至少 `1.05x`，才冻结为性能收益；否则记录负结果并停止扩展到 CUDA Graph。
+
+当前实现、benchmark harness 与 dependency-free validator tests 已完成，RTX 5070 correctness 和配对性能证据尚未执行，不提前声明 speedup。transaction metadata 每 token 只 materialize 一次是后续独立 slice，必须在 R4-A 因果结论之后再评估。

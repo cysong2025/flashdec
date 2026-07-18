@@ -295,6 +295,25 @@ python benchmarks/summarize_shared_prefix_trials.py \
 
 正式 confirmation 必须是 `4 hit rates x 2 dtypes x 8 trials = 64 rows`，seed 连续且四种顺序各出现两次。summary 必须继续验证 capacity commitment、physical block/byte、prefix lifecycle、materialized context、immutable contents 和 final cleanup。commit `fe72e27` 的结果表明所有非零 complete/scheduler/Engine p50 range 均跨 1，因此只接受 near-neutral/no stable direction 结论；容量/admission 结论独立成立。
 
+## R4-A Trusted Transaction 配对证据
+
+R4-A 不比较两个不同 commit。runner 在同一进程、同一 commit 和同一 Cache/Engine API 上交替切换 checked/trusted raw validation，输入、context、transaction trajectory、parity 与 rollback 必须配对一致。
+
+```bash
+python benchmarks/run_fused_transaction_fast_path.py \
+  --case all \
+  --dtype both \
+  --trials 5 \
+  --output benchmarks/results/r4_fused_transaction_fast_path_trials5.csv
+
+python benchmarks/summarize_fused_transaction_fast_path.py \
+  --input benchmarks/results/r4_fused_transaction_fast_path_trials5.csv \
+  --output benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md \
+  --expected-trials 5
+```
+
+正式矩阵必须是 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`。complete-token latency 使用 `synchronize + perf_counter + synchronize`，计时区间不创建 CUDA event；profiler 是独立 attribution probe。Validator 必须确认 checked 每个 profiled layer 恰有 5 次 `aten::item` 与 `_local_scalar_dense`，trusted 为 0，同时继续验证 block/transaction/Engine accounting、exact parity、rollback 和交替顺序。当前 RTX 证据尚未生成，因此该 summary 还不是 release evidence。
+
 ## 结果文件与提交规则
 
 默认忽略：
@@ -350,6 +369,7 @@ python scripts/check_release.py --require-clean
 | R3 Shared Prefix correctness | 已完成 | commit `fe72e27` 的 targeted `1 passed`、focused `61 passed, 8 subtests passed` 与 full `361 passed, 25 subtests passed` |
 | R3 Shared Prefix benchmark | 已完成 | commit `fe72e27` 的 8-trial/64-row FP16/BF16 RTX confirmation + strict paired/attribution summary |
 | R3 metadata hot path | 已完成 | submission-time shared-block cache、lookup-count test 与 authoritative Cache cross-check；性能 near-neutral/no stable direction |
+| R4-A trusted transaction | 进行中 | 实现与同 commit strict A/B harness 已准备；RTX correctness、quick 与 5-trial evidence 待执行 |
 | Clean WSL editable install | 暂停 | 仓库继续 private；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

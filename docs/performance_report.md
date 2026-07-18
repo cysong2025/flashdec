@@ -230,9 +230,15 @@ commit `fe72e27` 在同一 RTX 5070、PyTorch `2.11.0+cu128`、CUDA 12.8 环境�
 
 最终结论：R3-D 证明了热路径重复 lookup 已被移除，但当前数据不能量化跨 commit 的因果 speedup。R3 性能冻结为 near-neutral/no stable direction；稳定收益只声明 physical KV capacity、bounded-pool admission 与 ownership correctness。完整数据见[R3 8-trial 摘要](../benchmarks/results/r3_shared_prefix_workload_trials8_summary.md)。
 
+## R4-A Trusted Transaction 待验证假设（2026-07-18）
+
+R2 profiler 表明 multi-layer complete-token 收益主要来自 append/launch 路径，而 decode device time 近似不变。代码审计进一步定位到 Cache-owned fused transaction 每层仍在公开 raw primitive 中执行 5 次 CUDA reduction + `.item()`：block id 上下界、block offset 上下界与 position 非负。allocator 已在 host 上生成并拥有这些位置，因此 R4-A 将这组证明前移到 `begin_token()`，Cache public transaction API 回查内部 state 后使用 private trusted raw launch；public raw primitive 的防御性检查保持不变。
+
+这只是待验证假设，不是性能结果。当前 slice 仍会每层 materialize transaction view 并复制 metadata，所以不能称为完全 sync/copy-free。正式 A/B 必须在同 commit 交替 checked/trusted，使用无 CUDA event 的 synchronized wall，另用 profiler 证明 item/local-scalar 从每层 5 次降到 0。只有 complete-token p50 总体至少 `1.05x` 且目标 l2/l4 case 跨 5 trials 不穿过 1，才进入 persistent metadata；否则保留负结果并停止这条优化线。
+
 ## 后续工作边界
 
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
-2. Block-aware Scheduler 与 Multi-layer KV Token Transaction 已完成，后续优化必须基于新的 correctness 或系统证据。
+2. Block-aware Scheduler 与 Multi-layer KV Token Transaction 已完成；当前只执行 R4-A 单变量 checked/trusted 证据，不重新 sweep 已冻结参数。
 3. clean-install、版本与 tag 留在最终 release gate。
 4. Shared Prefix R3 已完成；当前不继续围绕同一数据调参。固定版本公开基线与 release 均暂停，未来若执行仍必须统一功能与计时边界。

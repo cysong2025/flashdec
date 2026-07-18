@@ -21,6 +21,7 @@
 - R3-A Cache ownership core：opaque prefix id、immutable multi-layer full blocks、active refcount、request-private tail 与 inactive LRU。
 - R3-B scheduler integration：`RequestSpec.prefix_id`、Cache-derived shared block metadata、global residency + private lifetime commitment、admission attach 与 stale external mutation rejection。
 - R3-D hot-path metadata cache：shared block 数只在 submission 时从 resident registry 派生，后续 snapshot/commitment 使用 immutable Engine metadata，并继续与 Cache authoritative request state/version 对齐。
+- R4-A trusted transaction boundary：`begin_token()` 在 host 上验证 reservation provenance；fused Cache transaction 根据 id 回查内部状态并跳过重复 device-value reductions，detached view 的位置 tensor 不参与真实写入。
 
 当前限制：
 
@@ -82,7 +83,7 @@
 - RTX 5070 focused 为 `38 passed in 3.60s`，完整回归为 `186 passed in 4.96s`。
 - native extension 当前要求 CUDA-resident、contiguous FP16/BF16/FP32 token-major cache 与 K/V；Toolkit 前置检查已通过 `nvcc 12.8.93`、`CUDA_HOME=/usr/local/cuda-12.8` 和 Ninja 1.13.0。
 - RoPE 的 `append_backend="cuda"` 集成已通过 RTX 5070 correctness（focused `56 passed in 3.85s`，full `204 passed in 4.47s`）；它不是 fused RoPE kernel，也没有性能结论。
-- `append_backend="fused_cuda"` 和低层 `flashdec.fused_rope_kv_append()` 已在 RTX 5070 通过 JIT/correctness（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）；当前支持 token-major contiguous FP16/BF16/FP32。Week 11 append-only full benchmark 的 p50 几何平均为 1.2226x vs torch。
+- `append_backend="fused_cuda"` 和低层 `flashdec.fused_rope_kv_append()` 已在 RTX 5070 通过 JIT/correctness（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）；当前支持 token-major contiguous FP16/BF16/FP32。Week 11 append-only full benchmark 的 p50 几何平均为 1.2226x vs torch。R4-A 新增的 Cache-owned trusted raw dispatch 仍待 RTX correctness 与 checked/trusted A/B，当前不声明额外 speedup。
 
 ## DecodeEngine v1
 

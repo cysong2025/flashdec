@@ -459,6 +459,12 @@ class PagedKVCache:
                     newly_allocated[request_id] = block_id
                     allocation_order.append(block_id)
                 locations.append((state.block_ids[logical_block], block_offset))
+            self._validate_reserved_transaction_locations(
+                ids,
+                states,
+                positions,
+                locations,
+            )
             block_tables = self.block_tables(ids)
             for state in states:
                 state.transaction_id = transaction_id
@@ -521,12 +527,16 @@ class PagedKVCache:
         rotary_dim=None,
         base=10_000.0,
     ):
-        """Run fused RoPE + K/V write at transaction-reserved locations.
+        """Run fused RoPE + K/V write at Cache-owned reserved locations.
 
         The transaction remains the sole owner of allocation, rollback, and
         committed sequence-length mutation.  The CUDA primitive receives only
         the already reserved physical block ids/offsets and writes one layer;
-        it does not allocate blocks or publish the token.
+        it does not allocate blocks or publish the token. Detached transaction
+        tensors are not consumed: the transaction id is resolved back to the
+        authoritative host allocator state, whose locations were validated at
+        ``begin_token``. This permits the private raw CUDA launch to skip
+        repeated device-value reductions without trusting caller-owned values.
         """
         state = self._require_open_transaction(transaction)
         try:
@@ -560,10 +570,10 @@ class PagedKVCache:
                     "write_token_layer_fused_cuda requires contiguous q, k, and v tensors"
                 )
 
-            from ._fused_rope_kv_append import fused_rope_kv_append
+            from ._fused_rope_kv_append import _fused_rope_kv_append_trusted
 
             view = self._transaction_view(state)
-            q_rotated = fused_rope_kv_append(
+            q_rotated = _fused_rope_kv_append_trusted(
                 q,
                 k,
                 v,
@@ -1069,6 +1079,44 @@ class PagedKVCache:
         state.next_layer_idx += 1
         self._transaction_layer_write_count += 1
         return self._transaction_view(state)
+
+    def _validate_reserved_transaction_locations(
+        self,
+        request_ids,
+        states,
+        positions,
+        locations,
+    ):
+        """Prove raw-kernel indices from host allocator state before publication."""
+        if not (
+            len(request_ids)
+            == len(states)
+            == len(positions)
+            == len(locations)
+        ):
+            raise RuntimeError("transaction location metadata has inconsistent rows")
+        for request_id, state, position, location in zip(
+            request_ids,
+            states,
+            positions,
+            locations,
+        ):
+            if position < 0:
+                raise RuntimeError("transaction position must be non-negative")
+            block_id, block_offset = location
+            if not 0 <= block_id < self.max_blocks:
+                raise RuntimeError("transaction physical block id is out of range")
+            if not 0 <= block_offset < self.block_size:
+                raise RuntimeError("transaction block offset is out of range")
+            if block_offset != position % self.block_size:
+                raise RuntimeError("transaction block offset does not match position")
+            logical_block = position // self.block_size
+            if logical_block >= len(state.block_ids):
+                raise RuntimeError("transaction logical block is not allocated")
+            if state.block_ids[logical_block] != block_id:
+                raise RuntimeError(
+                    f"transaction physical block does not match request {request_id!r}"
+                )
 
     def _preflight_append(self, ids):
         needed_new_blocks = 0

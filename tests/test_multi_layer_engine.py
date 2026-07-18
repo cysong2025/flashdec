@@ -256,6 +256,153 @@ def test_multi_layer_fused_backend_cpu_failure_automatically_aborts_transaction(
     assert engine.validate_invariants()
 
 
+def test_engine_routes_fused_transaction_through_authoritative_cache_api(
+    monkeypatch,
+):
+    engine = DecodeEngine(_cache(num_layers=2), append_backend="fused_cuda")
+    engine.add_request(1)
+    engine.admit()
+    fused_layers = []
+
+    def fused_path(
+        transaction,
+        layer_idx,
+        q,
+        k,
+        v,
+        *,
+        rotary_dim=None,
+        base=10_000.0,
+    ):
+        fused_layers.append(layer_idx)
+        view = engine.cache.transaction_view(transaction)
+        q_rotated = apply_rope(
+            q,
+            view.positions,
+            rotary_dim=rotary_dim,
+            base=base,
+        )
+        k_rotated = apply_rope(
+            k,
+            view.positions,
+            rotary_dim=rotary_dim,
+            base=base,
+        )
+        latest = engine.cache.write_token_layer(
+            transaction,
+            layer_idx,
+            k_rotated,
+            v,
+        )
+        return q_rotated, latest
+
+    monkeypatch.setattr(
+        engine.cache,
+        "write_token_layer_fused_cuda",
+        fused_path,
+    )
+
+    transaction = engine.begin_step([1])
+    for layer_idx in range(2):
+        q, k, v = _inputs(1, 625 + layer_idx)
+        engine.step_layer(transaction, layer_idx, q, k, v)
+    result = engine.commit_step(transaction)
+
+    assert fused_layers == [0, 1]
+    assert result.status == DecodeEngine.STEP_OK
+    assert result.seq_lens.tolist() == [1]
+    assert engine.validate_invariants()
+
+
+@pytest.mark.skipif(not HAS_CUDA_TOOLCHAIN, reason=CUDA_TOOLCHAIN_REASON)
+@pytest.mark.parametrize("dtype", CUDA_DTYPES)
+def test_fused_cache_ignores_forged_detached_transaction_locations_and_rolls_back(
+    dtype,
+):
+    flashdec.load_fused_rope_kv_append_extension()
+    cache = PagedKVCache(
+        num_layers=2,
+        num_kv_heads=2,
+        head_dim=64,
+        block_size=2,
+        max_blocks=4,
+        dtype=dtype,
+        device="cuda",
+    )
+    cache.add_request("request")
+    transaction = cache.begin_token(["request"])
+    authoritative_block = transaction.physical_block_ids.item()
+    forged = replace(
+        transaction,
+        positions=torch.full_like(transaction.positions, 5),
+        physical_block_ids=torch.full_like(
+            transaction.physical_block_ids, cache.max_blocks - 1
+        ),
+        block_offsets=torch.full_like(
+            transaction.block_offsets, cache.block_size - 1
+        ),
+    )
+
+    atol, rtol, cache_atol, cache_rtol = _cuda_tolerances(dtype)
+    for layer_idx in range(cache.num_layers):
+        q, k, v = _cuda_inputs(1, dtype, 690 + layer_idx)
+        q_rotated, latest = cache.write_token_layer_fused_cuda(
+            forged,
+            layer_idx,
+            q,
+            k,
+            v,
+        )
+        expected_q = apply_rope(q, transaction.positions)
+        expected_k = apply_rope(k, transaction.positions)
+        torch.testing.assert_close(q_rotated, expected_q, atol=atol, rtol=rtol)
+        torch.testing.assert_close(
+            cache.k_cache[layer_idx, authoritative_block, :, 0, :],
+            expected_k[0],
+            atol=cache_atol,
+            rtol=cache_rtol,
+        )
+        torch.testing.assert_close(
+            cache.v_cache[layer_idx, authoritative_block, :, 0, :],
+            v[0],
+            atol=cache_atol,
+            rtol=cache_rtol,
+        )
+        assert latest.next_layer_idx == layer_idx + 1
+
+    cache.commit_token(forged)
+    assert cache.request_state("request")["seq_len"] == 1
+    assert cache.request_block_ids("request") == (authoritative_block,)
+
+    tail = cache.begin_token(["request"])
+    for layer_idx in range(cache.num_layers):
+        _q, k, v = _cuda_inputs(1, dtype, 696 + layer_idx)
+        cache.write_token_layer(tail, layer_idx, k, v)
+    cache.commit_token(tail)
+
+    rollback = cache.begin_token(["request"])
+    rollback_block = rollback.physical_block_ids.item()
+    forged_rollback = replace(
+        rollback,
+        positions=torch.full_like(rollback.positions, 7),
+        physical_block_ids=torch.full_like(
+            rollback.physical_block_ids, cache.max_blocks - 1
+        ),
+        block_offsets=torch.full_like(
+            rollback.block_offsets, cache.block_size - 1
+        ),
+    )
+    q, k, v = _cuda_inputs(1, dtype, 699)
+    cache.write_token_layer_fused_cuda(forged_rollback, 0, q, k, v)
+    cache.abort_token(forged_rollback)
+
+    assert rollback_block != authoritative_block
+    assert cache.request_state("request")["seq_len"] == 2
+    assert cache.request_block_ids("request") == (authoritative_block,)
+    assert cache.metrics()["transaction_rollback_block_count"] == 1
+    assert cache.validate_invariants()
+
+
 def test_multi_layer_engine_rejects_unfused_cuda_transaction_backend():
     engine = DecodeEngine(_cache(num_layers=2), append_backend="cuda")
     engine.add_request(1)
