@@ -34,7 +34,7 @@
 - Python package 核心依赖只保留 torch/triton；pytest 移入 `dev` extra，Ninja 保留在 `cuda-extension` extra。
 - GPU Engine 明确使用 fused CUDA append policy；公开 reference API 默认仍保持 PyTorch 路径。
 - DecodeEngine workload CSV、multi-trial summary 和 profiler evidence 现在绑定生成时的 Git commit。
-- Release artifact/evidence gate 现在同时要求 R1 Scheduler 与 R2 Multi-layer runner、validator、focused tests 和正式 Markdown summary。
+- Release artifact/evidence gate 现在同时要求 R1 Scheduler、R2 Multi-layer 与 R3 Shared Prefix runner、validator、focused tests 和最终 Markdown summary。
 
 ### Performance evidence
 
@@ -50,6 +50,8 @@
 - R3-C commit `1d5d8d0` 的 RTX 5070 正式 24 行矩阵全部通过严格校验。75% hit 将 context physical blocks 从 `64/64` 降至 `20/64`，节省 `68.8%`/`5.5 MiB`；peak blocks 从 `80` 降至 `36`，bounded-pool admission 从 `9/16` 提高到 `16/16`。attach p50 低于 `0.8 us`，decode latency 跨 dtype 非单调，因此不声明稳定加速。
 - R3-C paired latency：FP16 25% p50 三轮稳定更快；FP16/BF16 75% p50 三轮稳定更慢，ratio 分别为 `0.9377x [0.9298,0.9870]` 与 `0.9054x [0.8602,0.9816]`。该负结果保留并进入 scheduler/engine attribution，不用内存收益掩盖 latency trade-off。
 - R3-D submission-time shared metadata cache：移除 scheduling snapshot、commitment 与 invariant 热路径中的重复 prefix registry lookup，同时保留 Cache shared-block/version authoritative cross-check；新增 lookup-count correctness test。
+- R3-D commit `fe72e27` 的 RTX 5070 8-trial confirmation 共 64 行并通过严格校验。75% hit 仍将 context physical blocks 从 `64/64` 降至 `20/64`、节省 `68.8%`/`5.5 MiB`，并将 bounded-pool admission 从 `9/16` 提高到 `16/16`。所有非零 hit-rate 的 complete、scheduler 与 Engine p50 paired range 均跨过 1，因此冻结为 near-neutral/no stable direction，不声明稳定加速或回退。
+- confirmation 保留离群点：BF16 trial 1 的 25% case 主要是 Engine 整行变慢，FP16 trial 7 的 25% case 是尾部尖峰；相同执行顺序的第二轮均未复现，端点 `nvidia-smi` 快照也不足以确定根因。
 
 ### Correctness evidence
 
@@ -59,10 +61,11 @@
 - R2-D 证据提交 `67bee15` RTX 5070 最终完整回归：`337 passed, 25 subtests passed in 5.82s`，无 skipped 或 failure。
 - R3-A commit `e1bb6a8` 的 WSL focused 与完整回归均报告通过；本轮未提供精确计数，因此不增加新的定量 pytest 基线。
 - R3-B commit `08d0414` RTX 5070 focused：`56 passed, 14 subtests passed in 5.29s`；完整回归：`352 passed, 25 subtests passed in 9.37s`。
+- R3-D commit `fe72e27` RTX 5070 targeted hot-path test：`1 passed`；focused：`61 passed, 8 subtests passed`；完整回归：`361 passed, 25 subtests passed in 6.28s`。
 
 ### Pending before v0.1.0
 
-- R3-D WSL correctness 与优化后 RTX quick/formal attribution。
 - clean WSL venv editable install 和 quick workload 复现。
 - 将 `pyproject.toml` 与 `flashdec.__version__` 同步更新为 `0.1.0`。
 - 创建并验证 `v0.1.0` tag；当前不得提前标记 release。
+- 仓库可见性继续保持 private；公开、版本升级和 tag 等待所有者明确启动 release gate。

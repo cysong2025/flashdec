@@ -164,6 +164,20 @@ class SharedPrefixWorkloadSummaryTests(unittest.TestCase):
         self.assertIn("not a direct process-VRAM measurement", text)
         self.assertIn("system noise", text)
 
+    def test_validator_and_summary_support_eight_trial_confirmation(self):
+        rows = _rows(trials=8)
+        self.assertEqual(validate_rows(rows, expected_trials=8), rows)
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "summary.md"
+            write_summary(
+                rows,
+                output,
+                "input.csv",
+                expected_trials=8,
+            )
+            text = output.read_text()
+        self.assertIn("Rows: 64; trials: 8.", text)
+
 
 if __name__ == "__main__":
     unittest.main()

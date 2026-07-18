@@ -2,7 +2,7 @@
 
 ## 本周主题
 
-Shared Prefix Blocks：从 Cache ownership core 扩展到 DecodeEngine 与 block-aware scheduler 的 shared-aware admission。
+Shared Prefix Blocks：完成 Cache ownership、DecodeEngine/scheduler shared-aware admission、hot-path metadata cache 与最终 RTX evidence。
 
 ## 当前已完成
 
@@ -43,16 +43,25 @@ Shared Prefix Blocks：从 Cache ownership core 扩展到 DecodeEngine 与 block
 - R3-D 已缓存 submission-time 验证得到的 shared block 数，移除 snapshot/commitment 热路径上的重复 prefix registry 查询，并保留 Cache metadata/version 交叉校验。
 - `saved_prefix_bytes` 是避免占用的 KV pool capacity；fixed-full-batch probe 的实际预分配 tensor 大小不随 hit rate 改变。
 
+### R3-D 最终 confirmation
+
+- commit `fe72e27` 的 hot-path targeted test：`1 passed`；focused：`61 passed, 8 subtests passed in 3.01s`；完整回归：`361 passed, 25 subtests passed in 6.28s`。
+- 优化后 RTX 5070 confirmation 覆盖 FP16/BF16、4 hit rates、8 trials，共 64 行；seed `613-620`，四种执行顺序各出现两次，严格 validator 全部通过。
+- 容量/admission 再次复现：75% hit 的 context blocks 为 `20/64`，节省 `68.8%`/`5.5 MiB` KV-pool capacity；peak blocks `80 -> 36`，bounded-pool admission `9/16 -> 16/16`。
+- 所有非零 complete、scheduler 与 Engine p50 paired range 均跨 1；p90/p99/TPS 也没有稳定方向。最终性能结论冻结为 near-neutral，不声明稳定加速或回退。
+- BF16 trial 1 的 25% case 是 Engine 主导的整行慢点；FP16 trial 7 的 25% case 是尾部尖峰。相同顺序第二轮未复现，端点设备快照不足以确定根因，因此保留为未归因离群点。
+- 旧 commit `1d5d8d0` 的 24-row summary 保留为优化前负结果基线；两次独立 run 不用于计算 metadata cache 的因果 speedup。
+
 ## 当前环境限制
 
-macOS Codex 工作区没有项目 torch/pytest/CUDA 环境，只能执行 dependency-free unittest、`compileall`、文档检查与静态 diff 检查。动态 Engine correctness 继续在 RTX 5070 WSL 环境验证。
+macOS Codex 工作区没有项目 torch/pytest/CUDA 环境，只执行 dependency-free tests、`compileall`、文档检查与静态 diff 检查。动态 Engine correctness 已由 RTX 5070 WSL 结果闭合。
 
-## 需要在 RTX 5070 完成
+## R3 完成状态
 
-1. 在 WSL 执行 R3-D focused/full correctness。
-2. 复跑 R3 quick/formal，验证 scheduler host 开销是否下降，并重新评估 BF16 Engine trade-off。
-3. 归档优化前后证据，再完成 R3 完整回归。
+1. R3-A ownership、R3-B integration、R3-C benchmark 与 R3-D metadata cache 均已完成。
+2. RTX correctness、8-trial confirmation、负结果和离群点边界已归档。
+3. R3 不再新增性能调参目标；只有新回归证据出现时才重新进入实验。
 
 ## 下一步
 
-R3-B admission/commitment 语义已冻结。下一步执行 R3-C RTX 实测；clean install、版本与 tag 仍保留到最后。
+仓库继续保持 private。clean install、`0.1.0`、公开与 tag 按所有者要求暂停；收到明确 release 指令前只做证据维护和回归修复。

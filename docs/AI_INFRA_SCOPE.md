@@ -106,7 +106,7 @@ allocate/free/reuse      block_tables/seq_lens
 | Paged KV Runtime | lifecycle、free/reuse、capacity atomicity、metrics、churn 与 multi-layer transaction 已完成 | Cache 是 block ownership 与事务状态的唯一来源 |
 | Decode Data Path | torch/CUDA/fused 三条路径通过 RTX correctness；fused append-only p50 为 `1.2226x` | native kernel 不修改 allocator 或 seq_len |
 | Execution Engine | dynamic batch、backpressure、Scheduler R1 与 multi-layer R2 已完成 | 不包含模型 forward、sampling 或网络层 |
-| End-to-End Evaluation | 36-row Engine、36-row Scheduler、144-row Multi-layer 正式矩阵完成 | profiler 只做归因；p99 保留范围 |
+| End-to-End Evaluation | 36-row Engine、36-row Scheduler、144-row Multi-layer 与 64-row Shared Prefix confirmation 完成 | profiler 只做归因；p99 保留范围 |
 | Reproducibility | 环境检查、分层验证、严格 summary 与 release checker 已完成 | clean-machine install、版本与 tag 留在最终发布阶段 |
 
 ## Release candidate 完成标准
@@ -125,4 +125,4 @@ allocate/free/reuse      block_tables/seq_lens
 
 ## 选择性扩展边界
 
-Block-aware Scheduler 与 multi-layer KV token transaction 已完成，当前已选择 shared prefix blocks 作为下一条系统优化方向；FlashInfer/vLLM 有限公开对比暂缓，避免同时扩大 ownership、eviction 和外部依赖边界。完整优先级与验收门槛见 `docs/ROADMAP.md`。
+Block-aware Scheduler、multi-layer KV token transaction 与 shared prefix blocks 均已完成。当前没有自动启动下一条功能主线；仓库保持 private，FlashInfer/vLLM 有限公开对比与 release 工作都等待所有者明确决定。完整优先级与验收门槛见 `docs/ROADMAP.md`。

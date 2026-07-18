@@ -184,7 +184,7 @@ commit `fd36ed0` 的 RTX 5070 FP16 quick 共 4 行，全部通过严格校验：
 | 50% | 3/4 | 3/4 | 25% | 7 | 0.125 |
 | 75% | 3/4 | 2/4 | 50% | 6 | 0.250 |
 
-25% 只有一个 hit request，没有第二个 owner 可以复用，因此相对私有存储没有净节省。50%/75% 从第二个 owner 开始分别节省 1/2 个 context blocks，并在相同 bounded pool 下多接纳一个请求。quick 每档只有 3 次正式 step 采样，p50/TPS 非单调，只验证链路，不形成 latency 结论。FP16/BF16 三轮正式证据待执行。
+25% 只有一个 hit request，没有第二个 owner 可以复用，因此相对私有存储没有净节省。50%/75% 从第二个 owner 开始分别节省 1/2 个 context blocks，并在相同 bounded pool 下多接纳一个请求。quick 每档只有 3 次正式 step 采样，p50/TPS 非单调，只验证链路，不形成 latency 结论；后续 FP16/BF16 正式证据如下。
 
 commit `1d5d8d0` 的 RTX 5070 正式矩阵覆盖 4 hit rates、2 dtypes、3 trials，共 24 行并全部通过严格校验。两种 dtype 的 block/byte 结果一致：
 
@@ -223,7 +223,24 @@ CSV attribution 显示 75% hit 的 scheduler p50 在 FP16/BF16 分别为 `0.8716
 - active request 每次 snapshot/invariant 仍将 cached count 与 Cache authoritative `shared_block_count` 交叉检查；
 - Cache 外部 mutation 仍由既有 `state_version` mismatch 拒绝。
 
-该优化只针对已定位的 host metadata 热路径。BF16 75% 的 Engine ratio 全三轮低于 1，说明 GPU/Engine 路径仍可能存在独立 trade-off；必须在优化后复测，不能承诺 metadata cache 会消除 complete-step 回退。
+该优化只针对已定位的 host metadata 热路径。BF16 75% 的 Engine ratio 全三轮低于 1，说明 GPU/Engine 路径可能存在独立 trade-off；因此优化后必须以重新配对的 RTX evidence 决定最终结论，不能预先承诺 metadata cache 会消除 complete-step 回退。
+
+### R3-D 最终 RTX confirmation
+
+commit `fe72e27` 在 RTX 5070 上通过 hot-path targeted `1 passed`、focused `61 passed, 8 subtests passed` 和完整 `361 passed, 25 subtests passed`。8 trials 使用 seed `613-620`，四种 hit-rate 顺序各轮转两次；FP16/BF16 共 64 行，matrix、capacity、physical block/byte、prefix lifecycle、immutable contents 与 final cleanup 全部通过严格校验。
+
+容量结果与 R3-C 完全一致：0%/25%/50%/75% 的 context physical blocks 为 `64/52/36/20`，peak blocks 为 `80/68/52/36`，bounded-pool admission 为 `9/12/15/16`。75% hit 因而避免 44 个重复 context blocks，即 `68.8%`/`5.5 MiB` KV-pool capacity；这仍不是 fixed-full-batch probe 的直接进程显存下降。
+
+优化后的 complete p50 paired range 为：
+
+| dtype | 25% | 50% | 75% |
+| --- | ---: | ---: | ---: |
+| FP16 | `1.0300x [0.9295,1.1273]` | `1.0011x [0.8285,1.0998]` | `1.0454x [0.7654,1.1811]` |
+| BF16 | `1.0207x [0.3056,1.0427]` | `1.0088x [0.9332,1.0534]` | `1.0094x [0.9376,1.0556]` |
+
+所有非零 hit-rate 的 complete、scheduler 与 Engine p50 range 都跨过 1。旧 3-trial 的 75% 稳定回退没有在新矩阵形成稳定方向，但这不是同一 run 内的交错 A/B，不能把差异解释为 metadata cache 的精确 speedup。最终性能结论冻结为 near-neutral/no stable direction，R3 的可发布收益仍是 ownership correctness、每步 registry lookup 移除、physical KV capacity 节省和更高 admission。
+
+保留两个代表性离群点：BF16 trial 1 的 25% case 从同 trial baseline `1.649423 ms` 变为 `5.397728 ms`，Engine p50 为 `5.268665 ms`，说明该次整行慢主要不在 scheduler；FP16 trial 7 的 25% p50 基本正常但 p99 达 `5.156287 ms`，属于尾部尖峰。它们在第二轮相同执行顺序中均未复现。benchmark 前后端点快照为空闲 GPU，但不能证明运行中没有瞬时 WSL/GPU 干扰，因此根因保持未归因。
 
 ### 容量字节与实际显存
 

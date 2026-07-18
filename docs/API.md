@@ -1,6 +1,6 @@
 # FlashDec 公开 API
 
-本文给出 `flashdec` 顶层公开接口的用途、张量约定和状态边界。当前版本仍为 `0.0.0` release candidate；接口在 `v0.1.0` 发布前允许做兼容性整理，但所有行为变更都必须同步测试与 Changelog。
+本文给出 `flashdec` 顶层公开接口的用途、张量约定和状态边界。当前版本是 private `0.0.0` development candidate；最终 clean-install、版本、公开与 tag gate 暂停，但任何接口行为变更仍必须同步测试与 Changelog。
 
 ## 张量约定
 

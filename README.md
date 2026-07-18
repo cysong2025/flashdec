@@ -6,7 +6,7 @@ FlashDec 是一个面向单 GPU LLM decode 的研究型运行时原型，覆盖 
 
 项目关注的核心问题是：在请求长度与 batch 持续变化的情况下，如何维护可验证的 KV 所有权和失败原子性，并证明底层 kernel 优化能够转化为完整 decode step 的系统收益。
 
-> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction 与 R3 Shared Prefix Blocks 的核心实现、correctness 和 RTX 正式矩阵均已完成。R3-C 的 24 行 FP16/BF16 三轮矩阵通过严格校验；R3-D 正在消除 shared metadata 的每步重复查询，并保留 BF16 engine-step 回退作为独立 GPU-path trade-off。仓库仍处于 `0.0.0`，clean-install 与正式版本发布留在最终 release gate。
+> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction 与 R3 Shared Prefix Blocks 均已完成。R3-D commit `fe72e27` 通过 targeted、focused 和完整 RTX correctness；优化后的 8-trial/64-row confirmation 证明容量与 admission 收益稳定，但 complete、scheduler 和 Engine p50 均无稳定快慢方向。仓库按所有者要求继续保持 private 和 `0.0.0`，clean-install、版本与正式发布暂停在最终 release gate。
 
 ## 架构
 
@@ -60,11 +60,12 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 | Multi-layer R2 | complete-token p50/p90/TPS `1.2101x/1.3826x/1.2800x` | 24 个 dtype/case 中 20 个三轮稳定胜出 |
 | R2 最终 RTX 回归 | `337 passed, 25 subtests passed` | 无 skipped 或 failure |
 | R3-B RTX 回归 | focused `56 passed, 14 subtests passed`；full `352 passed, 25 subtests passed` | shared-prefix Engine/scheduler 集成验收通过 |
-| R3-C 正式矩阵 | 75% hit：context 节省 `68.8%`/`5.5 MiB`，admission `9/16 -> 16/16` | 24 行通过；75% p50 在 FP16/BF16 均稳定回退，待归因 |
+| R3-D RTX 回归 | targeted `1 passed`；focused `61 passed, 8 subtests passed`；full `361 passed, 25 subtests passed` | hot-path lookup invariant 与完整功能回归通过 |
+| R3 最终 confirmation | 75% hit：context 节省 `68.8%`/`5.5 MiB`，admission `9/16 -> 16/16` | 64 行通过；所有非零 complete/scheduler/Engine p50 range 均跨 1，无稳定性能方向 |
 
 R2 的 decode device ratio 为 `1.0024x`，而 append device 与 CUDA event ratio 分别为 `1.6103x` 和 `1.9784x`，说明系统收益主要来自 append/launch 路径。每轮仅 20 repeats，p99 接近单轮最大值，因此所有尾延迟结论都保留场景范围，不作生产级稳定性声明。
 
-详细结果见[性能报告](docs/performance_report.md)、[R1 正式摘要](benchmarks/results/r1_scheduler_workload_trials3_summary.md)和[R2 正式摘要](benchmarks/results/r2_multi_layer_engine_trials3_summary.md)。R3-C 的正式内存结果记录在[Shared Prefix Blocks 设计](docs/design_shared_prefix_blocks.md)，增强后的 paired summary 正在归档。
+详细结果见[性能报告](docs/performance_report.md)、[R1 正式摘要](benchmarks/results/r1_scheduler_workload_trials3_summary.md)、[R2 正式摘要](benchmarks/results/r2_multi_layer_engine_trials3_summary.md)和[R3 最终摘要](benchmarks/results/r3_shared_prefix_workload_trials8_summary.md)。R3 的 ownership、容量口径与离群点边界记录在[Shared Prefix Blocks 设计](docs/design_shared_prefix_blocks.md)。
 
 ## 快速开始
 

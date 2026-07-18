@@ -121,7 +121,7 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 ### R0.3 v0.1.0 可复现发布
 
-当前状态：reproducibility guide、release checker、R0 phase orchestrator、正式 3-trial/profile 证据均已完成；仅 clean WSL venv、版本升级和 tag 仍待完成。
+当前状态：reproducibility guide、release checker、R0 phase orchestrator 与 R1-R3 正式证据均已完成；clean WSL venv、版本升级、公开和 tag 按所有者要求暂停。
 
 交付物：
 
@@ -278,9 +278,9 @@ FP16/BF16 + GQA -> CPU/reference and RTX path aligned
 - 任意 layer 写入失败时，不留下 partial request state。
 - benchmark 明确报告 layer 数、总 KV bytes、launch 数与 token latency，不把单 layer结果外推。
 
-## 7. 阶段 R3：Shared Prefix Blocks（当前阶段）
+## 7. 阶段 R3：Shared Prefix Blocks（已完成）
 
-优先级：P2。R0-R2 已完成；仓库保持 private 期间先完成本阶段，再执行最终 clean install 与发布准备。预计 2-3 个阶段周。
+优先级：P2。R3-A 至 R3-D 已完成；仓库继续保持 private，最终 clean install 与发布准备不自动启动。
 
 ### 目标
 
@@ -295,9 +295,9 @@ FP16/BF16 + GQA -> CPU/reference and RTX path aligned
 - 有容量边界的 LRU，只淘汰无 active owner 的 cached prefix。
 - hit/miss、shared blocks、saved blocks/bytes、eviction 指标。
 
-实现拆分为 R3-A cache ownership core、R3-B DecodeEngine/scheduler integration、R3-C benchmark/RTX evidence。详细状态转换、统计口径和不变量见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
+实现拆分为 R3-A cache ownership core、R3-B DecodeEngine/scheduler integration、R3-C benchmark/RTX evidence 与 R3-D hot-path metadata cache。详细状态转换、统计口径和不变量见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
-当前状态：R3-A/R3-B correctness 已闭合。R3-B RTX 5070 focused 为 `56 passed, 14 subtests passed in 5.29s`，完整回归为 `352 passed, 25 subtests passed in 9.37s`。R3-C commit `1d5d8d0` 的 RTX FP16/BF16 三轮正式矩阵共 24 行，已通过严格校验；75% hit 避免占用的 context KV capacity 为 `68.8%`，bounded-pool admission 为 `16/16`，相对 0% 的 `9/16` 明显提高。R3-D metadata-cache 优化已实现，待 RTX 复测 scheduler/Engine attribution。
+当前状态：R3-D commit `fe72e27` 的 RTX targeted/focused/full correctness 分别为 `1 passed`、`61 passed, 8 subtests passed` 与 `361 passed, 25 subtests passed`。优化后的 8-trial/64-row confirmation 通过严格校验；75% hit 避免占用 `68.8%`/`5.5 MiB` context KV capacity，bounded-pool admission 从 0% 的 `9/16` 提高到 `16/16`。所有非零 hit-rate 的 complete、scheduler 与 Engine p50 paired range 均跨 1，性能冻结为 near-neutral/no stable direction。旧 commit `1d5d8d0` 的 24-row 结果保留为优化前基线，不做跨 commit 因果 speedup 声明。
 
 ### 核心测试
 
@@ -347,8 +347,8 @@ capacity failure -> refcount and ownership unchanged
 | P0 | multi-trial、阶段归因、reproducibility、v0.1.0 | 必须 |
 | P1 | block-aware scheduler | 必须，最重要的系统扩展 |
 | P1 | multi-layer KV transaction | 必须，修复当前架构边界 |
-| P2 | shared prefix blocks | 已选为当前进阶方向 |
-| P2 | FlashInfer/vLLM 有限公开对比 | 暂缓，不与 R3 同时扩展 |
+| P2 | shared prefix blocks | 已完成 R3-A 至 R3-D |
+| P2 | FlashInfer/vLLM 有限公开对比 | 未启动；private 维护期间暂停 |
 | 不做 | HTTP server、完整模型、sampling、TP/PP、多机、swap/offload | 不影响项目完成 |
 
 如果时间不足，项目应在 R2 后停止增加功能，集中完成复现和文章。Scheduler + multi-layer transaction 比再增加三个小 kernel 更能证明 AI Infra 深度。
@@ -368,10 +368,10 @@ capacity failure -> refcount and ownership unchanged
 
 ## 11. 当前立即执行顺序
 
-1. R2 正式 summary、文档、release evidence gate、RTX 最终完整回归和证据提交均已完成。
-2. 仓库信息架构、状态一致性、文档检查与 GitHub 质量门禁已完成；仓库继续保持 private。
-3. 依次完成 R3-A Cache ownership、R3-B DecodeEngine/scheduler integration 和 R3-C benchmark/RTX evidence。
-4. R3 闭合后执行 clean-machine install、release quick workload 与 release checker。
-5. release gate 全部通过后再确认仓库可见性、许可证、`0.1.0` 版本与 tag。
+1. R1 Scheduler、R2 Multi-layer 与 R3 Shared Prefix 的实现、正式 summary、RTX correctness 和负结果归档均已完成。
+2. R3 最终 8-trial summary 已成为 release evidence；旧 3-trial summary 继续作为优化前历史基线。
+3. 仓库继续保持 private，当前只做证据维护和回归修复，不自动扩大功能或重新调参。
+4. 收到所有者明确指令后，再执行 clean-machine install、release quick workload 与 release checker。
+5. release gate 全部通过后才讨论仓库可见性、许可证、`0.1.0` 版本与 tag。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

@@ -112,3 +112,5 @@ R2-D commit `fa0f89a` 的 144 行正式 multi-layer workload 已通过 matrix、
 R3-B shared-prefix integration 已在 commit `08d0414` 的 RTX 5070 WSL 完成 focused `56 passed, 14 subtests passed in 5.29s` 与完整 `352 passed, 25 subtests passed in 9.37s` 回归。R3-C 只把 non-instrumented fixed-full-batch step 作为 decode latency，registration、attach 与 bounded-capacity admission 分别报告。
 
 R3-D 将 `submit_request()` 时从 resident registry 验证得到的 shared block 数缓存为 immutable request metadata。`scheduling_snapshot()`、commitment accounting 和 invariant 热路径使用该缓存，避免每个 step 重复构造 `prefix_state()` snapshot；active request 仍必须与 Cache authoritative `shared_block_count` 一致，Cache `state_version` 仍保护 resident set 不被外部静默修改。
+
+commit `fe72e27` 的 lookup-count targeted test 与 RTX focused/full regression 已通过。优化后 8-trial/64-row confirmation 的所有非零 Engine p50 paired range 都跨过 1；包括旧 BF16 75% 回退在内，没有形成新的稳定方向。该结果不证明跨 commit 因果 speedup，只说明 Engine correctness 与 metadata-cache invariant 已闭合，完整 step 性能保持近中性并带有未归因离群波动。

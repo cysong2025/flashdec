@@ -1,6 +1,6 @@
 # FlashDec 当前状态与后续目标
 
-本文只记录尚未完成的工程目标。已经结束的阶段、实验数据和设计取舍分别归档在[项目演进](PROJECT_PLAN.md)、[性能报告](performance_report.md)和[路线图](ROADMAP.md)。
+本文记录当前完成边界和尚未启动的后续目标。详细阶段历史、实验数据和设计取舍分别归档在[项目演进](PROJECT_PLAN.md)、[性能报告](performance_report.md)和[路线图](ROADMAP.md)。
 
 ## 当前基线
 
@@ -23,12 +23,14 @@ Block-aware Scheduler
 - R2 multi-layer token transaction：共享位置、单次 seq_len commit 和异常 rollback。
 - RTX 5070 最终回归：`337 passed, 25 subtests passed`，无 skipped 或 failure。
 - R2 正式矩阵：144 行全部通过严格校验，complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`。
+- R3 shared prefix：A-D 已闭合；8-trial/64-row confirmation 继续确认 75% hit 节省 `68.8%`/`5.5 MiB` KV capacity，并把 bounded-pool admission 从 `9/16` 提高到 `16/16`。
+- R3-D RTX 回归：targeted `1 passed`、focused `61 passed, 8 subtests passed`、full `361 passed, 25 subtests passed`。
 
-当前版本仍为 `0.0.0`。这表示 release gate 尚未全部关闭，不表示 R1/R2 功能未完成。
+当前版本仍为 `0.0.0`。这表示 release gate 尚未启动，不表示 R1-R3 功能未完成。
 
-## 当前目标：R3 Shared Prefix Blocks
+## 已完成目标：R3 Shared Prefix Blocks
 
-状态：R3-A/R3-B correctness 与 R3-C RTX 24 行正式矩阵已通过；内存/admission 目标闭合。R3-D 已实现 submission-time shared metadata cache，待 WSL correctness 与 RTX 复测；仓库按所有者要求继续保持 private。
+状态：R3-A ownership、R3-B integration、R3-C benchmark 与 R3-D hot-path metadata cache 已全部闭合。commit `fe72e27` 的 correctness 和优化后 RTX confirmation 均已完成；仓库按所有者要求继续保持 private。
 
 R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享，目标是减少重复 KV physical blocks，同时保持 request lifecycle、transaction rollback 和容量预检的正确性。
 
@@ -36,8 +38,9 @@ R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享�
 
 - R3-A：已完成 prefix 注册、挂载、引用计数、inactive LRU、回收和 CPU/RTX 回归。
 - R3-B：已完成 DecodeEngine/scheduler shared residency 与 request-private commitment 分离；focused 为 `56 passed, 14 subtests passed in 5.29s`，完整回归为 `352 passed, 25 subtests passed in 9.37s`。
-- R3-C：0%/25%/50%/75% FP16/BF16 三轮正式矩阵共 24 行，matrix、capacity、block/byte、context、immutability、eviction 与 cleanup 全部通过。75% hit 节省 `44/64` context blocks（`68.8%`，`5.5 MiB`），peak blocks 从 `80` 降至 `36`，bounded-pool admission 从 `9/16` 提高到 `16/16`。paired 结果显示 FP16 25% p50 三轮稳定更快，50% 跨 1；75% 在 FP16/BF16 均稳定更慢，p50 ratio 分别为 `0.9377x` 与 `0.9054x`。下一步分离 scheduler host 与 engine-step latency，当前不声明整体 decode latency 收益。
-- R3-D：75% hit 的 scheduler p50 ratio 在 FP16/BF16 分别为 `0.8716x` 与 `0.8958x`，两种 dtype 均三轮稳定更慢；BF16 engine-step ratio 为 `0.9025x`，也三轮稳定回退。Engine 现将已验证的 shared block 数缓存在 request metadata，不再在每个 step 重复查询 prefix registry；Cache state 与 version invariant 保留。
+- R3-C：0%/25%/50%/75% FP16/BF16 三轮正式矩阵共 24 行，matrix、capacity、block/byte、context、immutability、eviction 与 cleanup 全部通过；它作为优化前基线保留。
+- R3-D：Engine 将 submission 时已验证的 shared block 数缓存在 request metadata，不再在每个 step 重复查询 prefix registry；Cache state/version invariant 保留。优化后 8 trials、64 行再次验证容量轨迹，75% hit 节省 `44/64` context blocks（`68.8%`，`5.5 MiB`），peak blocks 从 `80` 降至 `36`，bounded-pool admission 从 `9/16` 提高到 `16/16`。
+- 最终性能边界：FP16/BF16 的 25%/50%/75% complete p50、scheduler p50 与 Engine p50 paired range 全部跨 1。中位数大多接近 1，但存在未复现的 Engine 整行慢点和尾部尖峰，因此既不声明稳定加速，也不声明稳定回退。
 
 `5.5 MiB` 表示相对私有副本避免占用的 KV pool capacity。fixed-full-batch latency probe 在所有 hit rate 下仍预分配相同 80-block tensor，因此它不是 `torch.cuda.memory_allocated()` 的直接下降；若按 peak blocks right-size pool，才会转化为实际 pool allocation 缩减。
 
@@ -49,9 +52,9 @@ R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享�
 
 所有权与验收细节见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
-## 最终目标：v0.1.0 Release Gate
+## 后续目标：private 维护与可选 v0.1.0 Release Gate
 
-状态：待 R3 优化与证据闭合后执行。
+状态：R3 技术目标已经完成；按所有者要求暂不公开、不升级版本、不创建 tag。只有收到明确指令后才启动以下 release gate。
 
 执行顺序：
 

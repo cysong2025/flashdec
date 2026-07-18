@@ -66,7 +66,7 @@ def test_validate_release_tree_requires_final_evidence_only_when_requested(tmp_p
     assert validate_release_tree(root, require_evidence=True) == []
 
 
-def test_release_evidence_includes_scheduler_and_multi_layer_summaries():
+def test_release_evidence_includes_scheduler_multi_layer_and_shared_prefix_summaries():
     assert (
         "benchmarks/results/r1_scheduler_workload_trials3_summary.md"
         in RELEASE_EVIDENCE_PATHS
@@ -74,4 +74,12 @@ def test_release_evidence_includes_scheduler_and_multi_layer_summaries():
     assert (
         "benchmarks/results/r2_multi_layer_engine_trials3_summary.md"
         in RELEASE_EVIDENCE_PATHS
+    )
+    assert (
+        "benchmarks/results/r3_shared_prefix_workload_trials8_summary.md"
+        in RELEASE_EVIDENCE_PATHS
+    )
+    assert (
+        "benchmarks/results/r3_shared_prefix_workload_trials3_summary.md"
+        not in RELEASE_EVIDENCE_PATHS
     )

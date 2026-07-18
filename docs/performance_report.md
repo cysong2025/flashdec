@@ -209,11 +209,30 @@ CUDA event 结果：
 
 限制与负结果：paired p50 显示 FP16 25% 为 `1.0672x [1.0076,1.1174]`，是唯一三轮稳定更快的非零 case；FP16/BF16 50% 与 BF16 25% 均跨过 1。75% hit 在 FP16/BF16 都三轮稳定更慢，p50 ratio 分别为 `0.9377x [0.9298,0.9870]` 与 `0.9054x [0.8602,0.9816]`，TPS ratio 分别为 `0.9569x [0.8416,0.9712]` 与 `0.9022x [0.8271,0.9795]`。
 
-拆分 attribution 后，75% scheduler p50 ratio 在 FP16/BF16 分别为 `0.8716x` 与 `0.8958x`，均稳定回退；BF16 Engine p50 ratio 也稳定回退到 `0.9025x`，FP16 Engine ratio 则跨 1。R3-D submission-time metadata cache 针对前者；后者继续作为 GPU/Engine trade-off 独立复测。shared prefix 不改变 attention 算法，当前证据仍不支持整体 latency 加速声明。
+拆分 attribution 后，75% scheduler p50 ratio 在 FP16/BF16 分别为 `0.8716x` 与 `0.8958x`，均稳定回退；BF16 Engine p50 ratio 也稳定回退到 `0.9025x`，FP16 Engine ratio 则跨 1。该 3-trial 结果保留为 R3-D 优化前基线；submission-time metadata cache 针对 scheduler 重复 lookup，不能预先解释独立的 Engine 波动。
+
+## R3-D 优化后 confirmation（2026-07-18）
+
+commit `fe72e27` 在同一 RTX 5070、PyTorch `2.11.0+cu128`、CUDA 12.8 环境下完成 8 trials。seed `613-620`，四种 hit-rate 顺序各轮转两次，FP16/BF16 共 64 行并通过严格 validator。targeted hot-path test、focused 与完整 correctness 分别为 `1 passed`、`61 passed, 8 subtests passed` 和 `361 passed, 25 subtests passed`。
+
+容量与 admission 轨迹再次严格复现：75% hit 的 context physical blocks 为 `20/64`，相对 0% 避免 44 blocks、`68.8%`/`5.5 MiB` KV-pool capacity；peak blocks 从 `80` 降至 `36`，固定 48-block pool 的 admission 从 `9/16` 提高到 `16/16`。
+
+| dtype | hit rate | complete p50 median [min,max] | scheduler p50 | Engine p50 |
+| --- | ---: | ---: | ---: | ---: |
+| FP16 | 25% | `1.0300x [0.9295,1.1273]` | `0.9747x [0.9484,1.0918]` | `1.0349x [0.9388,1.1352]` |
+| FP16 | 50% | `1.0011x [0.8285,1.0998]` | `0.9817x [0.8319,1.1218]` | `1.0003x [0.8273,1.0990]` |
+| FP16 | 75% | `1.0454x [0.7654,1.1811]` | `0.9961x [0.5970,1.1312]` | `1.0472x [0.7829,1.1933]` |
+| BF16 | 25% | `1.0207x [0.3056,1.0427]` | `0.9867x [0.9518,1.0238]` | `1.0242x [0.2932,1.0461]` |
+| BF16 | 50% | `1.0088x [0.9332,1.0534]` | `0.9853x [0.8832,1.0798]` | `1.0119x [0.9182,1.0556]` |
+| BF16 | 75% | `1.0094x [0.9376,1.0556]` | `0.9850x [0.9590,1.0701]` | `1.0040x [0.9402,1.0546]` |
+
+所有非零 case 的 complete、scheduler 和 Engine p50 range 都跨过 1，p90/p99/TPS range 也没有稳定方向。中位数大多接近 1，但 BF16 trial 1 的 25% case 出现 Engine 主导的整行慢点，FP16 trial 7 的 25% case 出现尾部尖峰；相同顺序第二轮均未复现。端点设备快照不能证明运行中不存在瞬时干扰，因此不猜测根因。
+
+最终结论：R3-D 证明了热路径重复 lookup 已被移除，但当前数据不能量化跨 commit 的因果 speedup。R3 性能冻结为 near-neutral/no stable direction；稳定收益只声明 physical KV capacity、bounded-pool admission 与 ownership correctness。完整数据见[R3 8-trial 摘要](../benchmarks/results/r3_shared_prefix_workload_trials8_summary.md)。
 
 ## 后续工作边界
 
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
 2. Block-aware Scheduler 与 Multi-layer KV Token Transaction 已完成，后续优化必须基于新的 correctness 或系统证据。
 3. clean-install、版本与 tag 留在最终 release gate。
-4. 当前已选择 shared prefix 作为下一条系统优化方向；固定版本公开基线暂缓，未来若执行仍必须统一功能与计时边界。
+4. Shared Prefix R3 已完成；当前不继续围绕同一数据调参。固定版本公开基线与 release 均暂停，未来若执行仍必须统一功能与计时边界。

@@ -231,3 +231,21 @@ python benchmarks/summarize_shared_prefix_trials.py \
 commit `fd36ed0` 的 RTX 5070 FP16 quick 已通过 4 行严格校验。0%/25%/50%/75% 的 context physical/logical blocks 分别为 `4/4`、`4/4`、`3/4`、`2/4`，bounded-pool admission 分别为 `2/4`、`2/4`、`3/4`、`3/4`。quick 每档只有 3 次正式 step 采样，latency/TPS 非单调，不形成正式性能结论。
 
 commit `1d5d8d0` 的 RTX 5070 FP16/BF16 三轮正式矩阵共 24 行并通过严格校验。0%/25%/50%/75% 的 context physical blocks 为 `64/52/36/20`，bounded-pool admission 为 `9/12/15/16`，75% hit 避免占用 `68.8%` context KV capacity 和 `5.5 MiB`。summary 将每个 hit-rate 与同 dtype、同 trial 的 0% baseline 配对，报告 p50/p90/p99/TPS median `[min,max]`，并单独报告 scheduler/Engine p50 attribution。只有全三轮同向才标记 `shared_faster` 或 `shared_slower`。
+
+R3-D hot-path metadata cache 完成 correctness 后，使用 8 trials 做最终 confirmation：
+
+```bash
+python benchmarks/run_shared_prefix_workload.py \
+  --hit-rate all \
+  --dtype both \
+  --trials 8 \
+  --output benchmarks/results/r3_shared_prefix_workload_trials8.csv
+
+python benchmarks/summarize_shared_prefix_trials.py \
+  --input benchmarks/results/r3_shared_prefix_workload_trials8.csv \
+  --output benchmarks/results/r3_shared_prefix_workload_trials8_summary.md \
+  --expected-trials 8 \
+  --expected-dtypes float16 bfloat16
+```
+
+commit `fe72e27` 的 RTX confirmation 共 64 行，seed `613-620`，四种 hit-rate 顺序各轮转两次。容量轨迹与 R3-C 一致；所有非零 complete、scheduler 与 Engine p50 paired range 都跨过 1，因此最终性能结论是 near-neutral/no stable direction。旧 3-trial summary 作为优化前负结果基线保留，不能与新 run 直接相除声称 metadata cache 的因果 speedup。

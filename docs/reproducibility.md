@@ -275,6 +275,26 @@ python benchmarks/summarize_multi_layer_trials.py \
 
 正式矩阵必须是 12 cases x 2 dtypes x 2 backends x 3 trials = 144 rows。Validator 会检查 pair trajectory、transaction、block accounting、rollback、profiler、seed 和 backend order。正式 latency 来自 non-instrumented complete-token 路径；profiler 字段只做 append/decode/launch 归因，p99 必须连同范围报告。
 
+## R3 Shared Prefix 最终 confirmation
+
+R3-C 3-trial matrix 保留为 metadata-cache 优化前基线。R3-D correctness 通过后，用 8 trials 扩大样本并让四种 hit-rate 顺序各轮转两次：
+
+```bash
+python benchmarks/run_shared_prefix_workload.py \
+  --hit-rate all \
+  --dtype both \
+  --trials 8 \
+  --output benchmarks/results/r3_shared_prefix_workload_trials8.csv
+
+python benchmarks/summarize_shared_prefix_trials.py \
+  --input benchmarks/results/r3_shared_prefix_workload_trials8.csv \
+  --output benchmarks/results/r3_shared_prefix_workload_trials8_summary.md \
+  --expected-trials 8 \
+  --expected-dtypes float16 bfloat16
+```
+
+正式 confirmation 必须是 `4 hit rates x 2 dtypes x 8 trials = 64 rows`，seed 连续且四种顺序各出现两次。summary 必须继续验证 capacity commitment、physical block/byte、prefix lifecycle、materialized context、immutable contents 和 final cleanup。commit `fe72e27` 的结果表明所有非零 complete/scheduler/Engine p50 range 均跨 1，因此只接受 near-neutral/no stable direction 结论；容量/admission 结论独立成立。
+
 ## 结果文件与提交规则
 
 默认忽略：
@@ -306,7 +326,7 @@ python scripts/check_release.py --require-clean
 
 该命令检查必需 artifact、`pyproject.toml`/`flashdec.__version__` 一致性和 clean Git worktree。当前版本仍为 `0.0.0`，因此此时不要求 tag。
 
-完成所有 GPU/clean-install gate 后：
+只有所有者明确启动 release 且完成所有 GPU/clean-install gate 后：
 
 1. 将 `pyproject.toml` 和 `flashdec/__init__.py` 同步改为 `0.1.0`。
 2. 将 Changelog 的 Unreleased 内容整理为 `## [0.1.0] - YYYY-MM-DD`。
@@ -327,11 +347,11 @@ python scripts/check_release.py --require-clean
 | Complete-step profiler | 已完成 | commit `3708b87` 的 validated 12-case summary + quick trace |
 | R1 Scheduler v2 | 已完成 | commit `16de9d4` 的 36-row RTX policy matrix + validated summary |
 | R2 Multi-layer transaction | 已完成 | commit `fa0f89a` 的 144-row RTX matrix + validated summary；证据提交 `67bee15` 的 `337 passed, 25 subtests passed in 5.82s` 无跳过完整回归 |
-| R3 Shared Prefix correctness | 已完成 | commit `08d0414` 的 focused `56 passed, 14 subtests passed in 5.29s` 与 full `352 passed, 25 subtests passed in 9.37s` |
-| R3 Shared Prefix benchmark | 正式矩阵已完成 | commit `1d5d8d0` 的 24-row FP16/BF16 RTX matrix + strict paired/attribution summary |
-| R3 metadata hot path | 待验证 | submission-time shared-block cache focused/full correctness + before/after RTX attribution |
-| Clean WSL editable install | 待执行 | 新 venv 命令、pip freeze、pytest/quick 输出 |
+| R3 Shared Prefix correctness | 已完成 | commit `fe72e27` 的 targeted `1 passed`、focused `61 passed, 8 subtests passed` 与 full `361 passed, 25 subtests passed` |
+| R3 Shared Prefix benchmark | 已完成 | commit `fe72e27` 的 8-trial/64-row FP16/BF16 RTX confirmation + strict paired/attribution summary |
+| R3 metadata hot path | 已完成 | submission-time shared-block cache、lookup-count test 与 authoritative Cache cross-check；性能 near-neutral/no stable direction |
+| Clean WSL editable install | 暂停 | 仓库继续 private；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |
 
-当前只能称为 `v0.1.0 candidate`，不能称为已发布版本。
+当前是 private `0.0.0` development candidate，不能称为已发布版本。版本、公开与 tag 按所有者要求暂停。
