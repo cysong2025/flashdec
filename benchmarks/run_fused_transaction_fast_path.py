@@ -343,38 +343,46 @@ def _event_diagnostic(event):
     }
 
 
-def _raw_user_range_totals(raw_events, key, expected_count):
+def _raw_profile_range_totals(raw_events, key, expected_count):
     candidates = tuple(
         event for event in raw_events if getattr(event, "key", None) == key
     )
-    ranges = tuple(
+    cpu_ranges = tuple(
         event
         for event in candidates
         if _event_is_device(event, "cpu")
         and getattr(event, "is_user_annotation", False) is True
     )
-    if len(ranges) != expected_count:
+    cuda_ranges = tuple(
+        event
+        for event in candidates
+        if _event_is_device(event, "cuda")
+        and getattr(event, "is_user_annotation", False) is True
+    )
+    if (
+        len(cpu_ranges) != expected_count
+        or len(cuda_ranges) != expected_count
+    ):
         diagnostics = [_event_diagnostic(event) for event in candidates]
         raise RuntimeError(
             f"profiler range {key!r} expected {expected_count} raw CPU user "
-            f"annotations, found {len(ranges)}; candidates={diagnostics}"
+            f"annotations and CUDA user ranges, found CPU={len(cpu_ranges)} and "
+            f"CUDA={len(cuda_ranges)}; candidates={diagnostics}"
         )
 
     cpu_times_us = tuple(
         _event_time_us(event, "cpu_time_total", "cpu_time_total")
-        for event in ranges
+        for event in cpu_ranges
     )
     device_times_us = tuple(
         _event_time_us(event, "device_time_total", "cuda_time_total")
-        for event in ranges
+        for event in cuda_ranges
     )
-    for index, (cpu_time_us, device_time_us) in enumerate(
-        zip(cpu_times_us, device_times_us)
+    for label, values, ranges in (
+        ("inclusive CPU time", cpu_times_us, cpu_ranges),
+        ("CUDA range device time", device_times_us, cuda_ranges),
     ):
-        for label, value in (
-            ("inclusive CPU time", cpu_time_us),
-            ("inclusive device time", device_time_us),
-        ):
+        for index, value in enumerate(values):
             if value <= 0.0 or not math.isfinite(value):
                 raise RuntimeError(
                     f"profiler range {key!r} event {index} {label} must be "
@@ -382,7 +390,8 @@ def _raw_user_range_totals(raw_events, key, expected_count):
                     f"range={_event_diagnostic(ranges[index])}"
                 )
     return {
-        "count": len(ranges),
+        "count": len(cpu_ranges),
+        "device_count": len(cuda_ranges),
         "cpu_time_us": sum(cpu_times_us),
         "device_time_us": sum(device_times_us),
     }
@@ -435,10 +444,10 @@ def _profile_probe(torch, case, dtype, steps, seed):
 
     raw_events = tuple(profiler.events())
     expected_layers = steps * case.num_layers
-    append = _raw_user_range_totals(
+    append = _raw_profile_range_totals(
         raw_events, PROFILE_RANGE_APPEND, expected_layers
     )
-    decode = _raw_user_range_totals(
+    decode = _raw_profile_range_totals(
         raw_events, PROFILE_RANGE_DECODE, expected_layers
     )
     counts = {

@@ -31,13 +31,15 @@ Mac 工作区已执行以下本地 gate：
 
 RTX 5070 WSL 已完成 commit `1169cb8` 的 focused CUDA suite：`40 passed in 2.34s`，覆盖 fused raw dispatch、multi-layer transaction 与 multi-layer Engine。完整回归仍待执行。
 
-第一次 FP16 quick 已写出 CSV，但 strict summary 拒绝 `profile_append_cpu_ms_per_layer=0`。审计确认运行时并非零 host cost：runner 先调用 `key_averages()`，随后用 `{event.key: event}` 再次压平，而 PyTorch 会按 device type 与 user annotation 分组；同名 CUDA group 覆盖 CPU user annotation 后，读取其 `cpu_time_total` 合法得到 0。修复使用 unaggregated events，精确选择 CPU user annotation，逐个验证 append/decode range，并从该 range 读取 inclusive CPU/device total；`.item()` 与 CUDA event 同样按原始事件计数。validator 保持严格，修复前 CSV 作废并必须重跑。
+第一次 FP16 quick 已写出 CSV，但 strict summary 拒绝 `profile_append_cpu_ms_per_layer=0`。审计确认运行时并非零 host cost：runner 先调用 `key_averages()`，随后用 `{event.key: event}` 再次压平，而 PyTorch 会按 device type 与 user annotation 分组；同名 CUDA group 覆盖 CPU user annotation 后，读取其 `cpu_time_total` 合法得到 0。第一版修复改读 unaggregated events 并精确选择 CPU user annotation，但仍错误假设同一个 CPU range 必须携带 device total；`.item()` 与 CUDA event 已改为按原始事件计数。validator 始终保持严格，修复前 CSV 作废。
+
+commit `4ee5fab` 的第二次 quick 进一步发现：`flashdec::paged_decode` CPU user annotation 的 host time 为 `116.108 us`，但该 CPU event 的 `device_time_total=0`。这是 Triton launch 的 device event 没有关联成 CPU annotation child，并非 decode 没有执行。最终取数契约改为：CPU user annotation 只提供 inclusive host time；同名 CUDA user range 独立提供 device time；两类原始 range 数都必须等于 `steps * layers`。二者不相加，零值仍失败。第二次运行在写 CSV 前终止，同样没有性能结论。
 
 在修复后 quick、完整回归与正式 A/B 完成前，不记录 speedup，也不把 R4-A 标记为完成。正式门槛是 complete-token p50 总体至少 `1.05x`，且目标 l2/l4 case 跨 trial 不穿过 1；未达到门槛就保留负结果并停止扩展到 CUDA Graph。
 
 ## 下一步
 
-1. 拉取 profiler event-selection 修复，在 RTX 5070 重跑 focused 与完整 correctness。
-2. 重新运行单 case FP16 quick A/B，并用 strict summary 校验 CPU range 与 item/local-scalar 计数；不复用旧 CSV。
+1. 拉取 CPU/CUDA range pairing 修复，在 RTX 5070 重跑 focused 与完整 correctness。
+2. 重新运行单 case FP16 quick A/B，并用 strict summary 校验成对 CPU/CUDA range 与 item/local-scalar 计数；不复用旧证据。
 3. quick 通过后运行 FP16/BF16、l2/l4 五轮正式矩阵。
 4. 根据门槛决定进入 R4-B persistent metadata，或直接转入 R4-C integrated scheduled multi-layer correctness workload。

@@ -14,7 +14,7 @@ from benchmarks.run_fused_transaction_fast_path import (
     _quick_case,
     _raw_cpu_operator_count,
     _raw_cuda_event_count,
-    _raw_user_range_totals,
+    _raw_profile_range_totals,
     _run_tokens,
     _selected_cases,
     _selected_fused_append,
@@ -165,88 +165,117 @@ class FusedTransactionFastPathBenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(TRANSACTION_PATHS, ("checked", "trusted"))
 
-    def test_raw_range_uses_cpu_annotation_inclusive_time_in_any_order(self):
+    def test_raw_range_pairs_cpu_host_and_cuda_device_in_any_order(self):
         cpu = self._profile_event(
             "append",
             "DeviceType.CPU",
             is_user_annotation=True,
             cpu_time_total=400.0,
-            device_time_total=250.0,
+            device_time_total=0.0,
             self_cpu_time_total=0.0,
         )
         cuda = self._profile_event(
             "append",
             "DeviceType.CUDA",
+            is_user_annotation=True,
             cpu_time_total=0.0,
             device_time_total=250.0,
         )
-        for events in ((cpu, cuda), (cuda, cpu)):
+        decoy = self._profile_event(
+            "append",
+            "DeviceType.CUDA",
+            is_user_annotation=False,
+            device_time_total=999.0,
+        )
+        for events in ((cpu, cuda, decoy), (decoy, cuda, cpu)):
             with self.subTest(order=events):
-                totals = _raw_user_range_totals(events, "append", 1)
+                totals = _raw_profile_range_totals(events, "append", 1)
                 self.assertEqual(totals["count"], 1)
+                self.assertEqual(totals["device_count"], 1)
                 self.assertEqual(totals["cpu_time_us"], 400.0)
                 self.assertEqual(totals["device_time_us"], 250.0)
 
-    def test_raw_range_sums_multiple_cpu_annotations(self):
+    def test_raw_range_sums_paired_cpu_and_cuda_ranges(self):
         events = (
             self._profile_event(
                 "append",
                 "cpu",
                 is_user_annotation=True,
                 cpu_time_total=100.0,
-                device_time_total=40.0,
+                device_time_total=0.0,
             ),
             self._profile_event(
                 "append",
                 "cpu",
                 is_user_annotation=True,
                 cpu_time_total=120.0,
+                device_time_total=0.0,
+            ),
+            self._profile_event(
+                "append",
+                "cuda",
+                is_user_annotation=True,
                 device_time_total=60.0,
             ),
+            self._profile_event(
+                "append",
+                "cuda",
+                is_user_annotation=True,
+                device_time_total=40.0,
+            ),
         )
-        totals = _raw_user_range_totals(events, "append", 2)
+        totals = _raw_profile_range_totals(events, "append", 2)
         self.assertEqual(totals["count"], 2)
+        self.assertEqual(totals["device_count"], 2)
         self.assertEqual(totals["cpu_time_us"], 220.0)
         self.assertEqual(totals["device_time_us"], 100.0)
 
-    def test_raw_range_rejects_missing_annotation_or_nonpositive_time(self):
+    def test_raw_range_rejects_missing_peer_or_nonpositive_time(self):
         non_annotation = self._profile_event(
             "append",
             "cpu",
             cpu_time_total=100.0,
             device_time_total=50.0,
         )
-        with self.assertRaisesRegex(RuntimeError, "raw CPU user annotations"):
-            _raw_user_range_totals((non_annotation,), "append", 1)
+        with self.assertRaisesRegex(RuntimeError, "CPU=0 and CUDA=0"):
+            _raw_profile_range_totals((non_annotation,), "append", 1)
 
         zero_cpu = self._profile_event(
             "append",
             "cpu",
             is_user_annotation=True,
             cpu_time_total=0.0,
+            device_time_total=0.0,
+        )
+        cuda = self._profile_event(
+            "append",
+            "cuda",
+            is_user_annotation=True,
             device_time_total=50.0,
         )
         with self.assertRaisesRegex(RuntimeError, "inclusive CPU time"):
-            _raw_user_range_totals((zero_cpu,), "append", 1)
+            _raw_profile_range_totals((zero_cpu, cuda), "append", 1)
 
-        positive = self._profile_event(
+        cpu = self._profile_event(
             "append",
             "cpu",
             is_user_annotation=True,
             cpu_time_total=100.0,
-            device_time_total=50.0,
+            device_time_total=999.0,
         )
         invalid_device = self._profile_event(
             "append",
-            "cpu",
+            "cuda",
             is_user_annotation=True,
-            cpu_time_total=100.0,
             device_time_total=float("nan"),
         )
-        with self.assertRaisesRegex(RuntimeError, "inclusive device time"):
-            _raw_user_range_totals(
-                (positive, invalid_device), "append", 2
+        with self.assertRaisesRegex(RuntimeError, "CUDA range device time"):
+            _raw_profile_range_totals(
+                (cpu, invalid_device), "append", 1
             )
+
+        with self.assertRaisesRegex(RuntimeError, "CPU=1 and CUDA=0"):
+            _raw_profile_range_totals((cpu,), "append", 1)
 
     def test_raw_operator_and_cuda_counts_do_not_collapse_device_groups(self):
         events = (
