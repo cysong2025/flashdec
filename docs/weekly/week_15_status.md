@@ -2,7 +2,7 @@
 
 ## 本周主题
 
-R4-A Trusted CUDA Transaction Fast Path：删除 Cache-owned multi-layer fused append 每层重复的 CUDA index reduction + `.item()`，同时保留公开 raw primitive 的防御性检查；正式证据通过后冻结 R4-A，当前转入 R4-B persistent transaction metadata。
+R4-A Trusted CUDA Transaction Fast Path 已在`d25107f`冻结；本周继续实现R4-B Persistent Transaction Metadata，并把当前边界推进到“core与配对证据工具就绪、等待RTX correctness/quick/formal”。
 
 ## 已实现
 
@@ -10,14 +10,18 @@ R4-A Trusted CUDA Transaction Fast Path：删除 Cache-owned multi-layer fused a
 - private trusted raw primitive 复用同一结构检查与 native launch，只跳过五次 device-value reduction；它不导出到 `flashdec` public namespace。
 - `PagedKVCache.begin_token()` 在 host 上验证 position、offset、physical block id 与 request block table 的 provenance，并在失败时沿用 reservation rollback。
 - `write_token_layer_fused_cuda()` 根据 detached handle 的 transaction id/version/request ids 回查当前 open internal state；调用方修改 snapshot 中的位置 tensor 不会改变真实写入或 rollback ownership。
-- `DecodeEngine` 继续只调用 Cache public transaction API，不跨越到 private Cache method。
+- R4-A冻结路径中`DecodeEngine`只调用Cache public transaction API；R4-B新增明确的package-private borrowed-metadata/Engine hooks，让math读取Cache private bundle，同时不把内部tensor暴露为public API。
 - checked/trusted benchmark 使用同 commit、相同输入/状态轨迹和交替执行顺序；正式 complete-token wall 区间只包含 `synchronize + perf_counter + synchronize`，profiler 独立运行。
+- R4-B 在open transaction发布前原子构建positions、physical block ids、block offsets、block tables和effective seq lens五tensorcanonical bundle；Engine math只借用private metadata，public Cache/Engine snapshot始终no-alias。
+- commit/abort/error释放device bundle，terminal state只保留host tombstone；build/materialization/reuse/release/resident counters和invariant验证无历史GPU metadata积累。
+- 新paired runner在同一commit中用benchmark-only hooks恢复legacy materialization boundary；materialized为`2L+2`个Cache views/token，persistent为1次materialization加`L`次reuse，两侧都使用R4-A trusted raw math。
 
 ## 明确未改变
 
 - transaction begin/commit/abort、layer 顺序、single seq_len publish 与 block ownership。
 - Triton decode、RoPE/KV native kernel math、Scheduler、shared-prefix residency 与已冻结 kernel 参数。
-- 每层 `_transaction_view()` 仍会 materialize CUDA metadata 并复制 block table；R4-A 不能描述成完全 sync/copy-free，persistent metadata 属于独立 R4-B。
+- R4-A正式证据只验证trusted validation边界，不能把其`4018449`结果当作R4-B跨commit基线；R4-B的controlled ablation必须在同一commit内完成。
+- R4-B counter中的view只统计Cache transaction-view materialization，不表示全部Engine result tensor clone。
 
 ## 当前验证状态
 
@@ -47,10 +51,11 @@ commit `5d2f9c0` 的 l4 FP16 stress 在三次全新 probe 中都得到首个 dec
 
 commit `4018449` 的五轮正式矩阵已完成：`8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`、80 个 paired trials，全部 16 个 `dtype x case` 分组均为 `trusted_faster`，且各组 p50 五轮最小值都大于 1。overall p50/p90/p99、TPS 与 append CPU/layer ratio 为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`，通过预设 p50 gate。16 个分组中仍有 7 个 p99 range 穿过 1，因此不声明稳定尾延迟收益，也不把 CPU attribution 解释为 kernel device time。R4-A 已冻结；完整证据见[R4-A 五轮正式摘要](../../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)。
 
+R4-B core、paired runner和strict summary已完成本地实现就绪检查：16个dependency-free tests、`py_compile`和diff check通过。Mac没有torch/pytest，因此没有运行Cache/Engine tensor correctness、CUDA pointer/no-alias、fused parity或完整pytest；RTX quick/formal也尚未执行。当前不能写“R4-B完成”“persistent更快”或任何p50/p99收益，尚未生成的formal summary也不进入release evidence gate。
+
 ## 下一步
 
-1. 在 `begin_token()` 的 host provenance 验证后一次性构建 Cache-owned positions、physical ids、offsets、block tables 与 effective seq lens device metadata。
-2. 让 multi-layer Engine 跨 layer 复用 internal bundle；public transaction/Engine handle 始终 detached，不与内部 tensor alias。
-3. commit/abort 后立即释放 internal GPU metadata，只保留 terminal host tombstone；补齐 OOM/failure atomic rollback、篡改隔离、pointer stability 与无历史显存积累测试。
-4. 建立同 commit `materialized/persistent` A/B；两侧均使用 R4-A trusted raw math，并严格验证每 token materialization、reuse、release、parity、rollback 与 Engine trajectory。
-5. quick correctness 通过后再运行 FP16/BF16、8 cases、五轮正式矩阵；保留 p90/p99 全范围，未形成稳定证据时不扩展到 CUDA Graph。
+1. 在RTX运行paged Cache、multi-layer transaction/Engine与R4-B benchmark/summary focused pytest，确认五tensorpointer稳定、public in-place tampering隔离、atomic snapshot、rollback和terminal cleanup。
+2. focused通过后运行`l4_b4_c128`、FP16、3-trial quick和strict summary；任何parity、trajectory、counter或resident错误都先修复，不进入formal。
+3. quick通过后运行FP16/BF16、8 cases、2 paths、5 trials的160-row正式矩阵，保留p50/p90/p99完整range。
+4. 只在overall p50 `>=1.05x`且16/16分组paired p50五轮最小值严格大于1时保留persistent默认；否则归档负结果并恢复materialized，再进入R4-C。

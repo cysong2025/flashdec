@@ -6,7 +6,7 @@ FlashDec 是一个面向单 GPU LLM decode 的研究型运行时原型，覆盖 
 
 项目关注的核心问题是：在请求长度与 batch 持续变化的情况下，如何维护可验证的 KV 所有权和失败原子性，并证明底层 kernel 优化能够转化为完整 decode step 的系统收益。
 
-> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction、R3 Shared Prefix Blocks 与 R4-A Trusted CUDA Transaction Fast Path 均已完成。R4-A commit `4018449` 在 RTX 5070 通过 focused `73 passed, 23 subtests`、full `410 passed, 48 subtests` 和 160-row/80-pair 正式矩阵；Cache-owned trusted path 的 complete-token p50/TPS 几何平均为 `1.7307x/1.7131x`，16/16 个 dtype/case 分组的五轮 p50 range 均稳定胜出。CPU-only profiler 将收益归因到重复 scalar validation/sync 的移除，不能解释为 CUDA kernel math 加速；7/16 个 p99 range 仍跨 1。private R4 当前进入独立 R4-B persistent transaction metadata，仓库继续保持 private 和 `0.0.0`。
+> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction、R3 Shared Prefix Blocks 与 R4-A Trusted CUDA Transaction Fast Path 均已完成，R4-A 已在 commit `d25107f` 冻结。其 RTX 正式性能仍绑定 benchmark commit `4018449`：focused `73 passed, 23 subtests`、full `410 passed, 48 subtests`、160-row/80-pair 矩阵，complete-token p50/TPS 几何平均为 `1.7307x/1.7131x`，16/16 个 dtype/case 分组的五轮 p50 range 均稳定胜出；CPU-only profiler 只支持 host scalar validation/sync 归因，7/16 个 p99 range 仍跨 1。R4-B persistent transaction metadata 的 core、同 commit paired runner 和 strict summary 已实现，并通过 16 个 dependency-free tests、`py_compile` 与 diff check；Mac 当前没有 torch/pytest，RTX correctness、quick 和 formal 尚未执行，因此 R4-B 仍是待验证 candidate，不能声明完成或性能提升。仓库继续保持 private 和 `0.0.0`。
 
 ## 架构
 
@@ -46,6 +46,7 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 - **Block-aware Scheduler**：lifetime block commitment、FIFO + aging、公平 runnable subset、stale decision 拒绝和 boundary-deadlock 对照实验。
 - **Multi-layer transaction**：一个 token 只预留一次位置；各 layer 共用 block id/offset；全部成功后 seq_len 只增长一次；任一 layer 失败自动 rollback。
 - **Trusted transaction R4**：公开 fused primitive 保留完整索引检查；Cache-owned transaction path 可跳过 allocator 已证明的 device-value reduction，避免每 layer 的重复 host/stream sync。
+- **Persistent metadata R4-B candidate**：在 transaction 发布前原子构建五 tensor Cache-owned canonical bundle，Engine math 只借用 private metadata；public snapshots 保持 no-alias，commit/abort 后释放 device bundle，并以 build/materialization/reuse/release/resident counters 约束生命周期。该能力尚待 RTX 验收。
 - **证据链**：固定 commit/seed/trial/shape/timing scope 的 benchmark、严格 summary validator、独立 profiler attribution 和 release gate。
 
 ## 结果摘要
@@ -65,6 +66,7 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 | R3 最终 confirmation | 75% hit：context 节省 `68.8%`/`5.5 MiB`，admission `9/16 -> 16/16` | 64 行通过；所有非零 complete/scheduler/Engine p50 range 均跨 1，无稳定性能方向 |
 | R4-A RTX 回归 | focused `73 passed, 23 subtests passed`；full `410 passed, 48 subtests passed` | public checked 与 Cache-owned trusted 边界、parity、rollback 和完整功能回归通过 |
 | R4-A 正式矩阵 | p50/p90/TPS `1.7307x/1.6751x/1.7131x`；append CPU `2.3612x` | 160 行、80 pairs、16/16 p50 ranges 稳定胜出；7/16 p99 ranges 跨 1，不声明稳定尾延迟 |
+| R4-B 实现就绪 gate | 16 个 dependency-free tests + `py_compile` + diff check | core/paired runner/strict summary 已就绪；RTX correctness、quick/formal 待执行，无性能结论 |
 
 R2 的 decode device ratio 为 `1.0024x`，而 append device 与 CUDA event ratio 分别为 `1.6103x` 和 `1.9784x`，说明系统收益主要来自 append/launch 路径。每轮仅 20 repeats，p99 接近单轮最大值，因此所有尾延迟结论都保留场景范围，不作生产级稳定性声明。
 

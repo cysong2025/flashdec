@@ -40,6 +40,8 @@ REQUIRED_PATHS = (
     "benchmarks/summarize_shared_prefix_trials.py",
     "benchmarks/run_fused_transaction_fast_path.py",
     "benchmarks/summarize_fused_transaction_fast_path.py",
+    "benchmarks/run_persistent_transaction_metadata.py",
+    "benchmarks/summarize_persistent_transaction_metadata.py",
     "scripts/check_env.py",
     "scripts/check_docs.py",
     "scripts/check_release.py",
@@ -61,6 +63,8 @@ REQUIRED_PATHS = (
     "tests/test_shared_prefix_workload_summary.py",
     "tests/test_fused_transaction_fast_path_benchmark.py",
     "tests/test_fused_transaction_fast_path_summary.py",
+    "tests/test_persistent_transaction_metadata_benchmark.py",
+    "tests/test_persistent_transaction_metadata_summary.py",
 )
 
 RELEASE_EVIDENCE_PATHS = (

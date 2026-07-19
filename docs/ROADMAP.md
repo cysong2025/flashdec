@@ -336,15 +336,17 @@ capacity failure -> refcount and ownership unchanged
 - profiler 使用 CPU-only WARMUP→active capture与 inclusive CPU time；少记 range/scalar 最多重采集三次并记录 attempt count，多出立即失败。stage-device attribution留给独立 CUDA Event/Nsight probe。
 - 第一 slice 不同时修改 transaction metadata materialization、output buffer 或 CUDA Graph。
 
-最终证据：commit `4018449` 的 RTX focused/full correctness 为 `73 passed, 23 subtests passed` 与 `410 passed, 48 subtests passed`。CPU-only l4 stress三轮 p50为 `2.0362x [1.9578,2.2771]`；正式矩阵160行/80 pairs全部通过严格校验，overall p50/TPS为 `1.7307x/1.7131x`，16/16个分组的五轮p50最小值均大于1。append inclusive CPU为 `2.3612x`，checked l2/l4 item/local-scalar为 `20/40`、trusted为0。7/16个p99 ranges跨1，故只冻结p50与host-sync归因，不声明稳定尾延迟或device-kernel加速。R4-A验收完成。
+最终证据：benchmark commit `4018449` 的 RTX focused/full correctness 为 `73 passed, 23 subtests passed` 与 `410 passed, 48 subtests passed`。CPU-only l4 stress三轮 p50为 `2.0362x [1.9578,2.2771]`；正式矩阵160行/80 pairs全部通过严格校验，overall p50/TPS为 `1.7307x/1.7131x`，16/16个分组的五轮p50最小值均大于1。append inclusive CPU为 `2.3612x`，checked l2/l4 item/local-scalar为 `20/40`、trusted为0。7/16个p99 ranges跨1，故只冻结p50与host-sync归因，不声明稳定尾延迟或device-kernel加速。R4-A已在commit `d25107f`冻结。
 
 ### R4-B：Persistent transaction metadata
 
-状态：当前阶段。评估 positions、block ids/offsets、effective seq lens 和 block table 每 token materialize 一次并跨 layer 复用；它必须作为独立 materialized/persistent A/B，不能与R4-A去同步混成一次提交。
+状态：实现就绪、等待RTX验证。core、同commit paired runner与strict summary已实现，并在无torch/pytest的Mac上通过16个dependency-free tests、`py_compile`和diff check；RTX focused correctness、quick与formal尚未执行，因此不能称为完成或性能提升。
 
-- Cache-owned canonical device bundle只在open transaction期间存在，public Cache/Engine view保持detached，不能alias并污染trusted provenance。
+- positions、physical block ids、block offsets、block tables和effective seq lens五tensor canonical bundle在host proof后、open transaction发布前构建；public snapshot也在发布前原子准备，metadata/snapshot失败必须完整回滚。
+- Cache-owned canonical device bundle只在open transaction期间存在，public Cache/Engine view保持detached且no-alias；Engine append/decode math只借用private metadata，调用方原地篡改handle或result不能污染trusted provenance。
 - commit/abort/error必须清除bundle；terminal transaction只保留轻量tombstone，避免`_transactions`长期持有CUDA tensors。
-- 两条benchmark path都固定使用R4-A trusted raw dispatch，用显式counter验证当前`2L+2`套view降为每token一次；不依赖Kineto device peer。
+- build/materialization/reuse/release/resident counters与invariant共同验证生命周期。`materialized` Cache views/token为`2L+2`、reuse为0；`persistent` materialization为1、reuse为`L`。该view口径不包含所有Engine result tensor clone。
+- 两条benchmark path都固定使用R4-A trusted raw dispatch；同commit的benchmark-only hooks只恢复legacy boundary，不与旧`4018449`做逐指令或跨commit比较，也不依赖Kineto device peer。
 - 不同时修改kernel、output buffer、Scheduler、prefix或CUDA Graph。
 
 keep门：correctness/parity/rollback/ownership/terminal cleanup全部通过；overall p50至少`1.05x`，且16/16个dtype/case分组的五轮p50最小值严格大于1。未达到则保留负结果并恢复materialized默认，再进入R4-C。
@@ -414,8 +416,8 @@ dynamic arrivals
 
 1. R1 Scheduler、R2 Multi-layer 与 R3 Shared Prefix 的实现、正式 summary、RTX correctness 和负结果归档均已完成。
 2. R3 最终 8-trial summary 已成为 release evidence；旧 3-trial summary 继续作为优化前历史基线。
-3. 执行 R4-A checked/trusted 单变量优化：保持 public safety，先完成 correctness 与配对 benchmark，再决定是否进入 metadata reuse。
-4. R4-A 冻结后，用 integrated scheduled multi-layer workload 组合验证 R1-R3；在线 prefix eviction 留到组合基线之后。
+3. R4-A 已在`d25107f`冻结；R4-B core/evidence tooling已实现。下一步依次执行RTX focused correctness和3-trial FP16 quick，二者通过后才运行160-row五轮formal与keep gate。
+4. R4-B根据预注册gate冻结或恢复materialized默认后，再用integrated scheduled multi-layer workload组合验证R1-R3；在线prefix eviction留到组合基线之后。
 5. 仓库继续保持 private；收到所有者明确指令后，才执行 clean-machine install、公开基线、版本与 tag。
 
 这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。

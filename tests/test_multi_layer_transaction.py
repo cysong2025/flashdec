@@ -165,6 +165,198 @@ def test_begin_token_location_proof_failure_rolls_back_reservation(monkeypatch):
     assert cache.validate_invariants()
 
 
+@pytest.mark.parametrize(
+    "failure_hook",
+    ["_build_transaction_device_metadata", "_clone_transaction_device_metadata"],
+)
+def test_begin_token_metadata_failure_is_atomic(monkeypatch, failure_hook):
+    cache = _cache(num_layers=2, block_size=1, max_blocks=2)
+    cache.add_request("request")
+    before_version = cache.state_version
+    before_transaction_id = cache._next_transaction_id
+    before = cache.metrics()
+
+    def fail_metadata(*_args, **_kwargs):
+        raise RuntimeError("injected transaction metadata failure")
+
+    monkeypatch.setattr(cache, failure_hook, fail_metadata)
+    with pytest.raises(RuntimeError, match="injected transaction metadata failure"):
+        cache.begin_token(["request"])
+
+    metrics = cache.metrics()
+    assert cache.state_version == before_version
+    assert cache._next_transaction_id == before_transaction_id
+    assert before_transaction_id not in cache._transactions
+    assert cache.request_state("request")["seq_len"] == 0
+    assert cache.request_block_ids("request") == ()
+    assert cache.num_free_blocks == cache.max_blocks
+    assert metrics["open_transaction_count"] == 0
+    assert metrics["transaction_begin_count"] == before["transaction_begin_count"]
+    assert metrics["allocation_count"] == before["allocation_count"]
+    assert metrics["fresh_allocation_count"] == before["fresh_allocation_count"]
+    assert metrics["reuse_count"] == before["reuse_count"]
+    assert metrics["transaction_metadata_build_count"] == before[
+        "transaction_metadata_build_count"
+    ]
+    assert metrics["transaction_metadata_materialization_count"] == before[
+        "transaction_metadata_materialization_count"
+    ]
+    assert metrics["transaction_metadata_release_count"] == before[
+        "transaction_metadata_release_count"
+    ]
+    assert metrics["resident_transaction_metadata_count"] == 0
+    assert metrics["transaction_failure_count"] == before[
+        "transaction_failure_count"
+    ] + 1
+    assert cache.validate_invariants()
+
+
+def test_persistent_transaction_metadata_is_private_reused_and_released():
+    cache = _cache(num_layers=2, block_size=2, max_blocks=2)
+    cache.add_request("request")
+    transaction = cache.begin_token(["request"])
+    state = cache._transactions[transaction.transaction_id]
+    metadata = state.device_metadata
+
+    public_tensors = (
+        transaction.positions,
+        transaction.physical_block_ids,
+        transaction.block_offsets,
+        transaction.block_tables,
+        transaction.effective_seq_lens,
+    )
+    private_tensors = (
+        metadata.positions,
+        metadata.physical_block_ids,
+        metadata.block_offsets,
+        metadata.block_tables,
+        metadata.effective_seq_lens,
+    )
+    assert all(
+        public.data_ptr() != private.data_ptr()
+        for public, private in zip(public_tensors, private_tensors)
+    )
+    private_ptrs = tuple(tensor.data_ptr() for tensor in private_tensors)
+
+    transaction.positions.fill_(99)
+    transaction.physical_block_ids.fill_(cache.max_blocks - 1)
+    transaction.block_offsets.fill_(cache.block_size - 1)
+    transaction.block_tables.fill_(-1)
+    transaction.effective_seq_lens.fill_(99)
+
+    for layer_idx in range(cache.num_layers):
+        borrowed = cache._transaction_device_metadata_for_engine(transaction)
+        assert tuple(
+            tensor.data_ptr()
+            for tensor in (
+                borrowed.positions,
+                borrowed.physical_block_ids,
+                borrowed.block_offsets,
+                borrowed.block_tables,
+                borrowed.effective_seq_lens,
+            )
+        ) == private_ptrs
+        cache._write_token_layer_for_engine(
+            transaction,
+            layer_idx,
+            _values(1, layer_idx + 1),
+            _values(1, layer_idx + 101),
+        )
+
+    cache._commit_token_for_engine(transaction)
+    metrics = cache.metrics()
+    assert metrics["transaction_metadata_build_count"] == 1
+    assert metrics["transaction_metadata_materialization_count"] == 1
+    assert metrics["transaction_metadata_reuse_count"] == cache.num_layers
+    assert metrics["transaction_metadata_release_count"] == 1
+    assert metrics["resident_transaction_metadata_count"] == 0
+    assert state.device_metadata is None
+
+    terminal = cache.transaction_view(transaction)
+    assert terminal.state == "committed"
+    assert terminal.positions.tolist() == [0]
+    assert terminal.physical_block_ids.tolist() == [0]
+    assert cache.metrics()["transaction_metadata_materialization_count"] == 2
+    assert cache.metrics()["resident_transaction_metadata_count"] == 0
+    assert cache.validate_invariants()
+
+
+def test_commit_snapshot_failure_keeps_transaction_open_and_retriable(monkeypatch):
+    cache = _cache(num_layers=2, block_size=1, max_blocks=1)
+    cache.add_request("request")
+    transaction = cache.begin_token(["request"])
+    for layer_idx in range(cache.num_layers):
+        cache._write_token_layer_for_engine(
+            transaction,
+            layer_idx,
+            _values(1, layer_idx + 1),
+            _values(1, layer_idx + 101),
+        )
+    before = cache.metrics()
+    clone_metadata = cache._clone_transaction_device_metadata
+
+    def fail_snapshot(*_args, **_kwargs):
+        raise RuntimeError("injected terminal snapshot failure")
+
+    monkeypatch.setattr(cache, "_clone_transaction_device_metadata", fail_snapshot)
+    with pytest.raises(RuntimeError, match="injected terminal snapshot failure"):
+        cache.commit_token(transaction)
+
+    metrics = cache.metrics()
+    assert cache.request_state("request")["seq_len"] == 0
+    assert metrics["open_transaction_count"] == 1
+    assert metrics["transaction_commit_count"] == 0
+    assert metrics["transaction_metadata_release_count"] == 0
+    assert metrics["resident_transaction_metadata_count"] == 1
+    assert metrics["transaction_metadata_materialization_count"] == before[
+        "transaction_metadata_materialization_count"
+    ]
+    assert cache.validate_invariants()
+
+    monkeypatch.setattr(cache, "_clone_transaction_device_metadata", clone_metadata)
+    committed = cache.commit_token(transaction)
+    assert committed.state == "committed"
+    assert cache.request_state("request")["seq_len"] == 1
+    assert cache.metrics()["resident_transaction_metadata_count"] == 0
+    assert cache.validate_invariants()
+
+
+def test_abort_snapshot_failure_keeps_transaction_open_and_retriable(monkeypatch):
+    cache = _cache(num_layers=2, block_size=1, max_blocks=1)
+    cache.add_request("request")
+    transaction = cache.begin_token(["request"])
+    reserved_block = transaction.physical_block_ids.item()
+    before = cache.metrics()
+    clone_metadata = cache._clone_transaction_device_metadata
+
+    def fail_snapshot(*_args, **_kwargs):
+        raise RuntimeError("injected abort snapshot failure")
+
+    monkeypatch.setattr(cache, "_clone_transaction_device_metadata", fail_snapshot)
+    with pytest.raises(RuntimeError, match="injected abort snapshot failure"):
+        cache.abort_token(transaction)
+
+    metrics = cache.metrics()
+    assert cache.request_state("request")["seq_len"] == 0
+    assert cache.request_block_ids("request") == (reserved_block,)
+    assert metrics["open_transaction_count"] == 1
+    assert metrics["transaction_abort_count"] == 0
+    assert metrics["transaction_rollback_block_count"] == 0
+    assert metrics["transaction_metadata_release_count"] == 0
+    assert metrics["resident_transaction_metadata_count"] == 1
+    assert metrics["transaction_metadata_materialization_count"] == before[
+        "transaction_metadata_materialization_count"
+    ]
+    assert cache.validate_invariants()
+
+    monkeypatch.setattr(cache, "_clone_transaction_device_metadata", clone_metadata)
+    aborted = cache.abort_token(transaction)
+    assert aborted.state == "aborted"
+    assert cache.request_block_ids("request") == ()
+    assert cache.metrics()["resident_transaction_metadata_count"] == 0
+    assert cache.validate_invariants()
+
+
 def test_abort_hides_partial_layer_and_rolls_back_boundary_block():
     cache = _cache(num_layers=2, block_size=1, max_blocks=1)
     cache.add_request("request")
@@ -182,6 +374,8 @@ def test_abort_hides_partial_layer_and_rolls_back_boundary_block():
     assert torch.count_nonzero(dense_k).item() == 0
     assert torch.count_nonzero(dense_v).item() == 0
     assert cache.metrics()["transaction_rollback_block_count"] == 1
+    assert cache.metrics()["transaction_metadata_release_count"] == 1
+    assert cache.metrics()["resident_transaction_metadata_count"] == 0
 
     replacement = cache.begin_token(["request"])
     assert replacement.physical_block_ids.item() == reserved_block

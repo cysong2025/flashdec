@@ -328,7 +328,72 @@ python benchmarks/summarize_fused_transaction_fast_path.py \
 
 先通过 l4 3-trial stress quick，再运行正式矩阵。正式矩阵必须是 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`。complete-token latency 使用 `synchronize + perf_counter + synchronize`，计时区间不创建 CUDA event；同一 trial 必须先完成两条 path 的 wall，再开始任一 attribution/rollback，不能让 profiler retry 插在 paired wall 中间。独立 profiler 使用 CPU-only WARMUP→active schedule；active CPU user annotation 的 inclusive host time必须逐 layer 正且有限，checked 每个 profiled layer恰有 5 次 `aten::item` 与 `_local_scalar_dense`、trusted 为 0。少记 range/scalar 属于 capture incompleteness并触发整 probe 重建，最多三次且写入 `profile_attempt_count`；多出 range/scalar 属于 active-work/fast-path 契约错误，必须立即失败而不能重试。CPU FunctionEvent correlated device time与 CUDA activity不在 strict schema；需要分段 GPU 时间时另做 CUDA Event/Nsight probe。Validator 还必须验证 block/transaction/Engine accounting、exact parity、rollback 和交替顺序。
 
-commit `4018449` 已在 RTX 5070、CUDA 12.8 完成正式证据：160 rows、80 paired trials，全部 16 个 `dtype x case` 分组为 `trusted_faster` 且五轮 p50 最小值均大于 1。overall p50/p90/p99、TPS 和 append CPU/layer ratio 为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`；focused `73 passed, 23 subtests passed`，完整回归 `410 passed, 48 subtests passed`。7/16 分组的 p99 range 穿过 1，因此不得声明稳定尾延迟收益。R4-A 已冻结，canonical release evidence 为[R4-A 五轮正式摘要](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)；当前开发目标转为 R4-B persistent transaction metadata。
+commit `4018449` 已在 RTX 5070、CUDA 12.8 完成正式证据：160 rows、80 paired trials，全部 16 个 `dtype x case` 分组为 `trusted_faster` 且五轮 p50 最小值均大于 1。overall p50/p90/p99、TPS 和 append CPU/layer ratio 为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`；focused `73 passed, 23 subtests passed`，完整回归 `410 passed, 48 subtests passed`。7/16 分组的 p99 range 穿过 1，因此不得声明稳定尾延迟收益。R4-A已在commit `d25107f`冻结，canonical release evidence 为[R4-A 五轮正式摘要](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)。
+
+## R4-B Persistent Transaction Metadata 配对证据
+
+R4-B A/B必须在同一commit中执行。两条path都使用R4-A trusted raw CUDA/Triton math；`materialized`只通过benchmark-only private hooks恢复legacy transaction-view boundary，不能拿当前persistent数据直接除以旧commit `4018449`并声称逐指令因果收益。严格计数只覆盖Cache transaction-view：materialized为每token `2L+2`次materialization、0次reuse；persistent为1次materialization和`L`次reuse。它不统计所有Engine result tensor clone。
+
+先在RTX运行focused correctness：
+
+```bash
+python -m pytest -q -ra \
+  tests/test_paged_cache.py \
+  tests/test_multi_layer_transaction.py \
+  tests/test_multi_layer_engine.py \
+  tests/test_persistent_transaction_metadata_benchmark.py \
+  tests/test_persistent_transaction_metadata_summary.py
+```
+
+focused通过后运行三轮FP16 quick并立即strict summarize：
+
+```bash
+python benchmarks/run_persistent_transaction_metadata.py \
+  --case l4_b4_c128 \
+  --dtype float16 \
+  --metadata-paths materialized persistent \
+  --trials 3 \
+  --quick \
+  --seed 811 \
+  --output benchmarks/results/r4_persistent_transaction_metadata_quick.csv
+
+python benchmarks/summarize_persistent_transaction_metadata.py \
+  --input benchmarks/results/r4_persistent_transaction_metadata_quick.csv \
+  --output benchmarks/results/r4_persistent_transaction_metadata_quick_summary.md \
+  --expected-trials 3 \
+  --expected-cases l4_b4_c32 \
+  --expected-dtypes float16
+```
+
+只有focused和quick都通过后才运行正式矩阵：
+
+```bash
+python benchmarks/run_persistent_transaction_metadata.py \
+  --case all \
+  --dtype both \
+  --metadata-paths materialized persistent \
+  --trials 5 \
+  --warmup 3 \
+  --repeat 20 \
+  --profile-steps 2 \
+  --parity-steps 2 \
+  --rollback-repeats 2 \
+  --seed 811 \
+  --output benchmarks/results/r4_persistent_transaction_metadata_trials5.csv
+
+python benchmarks/summarize_persistent_transaction_metadata.py \
+  --input benchmarks/results/r4_persistent_transaction_metadata_trials5.csv \
+  --output benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md \
+  --expected-trials 5 \
+  --expected-cases \
+    l2_b4_c128 l2_b4_c1024 l2_b16_c128 l2_b16_c1024 \
+    l4_b4_c128 l4_b4_c1024 l4_b16_c128 l4_b16_c1024 \
+  --expected-dtypes float16 bfloat16
+```
+
+validator必须验证五tensorcanonical bundle的build/materialization/reuse/release/resident公式、public no-alias、exact parity、block/transaction/Engine trajectory、rollback和terminal零resident。complete-token延迟仍是无CUDA Event/profiler的同步wall；独立CPU-only attribution中两条path的item/local-scalar都必须为0。keep gate为overall p50 `>=1.05x`且16/16分组的paired p50五轮最小值严格大于1；未通过要保留负结果并恢复materialized默认。
+
+当前core、runner与summary只完成Mac dependency-free gate（16 tests、`py_compile`、diff check）。该Mac没有torch/pytest，RTX correctness、quick/formal尚未执行；正式summary也尚不存在，不能加入`RELEASE_EVIDENCE_PATHS`。
 
 ## 结果文件与提交规则
 
@@ -386,6 +451,7 @@ python scripts/check_release.py --require-clean
 | R3 Shared Prefix benchmark | 已完成 | commit `fe72e27` 的 8-trial/64-row FP16/BF16 RTX confirmation + strict paired/attribution summary |
 | R3 metadata hot path | 已完成 | submission-time shared-block cache、lookup-count test 与 authoritative Cache cross-check；性能 near-neutral/no stable direction |
 | R4-A trusted transaction | 已完成 | commit `4018449` 的 focused/full correctness、160-row/80-pair RTX 五轮矩阵与 [canonical strict summary](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)；16/16 p50 分组稳定胜出，p99 保留 7/16 穿 1 的限制 |
+| R4-B persistent metadata | 实现就绪，RTX待验证 | 五tensorprivate bundle、atomic snapshot、public no-alias、Engine private routing、terminal release、counters/invariant与paired tooling已实现；16个dependency-free tests/`py_compile`/diff check通过，focused/quick/formal未运行 |
 | Clean WSL editable install | 暂停 | 仓库继续 private；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

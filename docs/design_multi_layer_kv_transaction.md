@@ -532,18 +532,23 @@ trusted raw 路径仍检查 shape、dtype、device、contiguity、RoPE 参数，
 
 早期 profiler 负结果仍保留：同名 CUDA user annotation 不是 `record_function` CPU range 的强制一一 peer，CPU FunctionEvent 的 correlated device time 也可能合法为 0。因此 R4-A 最终 strict schema 只使用 CPU inclusive time 与 scalar extraction count 做归因；append/decode device time 和 CUDA activity 不进入发布证据，也不通过补值或增加 retry 次数修饰。
 
-commit `4018449` 已在 RTX 5070、CUDA 12.8 完成 focused `73 passed, 23 subtests passed` 与完整 `410 passed, 48 subtests passed`。正式矩阵为 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`，共 80 个 paired trials；全部 16 个 `dtype x case` 分组均为 `trusted_faster`，且五轮 p50 最小值都大于 1。overall complete-token p50/p90/p99、TPS 和 append CPU/layer ratio 分别为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`，达到预设 p50 gate，R4-A 因此冻结。16 个分组中仍有 7 个 p99 `[min,max]` 穿过 1；overall p99 几何平均不能解释成稳定尾延迟收益。完整证据见[R4-A 五轮正式摘要](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)。
+benchmark commit `4018449` 已在 RTX 5070、CUDA 12.8 完成 focused `73 passed, 23 subtests passed` 与完整 `410 passed, 48 subtests passed`。正式矩阵为 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`，共 80 个 paired trials；全部 16 个 `dtype x case` 分组均为 `trusted_faster`，且五轮 p50 最小值都大于 1。overall complete-token p50/p90/p99、TPS 和 append CPU/layer ratio 分别为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`，达到预设 p50 gate。16 个分组中仍有 7 个 p99 `[min,max]` 穿过 1；overall p99 几何平均不能解释成稳定尾延迟收益。R4-A已在commit `d25107f`冻结；完整证据见[R4-A 五轮正式摘要](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)。
 
 ## 19. R4-B：Persistent Transaction Metadata
 
-R4-A 只移除了 Cache-owned append 的重复 device-value validation；当前 transaction view 仍会在 begin、逐层 write 和 commit/abort 边界重复 materialize CUDA metadata。R4-B 的目标是在 `begin_token()` host provenance 验证成功后一次性构建 Cache-owned device metadata bundle，并让同一 open transaction 的所有 layer 复用它。
+R4-A 只移除了 Cache-owned append 的重复 device-value validation；legacy transaction boundary仍会在begin、逐层write前后和commit/abort重复materialize Cache view。R4-B core现在在`begin_token()` host provenance验证成功后一次性构建Cache-owned device metadata bundle，并让同一open transaction的所有layer复用它。
 
 R4-B 必须保持以下边界：
 
-- internal bundle 至少覆盖 positions、physical block ids、block offsets、block tables 与 effective seq lens；同一 transaction 内 tensor identity 稳定。
+- internal canonical bundle覆盖positions、physical block ids、block offsets、block tables与effective seq lens五个tensor；同一transaction内tensor identity稳定。
 - public `KVTokenTransactionView` 和 Engine public handle 始终是 detached snapshot，不得与 internal bundle alias；调用方篡改公开 tensor 不能改变真实 append/decode。
+- Engine append/decode math只接收Cache package-private borrowed metadata；逐层`DecodeLayerResult`与最终`DecodeStepResult`在发布前单独clone，不把private pointer泄露给调用方。
 - commit/abort 必须释放 internal GPU metadata；terminal transaction 只保留足以区分 committed/aborted 和拒绝重复操作的 host tombstone，不因历史 transaction 累积显存。
-- metadata 构建失败必须与 reservation failure 一样原子 rollback，不留下 open marker、block leak 或 state-version 偏移。
+- canonical metadata和首次public snapshot都必须在open state发布前完成；任一构建/clone失败与reservation failure一样原子rollback，不消耗transaction id，不留下open marker、block leak、counter漂移或state-version偏移。
 - persistent 路径继续使用 R4-A 已验证的 trusted raw launch，不修改 kernel math、Scheduler、shared-prefix ownership 或冻结参数。
 
-性能 A/B 只比较同 commit 的 `materialized` 与 `persistent` metadata policy；两侧均使用 trusted raw math，并保留相同 transaction/Engine trajectory、parity 与 rollback。正式 wall 和 CPU-only attribution 继续分离，summary 必须显式验证每 token materialization、reuse 与 terminal release 计数。R4-B 不继承 R4-A 的 speedup 结论，也不能用 metadata 生命周期优化宣称稳定 p99；是否保留仍由独立五轮矩阵决定。
+生产路径的确定性计数为：每个成功begin build和materialization各1次，每完成一层reuse 1次，terminal release 1次，结束后resident为0。invariant同时检查open transaction必有bundle、terminal transaction不得保留bundle，以及resident counter与真实open bundle数量一致。下一token必须得到fresh bundle，历史terminal tombstone不能保留GPU tensor。
+
+性能 A/B 只比较同 commit 的 `materialized` 与 `persistent` metadata policy；两侧均使用 trusted raw math，并保留相同 transaction/Engine trajectory、parity 与 rollback。benchmark-only private hooks恢复legacy边界：`materialized`的Cache transaction-view materializations/token为`2L+2`、reuse为0；`persistent`为1次materialization与`L`次reuse。这里的view只统计Cache transaction-view，不代表所有Engine result tensor clone，也不是与旧commit `4018449`做逐指令或跨commit比较。正式wall和CPU-only attribution继续分离，summary显式验证build/materialization/reuse/release/resident公式；两侧item/local-scalar必须同为0。
+
+当前实现、paired runner与strict summary已通过16个dependency-free tests、`py_compile`和diff check。Mac环境没有torch/pytest，RTX correctness、quick和formal尚未执行；因此R4-B尚未完成，不继承R4-A speedup，也没有可报告的p50/p99结论。只有quick通过后才运行五轮矩阵；keep gate为overall p50 `>=1.05x`且16/16个dtype/case分组的五轮paired p50最小值严格大于1。

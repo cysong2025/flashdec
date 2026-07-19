@@ -162,6 +162,31 @@ def test_engine_layer_failure_automatically_aborts_whole_token():
     assert engine.validate_invariants()
 
 
+def test_engine_layer_result_failure_automatically_aborts_whole_token(monkeypatch):
+    engine = DecodeEngine(_cache(num_layers=2, block_size=1, max_blocks=1))
+    engine.add_request("request")
+    engine.admit()
+    transaction = engine.begin_step(["request"])
+    q, k, v = _inputs(1, 612)
+
+    def fail_result(*_args, **_kwargs):
+        raise RuntimeError("injected layer result snapshot failure")
+
+    monkeypatch.setattr(engine, "_prepare_layer_step_result", fail_result)
+    with pytest.raises(RuntimeError, match="injected layer result snapshot failure"):
+        engine.step_layer(transaction, 0, q, k, v)
+
+    metrics = engine.metrics()
+    assert metrics["transaction_layer_step_count"] == 0
+    assert metrics["transaction_abort_count"] == 1
+    assert metrics["open_step_transaction_count"] == 0
+    assert metrics["cache"]["transaction_layer_write_count"] == 1
+    assert metrics["cache"]["resident_transaction_metadata_count"] == 0
+    assert engine.cache.request_state("request")["seq_len"] == 0
+    assert engine.cache.request_block_ids("request") == ()
+    assert engine.validate_invariants()
+
+
 def test_engine_early_commit_stays_open_until_explicit_abort():
     engine = DecodeEngine(_cache(num_layers=2))
     engine.add_request(1)
@@ -176,6 +201,48 @@ def test_engine_early_commit_stays_open_until_explicit_abort():
     aborted = engine.abort_step(transaction)
     assert aborted.state == "aborted"
     assert engine.cache.request_state(1)["seq_len"] == 0
+    assert engine.validate_invariants()
+
+
+def test_engine_commit_result_failure_keeps_token_open_and_retriable(monkeypatch):
+    engine = DecodeEngine(_cache(num_layers=2))
+    engine.add_request(1)
+    engine.admit()
+    transaction = engine.begin_step([1])
+    for layer_idx in range(engine.cache.num_layers):
+        q, k, v = _inputs(1, 614 + layer_idx)
+        engine.step_layer(transaction, layer_idx, q, k, v)
+    commit_and_prepare = engine._commit_cache_transaction_and_prepare_result
+
+    def fail_result(*_args, **_kwargs):
+        raise RuntimeError("injected Engine commit snapshot failure")
+
+    monkeypatch.setattr(
+        engine,
+        "_commit_cache_transaction_and_prepare_result",
+        fail_result,
+    )
+    with pytest.raises(RuntimeError, match="injected Engine commit snapshot failure"):
+        engine.commit_step(transaction)
+
+    metrics = engine.metrics()
+    assert metrics["open_step_transaction_count"] == 1
+    assert metrics["completed_step_count"] == 0
+    assert metrics["cache"]["open_transaction_count"] == 1
+    assert metrics["cache"]["resident_transaction_metadata_count"] == 1
+    assert metrics["cache"]["transaction_metadata_release_count"] == 0
+    assert engine.cache.request_state(1)["seq_len"] == 0
+    assert engine.validate_invariants()
+
+    monkeypatch.setattr(
+        engine,
+        "_commit_cache_transaction_and_prepare_result",
+        commit_and_prepare,
+    )
+    committed = engine.commit_step(transaction)
+    assert committed.seq_lens.tolist() == [1]
+    assert engine.cache.request_state(1)["seq_len"] == 1
+    assert engine.cache.metrics()["resident_transaction_metadata_count"] == 0
     assert engine.validate_invariants()
 
 
@@ -253,6 +320,92 @@ def test_multi_layer_fused_backend_cpu_failure_automatically_aborts_transaction(
     assert engine.cache.request_state(1)["seq_len"] == 0
     assert engine.metrics()["transaction_abort_count"] == 1
     assert engine.metrics()["open_step_transaction_count"] == 0
+    assert engine.cache.metrics()["resident_transaction_metadata_count"] == 0
+    assert engine.cache.metrics()["transaction_metadata_release_count"] == 1
+    assert engine.validate_invariants()
+
+
+def test_engine_math_uses_private_persistent_metadata_not_mutable_public_handle():
+    engine = DecodeEngine(_cache(num_layers=2))
+    engine.add_request("request")
+    engine.admit()
+    transaction = engine.begin_step(["request"])
+    cache_transaction = engine._open_step_transaction.cache_transaction
+    state = engine.cache._transactions[transaction.transaction_id]
+    private_ptrs = tuple(
+        tensor.data_ptr()
+        for tensor in (
+            state.device_metadata.positions,
+            state.device_metadata.physical_block_ids,
+            state.device_metadata.block_offsets,
+            state.device_metadata.block_tables,
+            state.device_metadata.effective_seq_lens,
+        )
+    )
+
+    transaction.positions.fill_(99)
+    transaction.physical_block_ids.fill_(engine.cache.max_blocks - 1)
+    transaction.block_offsets.fill_(engine.cache.block_size - 1)
+    transaction.block_tables.fill_(-1)
+    transaction.effective_seq_lens.fill_(99)
+
+    for layer_idx in range(engine.cache.num_layers):
+        q, k, v = _inputs(1, 623 + layer_idx)
+        result = engine.step_layer(transaction, layer_idx, q, k, v)
+        expected_q = apply_rope(q, cache_transaction.positions)
+        expected_k = apply_rope(k, cache_transaction.positions)
+        expected = paged_decode_attention_ref(
+            expected_q,
+            engine.cache.k_cache[layer_idx],
+            engine.cache.v_cache[layer_idx],
+            cache_transaction.block_tables,
+            cache_transaction.effective_seq_lens,
+        )
+        torch.testing.assert_close(result.output, expected)
+        torch.testing.assert_close(
+            engine.cache.k_cache[layer_idx, 0, :, 0, :],
+            expected_k[0],
+        )
+        assert result.positions.tolist() == [0]
+        assert result.block_tables.tolist() == [[0]]
+        assert result.effective_seq_lens.tolist() == [1]
+        assert result.positions.data_ptr() != cache_transaction.positions.data_ptr()
+        assert (
+            result.block_tables.data_ptr()
+            != cache_transaction.block_tables.data_ptr()
+        )
+        assert (
+            result.effective_seq_lens.data_ptr()
+            != cache_transaction.effective_seq_lens.data_ptr()
+        )
+        assert tuple(
+            tensor.data_ptr()
+            for tensor in (
+                state.device_metadata.positions,
+                state.device_metadata.physical_block_ids,
+                state.device_metadata.block_offsets,
+                state.device_metadata.block_tables,
+                state.device_metadata.effective_seq_lens,
+            )
+        ) == private_ptrs
+        if layer_idx == 0:
+            result.positions.fill_(88)
+            result.block_tables.fill_(-1)
+            result.effective_seq_lens.fill_(88)
+
+    committed = engine.commit_step(transaction)
+    metrics = engine.cache.metrics()
+    assert committed.seq_lens.tolist() == [1]
+    assert committed.positions.tolist() == [0]
+    assert committed.block_tables.tolist() == [[0]]
+    assert committed.positions.data_ptr() != cache_transaction.positions.data_ptr()
+    assert committed.block_tables.data_ptr() != cache_transaction.block_tables.data_ptr()
+    assert metrics["transaction_metadata_build_count"] == 1
+    assert metrics["transaction_metadata_materialization_count"] == 1
+    assert metrics["transaction_metadata_reuse_count"] == 2
+    assert metrics["transaction_metadata_release_count"] == 1
+    assert metrics["resident_transaction_metadata_count"] == 0
+    assert state.device_metadata is None
     assert engine.validate_invariants()
 
 
@@ -275,30 +428,30 @@ def test_engine_routes_fused_transaction_through_authoritative_cache_api(
         base=10_000.0,
     ):
         fused_layers.append(layer_idx)
-        view = engine.cache.transaction_view(transaction)
+        metadata = engine.cache._transaction_device_metadata_for_engine(transaction)
         q_rotated = apply_rope(
             q,
-            view.positions,
+            metadata.positions,
             rotary_dim=rotary_dim,
             base=base,
         )
         k_rotated = apply_rope(
             k,
-            view.positions,
+            metadata.positions,
             rotary_dim=rotary_dim,
             base=base,
         )
-        latest = engine.cache.write_token_layer(
+        engine.cache._write_token_layer_for_engine(
             transaction,
             layer_idx,
             k_rotated,
             v,
         )
-        return q_rotated, latest
+        return q_rotated, metadata
 
     monkeypatch.setattr(
         engine.cache,
-        "write_token_layer_fused_cuda",
+        "_write_token_layer_fused_cuda_for_engine",
         fused_path,
     )
 

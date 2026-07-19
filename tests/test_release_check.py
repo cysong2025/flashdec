@@ -85,15 +85,23 @@ def test_release_evidence_includes_scheduler_multi_layer_and_shared_prefix_summa
     )
 
 
-def test_release_tree_requires_r4_runner_validator_and_dependency_free_tests():
+def test_release_tree_requires_r4_runners_validators_and_dependency_free_tests():
     for relative in (
         "benchmarks/run_fused_transaction_fast_path.py",
         "benchmarks/summarize_fused_transaction_fast_path.py",
         "tests/test_fused_transaction_fast_path_benchmark.py",
         "tests/test_fused_transaction_fast_path_summary.py",
+        "benchmarks/run_persistent_transaction_metadata.py",
+        "benchmarks/summarize_persistent_transaction_metadata.py",
+        "tests/test_persistent_transaction_metadata_benchmark.py",
+        "tests/test_persistent_transaction_metadata_summary.py",
     ):
         assert relative in REQUIRED_PATHS
     assert (
         "benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md"
         in RELEASE_EVIDENCE_PATHS
+    )
+    assert (
+        "benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md"
+        not in RELEASE_EVIDENCE_PATHS
     )
