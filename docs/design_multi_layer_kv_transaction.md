@@ -530,8 +530,20 @@ trusted raw 路径仍检查 shape、dtype、device、contiguity、RoPE 参数，
 - profiler 使用独立 CPU-only WARMUP→active schedule；warmup token abort，不进入 active evidence。每个 active layer 必须有精确一个 CPU user annotation，其 inclusive CPU time 保留 checked 路径子 `.item()` 等待。range/scalar 少记可重建整个 probe，最多三次并记录 attempt count，多记立即失败；不接受缺 range 或手工补值。CPU FunctionEvent correlated device time与 CUDA activity不属于 R4 strict evidence。
 - 只有 complete-token p50 总体至少 `1.05x`，且正式矩阵全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1，才冻结为性能收益；否则记录负结果并停止扩展到 CUDA Graph。
 
-当前实现、benchmark harness 与 dependency-free validator tests 已完成；commit `1169cb8` 的 RTX 5070 focused CUDA correctness 为 `40 passed in 2.34s`。第一次 quick 的 strict summary 正确拒绝了零 append CPU attribution，根因是 runner 用同名 key 字典压平 profiler 分组。commit `4ee5fab` 改读 CPU raw range 后，第二次 quick 又在 fresh capture 的第一个 decode CPU annotation 观察到零 correlated device time。commit `4e18f5d` 随后错误地把同名 CUDA user annotation 当作强制 peer 和 device source。
+早期 profiler 负结果仍保留：同名 CUDA user annotation 不是 `record_function` CPU range 的强制一一 peer，CPU FunctionEvent 的 correlated device time 也可能合法为 0。因此 R4-A 最终 strict schema 只使用 CPU inclusive time 与 scalar extraction count 做归因；append/decode device time 和 CUDA activity 不进入发布证据，也不通过补值或增加 retry 次数修饰。
 
-commit `4e18f5d` quick 的 complete-token p50/TPS `1.7856x/1.8755x`、append CPU `2.3751x` 与 item/local-scalar `20/20 -> 0/0` 保留为 provisional 单 case 方向。正式矩阵在 l4 active workload 已执行 8 个 CPU append ranges、但只生成 7 个同名 CUDA user annotations 时停止且未写 CSV。PyTorch 的公开契约只保证 `record_function` CPU label，并不保证一一 CUDA peer；CUDA user-range span 也不是 canonical kernel/device total。因此旧 quick 的 append/decode device ratio 和包含 user annotations 的 CUDA-event ratio撤回，不能用于结论。
+commit `4018449` 已在 RTX 5070、CUDA 12.8 完成 focused `73 passed, 23 subtests passed` 与完整 `410 passed, 48 subtests passed`。正式矩阵为 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`，共 80 个 paired trials；全部 16 个 `dtype x case` 分组均为 `trusted_faster`，且五轮 p50 最小值都大于 1。overall complete-token p50/p90/p99、TPS 和 append CPU/layer ratio 分别为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`，达到预设 p50 gate，R4-A 因此冻结。16 个分组中仍有 7 个 p99 `[min,max]` 穿过 1；overall p99 几何平均不能解释成稳定尾延迟收益。完整证据见[R4-A 五轮正式摘要](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)。
 
-commit `5d2f9c0` 的 l4 stress 在三次全新 probe 中都得到首个 decode CPU range 的正 host time（`61.332/71.163/69.992 us`）与零 correlated device time，随后 fail closed且未写 CSV。这说明零值不是偶发 incomplete trace，而是 Triton child-device association的系统性缺口；不能用 prime、补值或更多 retry修饰。修复后的 runner 使用 CPU-only profiler，在唯一 active window严格验证每个 CPU range 的 inclusive host与 checked/trusted scalar extraction count；仅少记 evidence允许相同 seed最多重采三次，多记或业务错误立即透传。paired trial 的两条正式 wall 都先于 attribution 完成。先通过 l4 stress quick，再重启 5-trial/160-row 正式矩阵。R4-A 尚未冻结，transaction metadata reuse仍是后续独立 slice。
+## 19. R4-B：Persistent Transaction Metadata
+
+R4-A 只移除了 Cache-owned append 的重复 device-value validation；当前 transaction view 仍会在 begin、逐层 write 和 commit/abort 边界重复 materialize CUDA metadata。R4-B 的目标是在 `begin_token()` host provenance 验证成功后一次性构建 Cache-owned device metadata bundle，并让同一 open transaction 的所有 layer 复用它。
+
+R4-B 必须保持以下边界：
+
+- internal bundle 至少覆盖 positions、physical block ids、block offsets、block tables 与 effective seq lens；同一 transaction 内 tensor identity 稳定。
+- public `KVTokenTransactionView` 和 Engine public handle 始终是 detached snapshot，不得与 internal bundle alias；调用方篡改公开 tensor 不能改变真实 append/decode。
+- commit/abort 必须释放 internal GPU metadata；terminal transaction 只保留足以区分 committed/aborted 和拒绝重复操作的 host tombstone，不因历史 transaction 累积显存。
+- metadata 构建失败必须与 reservation failure 一样原子 rollback，不留下 open marker、block leak 或 state-version 偏移。
+- persistent 路径继续使用 R4-A 已验证的 trusted raw launch，不修改 kernel math、Scheduler、shared-prefix ownership 或冻结参数。
+
+性能 A/B 只比较同 commit 的 `materialized` 与 `persistent` metadata policy；两侧均使用 trusted raw math，并保留相同 transaction/Engine trajectory、parity 与 rollback。正式 wall 和 CPU-only attribution 继续分离，summary 必须显式验证每 token materialization、reuse 与 terminal release 计数。R4-B 不继承 R4-A 的 speedup 结论，也不能用 metadata 生命周期优化宣称稳定 p99；是否保留仍由独立五轮矩阵决定。

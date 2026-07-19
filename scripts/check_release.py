@@ -71,6 +71,7 @@ RELEASE_EVIDENCE_PATHS = (
     "benchmarks/results/r1_scheduler_workload_trials3_summary.md",
     "benchmarks/results/r2_multi_layer_engine_trials3_summary.md",
     "benchmarks/results/r3_shared_prefix_workload_trials8_summary.md",
+    "benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md",
     "docs/performance_report.md",
 )
 

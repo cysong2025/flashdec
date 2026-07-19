@@ -27,7 +27,7 @@
 - R3-A shared-prefix ownership core：opaque prefix id、immutable multi-layer full blocks、request reference counting、private tail、inactive LRU、容量失败原子性和 shared-memory metrics。
 - R3-B Engine/scheduler integration：`RequestSpec.prefix_id`、authoritative prefix metadata、admission attach、global residency + request-private commitment accounting，以及共享请求 lifecycle/invariant tests。
 - R3-C shared-prefix workload runner 与严格 trial summary：0%/25%/50%/75% hit rate、bounded-capacity admission、fixed-full-batch decode、block/byte savings、attach/registration/eviction latency、trial-order rotation 与 lifecycle/accounting validator。
-- R4-A trusted fused transaction boundary：public raw append 保留 CUDA index 值域检查，Cache 在 host allocator reservation 时验证 provenance，public transaction API 回查内部状态后使用 private trusted raw launch；新增 detached-view tampering、checked/trusted parity、rollback 与配对 benchmark/summary 骨架。
+- R4-A trusted fused transaction boundary：public raw append 保留 CUDA index 值域检查，Cache 在 host allocator reservation 时验证 provenance，public transaction API 回查内部状态后使用 private trusted raw launch；新增 detached-view tampering、checked/trusted parity、rollback 与同 commit 五轮配对 benchmark/strict summary。
 
 ### Changed
 
@@ -35,7 +35,7 @@
 - Python package 核心依赖只保留 torch/triton；pytest 移入 `dev` extra，Ninja 保留在 `cuda-extension` extra。
 - GPU Engine 明确使用 fused CUDA append policy；公开 reference API 默认仍保持 PyTorch 路径。
 - DecodeEngine workload CSV、multi-trial summary 和 profiler evidence 现在绑定生成时的 Git commit。
-- Release artifact/evidence gate 现在同时要求 R1 Scheduler、R2 Multi-layer 与 R3 Shared Prefix runner、validator、focused tests 和最终 Markdown summary。
+- Release artifact/evidence gate 现在同时要求 R1 Scheduler、R2 Multi-layer、R3 Shared Prefix 与 R4-A Trusted Transaction runner、validator、focused tests 和最终 Markdown summary。
 - R4-A profiler attribution 改用 CPU-only WARMUP→active schedule；active CPU user annotation 提供 inclusive host time，并严格验证 checked/trusted scalar extraction。少记 range/scalar 可用相同 seed、全新 probe 最多重采集三次并记录 attempt count，多记立即失败。paired trial 先完成两条 path 的正式 wall，再运行 attribution/rollback，避免 retry 介入配对计时。未稳定关联的 append/decode device 与 CUDA-activity 字段从 strict schema 删除。
 
 ### Performance evidence
@@ -56,6 +56,8 @@
 - confirmation 保留离群点：BF16 trial 1 的 25% case 主要是 Engine 整行变慢，FP16 trial 7 的 25% case 是尾部尖峰；相同执行顺序的第二轮均未复现，端点 `nvidia-smi` 快照也不足以确定根因。
 - R4-A commit `4e18f5d` 的 RTX 5070 FP16 `l2_b4_c32` quick 保留 provisional complete-token p50/TPS `1.7856x/1.8755x`、append CPU `2.3751x` 与 item/local-scalar `20/20 -> 0/0`。旧 append/decode device 与 CUDA-event 字段来自非强契约的 CUDA user spans，已撤回；单 trial 不构成稳定 speedup 或尾延迟结论。
 - R4-A commit `5d2f9c0` 的 l4 stress 在三次全新 probe 中都得到首个 decode CPU range 的正 host time（`61.332/71.163/69.992 us`）和零 correlated device time，随后 fail closed 且未写 CSV。该重复负结果使 R4 strict attribution 改为 CPU-only；不以 prime、补值或增加 retry 次数掩盖 profiler 关联缺口。
+- R4-A commit `4018449` 的 RTX 5070/CUDA 12.8 五轮正式矩阵共 160 rows、80 paired trials并通过严格校验；16/16 个 `dtype x case` p50 分组均为 `trusted_faster`，且每组五轮最小值都大于 1。overall complete-token p50/p90/p99、TPS 与 append CPU/layer ratio 为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`，R4-A 据此冻结。
+- 7/16 个 R4-A 分组的 p99 range 穿过 1；overall p99 几何平均只作为聚合统计保留，不能声明稳定尾延迟收益。CPU-only attribution 证明移除了 scalar extraction 等待，不代表 kernel device execution 本身加速。
 
 ### Correctness evidence
 
@@ -71,6 +73,7 @@
 - R4-A commit `4e18f5d` 的第三次 quick strict summary 已通过；当前 commit 的完整 RTX 回归仍待执行，因此 correctness 完成状态仍以 `1169cb8` 的 focused CUDA suite 为限。
 - R4-A commit `e88900a` 的 formal 在一个 l4 probe 捕获 8 个 CPU append ranges、7 个同名 CUDA user annotations 后于写 CSV 前严格停止；该结果证明 profiler peer 契约错误，不表示 Engine 少执行 layer，也不产生正式性能数据。
 - R4-A commit `5d2f9c0` 的 l4 stress 三次均在首个 decode CPU range 得到零 correlated device time并停止；没有 CSV/summary，不能形成性能结论。
+- R4-A commit `4018449` RTX 5070 focused：`73 passed, 23 subtests passed`；完整回归：`410 passed, 48 subtests passed`。正式 160-row 数据、transaction/Engine trajectory、parity、rollback、CPU range 与 scalar extraction evidence 均通过 strict validator。
 
 ### Pending before v0.1.0
 
@@ -78,3 +81,4 @@
 - 将 `pyproject.toml` 与 `flashdec.__version__` 同步更新为 `0.1.0`。
 - 创建并验证 `v0.1.0` tag；当前不得提前标记 release。
 - 仓库可见性继续保持 private；公开、版本升级和 tag 等待所有者明确启动 release gate。
+- 当前开发目标为 R4-B persistent transaction metadata：同一 open transaction 一次构建、跨 layer 复用 Cache-owned device metadata，并在 commit/abort 后释放；尚未完成前不写入已发布能力。

@@ -26,6 +26,7 @@
 当前限制：
 
 - legacy `append()`、RoPE helper 和 `DecodeEngine.step()` compatibility wrapper 仍限制 `num_layers=1`；`num_layers>1` 使用 `begin_step()` / `step_layer()` / `commit_step()` sequential transaction API。
+- R4-A 仍会为 transaction view 重复 materialize CUDA metadata；跨 layer 一次构建、复用并在 terminal 状态释放属于当前 R4-B，不属于已冻结的 R4-A。
 - finished/cancelled request id 当前不能重新激活。
 - runtime v2 已通过 RTX 5070 focused/full correctness 验证。
 - R3-B prefix 必须覆盖完整 initial context，并在 request submission 前 resident；尚不包含模型 prefill、content hashing、admission-time prefix eviction、swap/offload 或生产级多线程 serving。
@@ -83,7 +84,7 @@
 - RTX 5070 focused 为 `38 passed in 3.60s`，完整回归为 `186 passed in 4.96s`。
 - native extension 当前要求 CUDA-resident、contiguous FP16/BF16/FP32 token-major cache 与 K/V；Toolkit 前置检查已通过 `nvcc 12.8.93`、`CUDA_HOME=/usr/local/cuda-12.8` 和 Ninja 1.13.0。
 - RoPE 的 `append_backend="cuda"` 集成已通过 RTX 5070 correctness（focused `56 passed in 3.85s`，full `204 passed in 4.47s`）；它不是 fused RoPE kernel，也没有性能结论。
-- `append_backend="fused_cuda"` 和低层 `flashdec.fused_rope_kv_append()` 已在 RTX 5070 通过 JIT/correctness（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）；当前支持 token-major contiguous FP16/BF16/FP32。Week 11 append-only full benchmark 的 p50 几何平均为 1.2226x vs torch。R4-A 新增的 Cache-owned trusted raw dispatch 仍待 RTX correctness 与 checked/trusted A/B，当前不声明额外 speedup。
+- `append_backend="fused_cuda"` 和低层 `flashdec.fused_rope_kv_append()` 已在 RTX 5070 通过 JIT/correctness（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）；当前支持 token-major contiguous FP16/BF16/FP32。Week 11 append-only full benchmark 的 p50 几何平均为 1.2226x vs torch。R4-A Cache-owned trusted raw dispatch 已在 commit `4018449` 完成 focused/full correctness 与五轮 checked/trusted A/B；16/16 p50 分组稳定胜出，overall p50 为 `1.7307x`。7/16 p99 range 穿过 1，因此不声明稳定尾延迟收益。
 
 ## DecodeEngine v1
 
@@ -96,7 +97,7 @@
 - short-churn、mixed-steady、long-pressure synthetic workload 与完整 step p50/p90/p99/TPS/memory metrics。
 - 可选 `profile_ranges=True` 的 preflight/append/decode 归因；默认关闭。
 
-当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和正式 workload 已在 RTX 5070 验证。它仍不是完整模型执行器：Q/K/V 由调用方提供，不包含 multi-layer prompt prefill、model forward、sampling、prefix 内容构建或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成；R3-D commit `fe72e27` 的 targeted `1 passed`、focused `61 passed, 8 subtests passed`、完整 `361 passed, 25 subtests passed` 与 64-row confirmation 也已完成。
+当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和正式 workload 已在 RTX 5070 验证。它仍不是完整模型执行器：Q/K/V 由调用方提供，不包含 multi-layer prompt prefill、model forward、sampling、prefix 内容构建或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成；R3-D commit `fe72e27` 的 targeted `1 passed`、focused `61 passed, 8 subtests passed`、完整 `361 passed, 25 subtests passed` 与 64-row confirmation 也已完成。R4-A commit `4018449` 的 focused `73 passed, 23 subtests passed`、完整 `410 passed, 48 subtests passed` 与 160-row checked/trusted matrix 均已完成；R4-B persistent transaction metadata 尚在实现中。
 
 ### Week 11 Native CUDA KV Append
 

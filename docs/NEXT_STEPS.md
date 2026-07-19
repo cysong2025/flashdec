@@ -52,29 +52,27 @@ R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享�
 
 所有权与验收细节见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
-## 当前目标：R4 Trusted CUDA Transaction Fast Path
+## 当前目标：R4-B Persistent Transaction Metadata
 
-状态：R4-A 代码、配对 benchmark harness 与 RTX focused CUDA correctness（`40 passed in 2.34s`）已完成。commit `4e18f5d` quick 的 provisional complete-token p50/TPS `1.7856x/1.8755x`、append CPU `2.3751x` 和 item/local-scalar `20/20 -> 0/0` 仍可保留；旧 device/event attribution 已撤回。commit `e88900a` formal 的 CUDA peer `7/8` 和 commit `5d2f9c0` l4 stress 连续三次首 decode correlated device time为 0，证明两种 stage-device 口径均不稳定；后者没有写 CSV。strict profiler 已收敛为 CPU-only，当前 commit 的 RTX 完整回归、l4 stress quick 和 5-trial 正式 performance 尚待执行。仓库继续保持 private。
+状态：R4-A 已在 commit `4018449` 完成并冻结。RTX focused/full correctness 为 `73 passed, 23 subtests passed` 与 `410 passed, 48 subtests passed`；五轮正式矩阵共 160 行、80 个 paired trials，complete-token p50/TPS 几何平均为 `1.7307x/1.7131x`，16/16 个 dtype/case 分组的五轮 p50 range 全部稳定胜出。append inclusive CPU 为 `2.3612x`，l2/l4 checked scalar extraction 为 `20/40`、trusted 为 0。7/16 个 p99 ranges仍跨 1，因此不声明稳定尾延迟或 CUDA device-kernel 加速。仓库继续保持 private。
 
-R2 profiler 显示 multi-layer fused path 的系统收益主要来自 append/launch，而 attention device time 基本不变。进一步审计发现，cache-owned transaction 每个 layer 仍通过公开 raw primitive 执行五次 CUDA index reduction + `.item()`：block id 上下界、offset 上下界和 position 非负。这些值已经由 Cache allocator 在 host 侧构造并证明范围，因此内部路径存在重复的 host/stream synchronization。
+R4-B 处理 R4-A 明确留下的下一层开销：当前 fused Engine 每 token 会在 begin、每层 launch 前后和 commit 重建 transaction view；每次重新创建 positions、physical block ids、offsets、effective seq lens 并复制 block table。l2/l4 当前分别形成 `2L+2 = 6/10` 套 view。目标是在 Cache host allocator proof 之后为 open transaction 构造一套 private device metadata，跨 layer 只读复用。
 
-R4-A 的边界：
+R4-B 的边界：
 
-- `flashdec.fused_rope_kv_append()` 保留完整 device-value 检查，public safety 不变。
-- `PagedKVCache.begin_token()` 以纯 host invariant 证明 allocator 位置，public transaction API 根据 id 回查该内部状态并使用 private trusted raw launch；DecodeEngine 继续只调用 Cache public API。
-- trusted path 继续检查 shape、dtype、device、contiguity、RoPE 参数和 `int64` metadata。
-- 本 slice 只删除 device reduction + `.item()`，不把仍存在的 transaction-view H2D materialization/copy 表述为完全无同步。
-- 不同时修改 transaction buffer reuse、Triton kernel、Scheduler、shared-prefix metadata 或 CUDA Graph。
+- public `KVTokenTransactionView` 与 `DecodeStepTransaction` 继续是 detached snapshot，绝不与 Cache-owned canonical tensors alias；调用方原地修改 snapshot 不能改变 launch、decode 或 rollback。
+- persistent bundle 只在 transaction open 期间存活；commit、abort 或异常必须立即释放 device tensors。`_transactions` 可保留轻量 terminal tombstone，以继续报告 `already committed/aborted`，但不能积累 GPU metadata。
+- materialized/persistent 两条 A/B 路径都使用已冻结的 R4-A trusted raw dispatch；不同时改变 CUDA/Triton kernel、output buffer、Scheduler、shared prefix 或 CUDA Graph。
+- 用确定性 Cache counters 验证 metadata build/reuse/terminal cleanup，不把 Kineto device correlation重新引入 strict evidence。
+- 正式 latency继续来自无 profiler/CUDA Event 的同步 wall；profiler若使用，只报告 CPU attribution，且两条路径的 item/local-scalar必须同为 0。
 
 验证顺序：
 
-1. public invalid-index、trusted/checked parity、detached-view tampering、Engine public-API routing 与 rollback tests。
-2. RTX focused correctness 已通过；在 CPU-only profiler 修复 commit 上补跑完整回归并保存日志。
-3. 先执行 l4、FP16、3 trials stress quick，验证每行 CPU range/scalar evidence 完整且 `profile_attempt_count <= 3`；通过后再执行 FP16/BF16、8 cases、5 trials、160 rows 的正式矩阵。正式 wall 使用同步后的 `perf_counter`，profiler 独立归因。
-4. strict summary 完整验证后，只有 p50 总体至少 `1.05x`，且正式矩阵全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1，才进入 transaction metadata reuse；否则记录负结果并停止该优化线。
-5. R4-A 冻结后，再实现统一 scheduled multi-layer workload，组合验证 R1/R2/R3。
-
-Profiler 使用 `wait=0, warmup=1, active=1` 的 CPU-only capture cycle：warmup token 完整执行后 abort，不进入 active evidence。active raw events 只接受精确 `steps * layers` 个 CPU user annotations；其 `cpu_time_total` 提供 inclusive host time。少记 range/scalar、零值或非有限 CPU time会整体重建 probe，最多三次，并把 `profile_attempt_count` 写入 CSV；多记 range/scalar 则立即按契约错误终止。CPU FunctionEvent 的 correlated device time、同名 CUDA span与 CUDA activity count不进入 strict schema。
+1. 覆盖 l2/l4、tail/boundary、下一 token fresh metadata、public snapshot in-place tampering、layer failure rollback、commit/abort terminal cleanup和多 token无 retained-device-bundle增长。
+2. 同 commit、相同输入/状态轨迹、交替 materialized/persistent 顺序做 quick stress；strict summary验证 parity、block/transaction/Engine trajectory与metadata counter公式。
+3. quick通过后执行 FP16/BF16、8 cases、2 paths、5 trials的160-row正式矩阵。
+4. keep门预注册为 overall complete-token p50 `>=1.05x`，且16/16分组五轮p50最小值严格大于1；否则记录负结果并恢复materialized默认，不继续同线微调。
+5. R4-B冻结或回滚后，再进入R4-C integrated scheduled multi-layer workload。
 
 详细信任边界见[Multi-layer KV Transaction 设计](design_multi_layer_kv_transaction.md)。
 

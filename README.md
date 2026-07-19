@@ -6,7 +6,7 @@ FlashDec 是一个面向单 GPU LLM decode 的研究型运行时原型，覆盖 
 
 项目关注的核心问题是：在请求长度与 batch 持续变化的情况下，如何维护可验证的 KV 所有权和失败原子性，并证明底层 kernel 优化能够转化为完整 decode step 的系统收益。
 
-> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction 与 R3 Shared Prefix Blocks 均已完成。private R4 正在优化 cache-owned fused transaction 的重复 CUDA index synchronization：public raw op 保持 checked，`PagedKVCache` 在 `begin_token` 用 host allocator invariant 证明位置后，current-transaction API 内部使用 trusted raw launch。commit `4e18f5d` 的 RTX 5070 FP16 quick 给出 provisional complete-token p50 `1.7856x`、TPS `1.8755x`、append CPU `2.3751x`，且 `aten::item`/local-scalar 从 `20/20` 降为 `0/0`。后续 formal 与 commit `5d2f9c0` 的 l4 stress 先后证明同名 CUDA peer、CPU FunctionEvent correlated device time 都不是稳定的 stage-device 证据；旧 device/event 字段已撤回，R4 strict attribution 已收敛为 CPU-only，等待重新上板。仓库继续保持 private 和 `0.0.0`，不能写成稳定 speedup 或 R4-A 已完成。
+> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction、R3 Shared Prefix Blocks 与 R4-A Trusted CUDA Transaction Fast Path 均已完成。R4-A commit `4018449` 在 RTX 5070 通过 focused `73 passed, 23 subtests`、full `410 passed, 48 subtests` 和 160-row/80-pair 正式矩阵；Cache-owned trusted path 的 complete-token p50/TPS 几何平均为 `1.7307x/1.7131x`，16/16 个 dtype/case 分组的五轮 p50 range 均稳定胜出。CPU-only profiler 将收益归因到重复 scalar validation/sync 的移除，不能解释为 CUDA kernel math 加速；7/16 个 p99 range 仍跨 1。private R4 当前进入独立 R4-B persistent transaction metadata，仓库继续保持 private 和 `0.0.0`。
 
 ## 架构
 
@@ -63,12 +63,12 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 | R3-B RTX 回归 | focused `56 passed, 14 subtests passed`；full `352 passed, 25 subtests passed` | shared-prefix Engine/scheduler 集成验收通过 |
 | R3-D RTX 回归 | targeted `1 passed`；focused `61 passed, 8 subtests passed`；full `361 passed, 25 subtests passed` | hot-path lookup invariant 与完整功能回归通过 |
 | R3 最终 confirmation | 75% hit：context 节省 `68.8%`/`5.5 MiB`，admission `9/16 -> 16/16` | 64 行通过；所有非零 complete/scheduler/Engine p50 range 均跨 1，无稳定性能方向 |
-| R4-A RTX focused | `40 passed in 2.34s` | checked/trusted fused transaction correctness 通过 |
-| R4-A RTX quick | provisional p50/TPS `1.7856x/1.8755x`；scalar extraction `20/20 -> 0/0` | wall/CPU/scalar 方向保留；旧 device/event 口径撤回，等待 CPU-only stress 复测 |
+| R4-A RTX 回归 | focused `73 passed, 23 subtests passed`；full `410 passed, 48 subtests passed` | public checked 与 Cache-owned trusted 边界、parity、rollback 和完整功能回归通过 |
+| R4-A 正式矩阵 | p50/p90/TPS `1.7307x/1.6751x/1.7131x`；append CPU `2.3612x` | 160 行、80 pairs、16/16 p50 ranges 稳定胜出；7/16 p99 ranges 跨 1，不声明稳定尾延迟 |
 
 R2 的 decode device ratio 为 `1.0024x`，而 append device 与 CUDA event ratio 分别为 `1.6103x` 和 `1.9784x`，说明系统收益主要来自 append/launch 路径。每轮仅 20 repeats，p99 接近单轮最大值，因此所有尾延迟结论都保留场景范围，不作生产级稳定性声明。
 
-详细结果见[性能报告](docs/performance_report.md)、[R1 正式摘要](benchmarks/results/r1_scheduler_workload_trials3_summary.md)、[R2 正式摘要](benchmarks/results/r2_multi_layer_engine_trials3_summary.md)和[R3 最终摘要](benchmarks/results/r3_shared_prefix_workload_trials8_summary.md)。R3 的 ownership、容量口径与离群点边界记录在[Shared Prefix Blocks 设计](docs/design_shared_prefix_blocks.md)。
+详细结果见[性能报告](docs/performance_report.md)、[R1 正式摘要](benchmarks/results/r1_scheduler_workload_trials3_summary.md)、[R2 正式摘要](benchmarks/results/r2_multi_layer_engine_trials3_summary.md)、[R3 最终摘要](benchmarks/results/r3_shared_prefix_workload_trials8_summary.md)和[R4-A 正式摘要](benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)。R3 的 ownership、容量口径与离群点边界记录在[Shared Prefix Blocks 设计](docs/design_shared_prefix_blocks.md)。
 
 ## 快速开始
 

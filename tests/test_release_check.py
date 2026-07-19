@@ -95,5 +95,5 @@ def test_release_tree_requires_r4_runner_validator_and_dependency_free_tests():
         assert relative in REQUIRED_PATHS
     assert (
         "benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md"
-        not in RELEASE_EVIDENCE_PATHS
+        in RELEASE_EVIDENCE_PATHS
     )

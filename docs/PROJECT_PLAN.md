@@ -26,7 +26,7 @@ FlashDec 研究 LLM decode 阶段的三个相互关联的问题：
 | Scheduler R1 | lifetime commitment、FIFO + aging、stale decision 语义 | 36-row policy matrix 与 boundary-deadlock case |
 | Multi-layer R2 | shared location、sequential layers、commit/rollback | 144-row正式矩阵与最终 RTX 完整回归 |
 | Shared Prefix R3 | immutable full-block reuse、refcount/LRU、shared-aware admission | R3-D correctness 与 8-trial/64-row RTX confirmation 已完成 |
-| Trusted Transaction R4 | checked public raw op、Cache-owned device-value-check-free path、统一多层调度证据 | R4-A 实现/focused correctness 与 CPU-only profiler 修复完成；待 RTX l4 stress 与正式矩阵复测 |
+| Trusted Transaction R4 | checked public raw op、Cache-owned device-value-check-free path、persistent metadata、统一多层调度证据 | R4-A correctness、CPU-only attribution 与 160-row 正式矩阵完成并冻结；当前进入独立 R4-B |
 | Release | clean install、版本、tag、公开 release | 最终 release gate，留到项目收尾执行 |
 
 ## 3. 关键设计决策
@@ -66,7 +66,7 @@ Scheduler 不持有 K/V tensor 或 physical blocks；kernel 不推进 request se
 - Kernel、Paged KV Runtime、DecodeEngine、Scheduler R1 和 Multi-layer R2 已完成。
 - R3-A/R3-B ownership 与 Engine/scheduler integration、R3-C benchmark 以及 R3-D hot-path metadata cache 均已闭合。R3-D commit `fe72e27` 的 targeted/focused/full RTX correctness 分别为 `1 passed`、`61 passed, 8 subtests passed` 与 `361 passed, 25 subtests passed`。
 - 优化后的 8-trial/64-row confirmation 继续确认 75% hit 将 context physical blocks 从 `64/64` 降至 `20/64`，节省 `68.8%`/`5.5 MiB`，并在固定 48-block pool 下将 admission 从 `9/16` 提高到 `16/16`。所有非零 hit-rate 的 complete、scheduler 与 Engine p50 range 均跨 1，最终性能结论冻结为 near-neutral/no stable direction；旧 24-row 结果保留为优化前基线。
-- R4-A 针对 multi-layer fused transaction 每 layer 重复执行的 CUDA index reduction + `.item()` host sync。public raw primitive 保持完整检查；`PagedKVCache.begin_token()` 以纯 host invariant 证明 allocator 位置，公开 transaction API 根据 transaction id 回查该内部状态并调用 private trusted raw primitive，DecodeEngine 仍只依赖 Cache public API。该 slice 不消除 transaction-view 的 H2D materialization/copy。commit `1169cb8` 已在 RTX 5070 完成 focused CUDA correctness（`40 passed in 2.34s`）。commit `4e18f5d` 的单 trial quick 保留 provisional wall p50/TPS `1.7856x/1.8755x`、append CPU `2.3751x` 与 scalar extraction `20/20 -> 0/0`。commit `e88900a` formal 的同名 CUDA peer `7/8` 与 commit `5d2f9c0` l4 stress 连续三次首 decode correlated device time为 0，证明 stage-device 关联不适合作为 strict evidence；两次均未生成正式 CSV。runner 现使用 CPU-only WARMUP→active profiler，只校验 inclusive CPU range与 scalar extraction，最多三次且写入重采次数；需先完成 l4 stress quick，再重启 160-row 五轮矩阵。
+- R4-A 针对 multi-layer fused transaction 每 layer 重复执行的 CUDA index reduction + `.item()` host sync。public raw primitive 保持完整检查；`PagedKVCache.begin_token()` 以纯 host invariant 证明 allocator 位置，公开 transaction API 根据 transaction id 回查该内部状态并调用 private trusted raw primitive，DecodeEngine 仍只依赖 Cache public API。commit `4018449` 已在 RTX 5070 完成 focused `73 passed, 23 subtests passed`、full `410 passed, 48 subtests passed` 与 160-row/80-pair 五轮正式矩阵。trusted complete-token p50/TPS 几何平均为 `1.7307x/1.7131x`，16/16 个 dtype/case p50 ranges 均稳定胜出，append inclusive CPU 为 `2.3612x`；7/16 个 p99 ranges跨 1，因此只冻结 p50 与 host-sync 归因，不声明稳定尾延迟或 device-kernel 加速。R4-A 不消除 transaction-view 的 H2D materialization/copy；该单变量现进入独立 R4-B。
 - R2 正式结果绑定 commit `fa0f89a`；证据提交 `67bee15` 在 RTX 5070 完成 `337 passed, 25 subtests passed` 的无跳过回归。
 - 当前仓库仍为 private `0.0.0` development candidate。
 - clean-install、版本更新、公开与 tag 按所有者要求暂停在最后 release 阶段。

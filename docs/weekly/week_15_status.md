@@ -2,7 +2,7 @@
 
 ## 本周主题
 
-R4 Trusted CUDA Transaction Fast Path：删除 Cache-owned multi-layer fused append 每层重复的 CUDA index reduction + `.item()`，同时保留公开 raw primitive 的防御性检查。
+R4-A Trusted CUDA Transaction Fast Path：删除 Cache-owned multi-layer fused append 每层重复的 CUDA index reduction + `.item()`，同时保留公开 raw primitive 的防御性检查；正式证据通过后冻结 R4-A，当前转入 R4-B persistent transaction metadata。
 
 ## 已实现
 
@@ -29,7 +29,7 @@ Mac 工作区已执行以下本地 gate：
 - `python3 scripts/check_release.py --require-evidence`：private `0.0.0` tree gate 通过。
 - `git diff --check` 与 runner/summary `--help`：通过。
 
-RTX 5070 WSL 已完成 commit `1169cb8` 的 focused CUDA suite：`40 passed in 2.34s`，覆盖 fused raw dispatch、multi-layer transaction 与 multi-layer Engine。完整回归仍待执行。
+RTX 5070 WSL 最终在 commit `4018449` 完成 focused CUDA suite：`73 passed, 23 subtests passed`；完整回归：`410 passed, 48 subtests passed`。两组均无 failure，覆盖 fused raw dispatch、multi-layer transaction、Engine、benchmark 与 strict summary。
 
 第一次 FP16 quick 已写出 CSV，但 strict summary 拒绝 `profile_append_cpu_ms_per_layer=0`。审计确认运行时并非零 host cost：runner 先调用 `key_averages()`，随后用 `{event.key: event}` 再次压平，而 PyTorch 会按 device type 与 user annotation 分组；同名 CUDA group 覆盖 CPU user annotation 后，读取其 `cpu_time_total` 合法得到 0。第一版修复改读 unaggregated events 并精确选择 CPU user annotation，但仍错误假设同一个 CPU range 必须携带 device total；`.item()` 与 CUDA event 已改为按原始事件计数。validator 始终保持严格，修复前 CSV 作废。
 
@@ -43,12 +43,14 @@ commit `5d2f9c0` 的 l4 FP16 stress 在三次全新 probe 中都得到首个 dec
 
 新契约使用 CPU-only profiler `wait=0, warmup=1, active=1` schedule：warmup token完整执行后 abort，再进入 active evidence；CPU annotation 的 inclusive host提供 attribution，checked/trusted scalar count证明每层五次同步是否删除。range/scalar 少记时可用相同 seed和全新 probe最多重采集三次并记录 attempt count，多记或业务错误立即透传。append/decode device与 CUDA activity字段从 strict schema删除，未来需要时另建 CUDA Event/Nsight probe。同一 trial 的 checked/trusted 正式 wall都在 attribution前完成，retry不会污染 paired wall顺序。
 
-旧 quick 只有单 dtype、单缩小 case、单 trial；p90/p99 来自极小样本，不能形成稳定尾延迟或全矩阵结论。Profiler inclusive CPU total只能归因 host sync，不能替代 non-instrumented wall。当前 commit 的完整回归和五轮正式 A/B 完成前，不把 R4-A 标记为完成。正式门槛仍是 complete-token p50 总体至少 `1.05x`，且全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1；未达到门槛就保留负结果并停止扩展到 CUDA Graph。
+旧 quick 只有单 dtype、单缩小 case、单 trial；p90/p99 来自极小样本，不能形成稳定尾延迟或全矩阵结论。Profiler inclusive CPU total只能归因 host sync，不能替代 non-instrumented wall。
+
+commit `4018449` 的五轮正式矩阵已完成：`8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`、80 个 paired trials，全部 16 个 `dtype x case` 分组均为 `trusted_faster`，且各组 p50 五轮最小值都大于 1。overall p50/p90/p99、TPS 与 append CPU/layer ratio 为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`，通过预设 p50 gate。16 个分组中仍有 7 个 p99 range 穿过 1，因此不声明稳定尾延迟收益，也不把 CPU attribution 解释为 kernel device time。R4-A 已冻结；完整证据见[R4-A 五轮正式摘要](../../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)。
 
 ## 下一步
 
-1. 在 CPU-only profiler 修复 commit 上运行 dependency-free tests、RTX focused/full correctness并保存日志。
-2. 先跑 l4 FP16 3-trial stress quick，验证 strict summary、CPU range/scalar evidence 和 `profile_attempt_count <= 3`。
-3. stress quick 通过后运行 FP16/BF16、8 cases、checked/trusted、5 trials 的 160-row 正式矩阵，并用 strict summary 验证 80 个配对 trial。
-4. 检查 overall p50 `>=1.05x`，并按所有 dtype/case 的五轮 `[min,max]` 审核是否穿过 1；保留 p90/p99 全范围。
-5. 根据门槛决定进入 R4-B persistent metadata，或直接转入 R4-C integrated scheduled multi-layer correctness workload。
+1. 在 `begin_token()` 的 host provenance 验证后一次性构建 Cache-owned positions、physical ids、offsets、block tables 与 effective seq lens device metadata。
+2. 让 multi-layer Engine 跨 layer 复用 internal bundle；public transaction/Engine handle 始终 detached，不与内部 tensor alias。
+3. commit/abort 后立即释放 internal GPU metadata，只保留 terminal host tombstone；补齐 OOM/failure atomic rollback、篡改隔离、pointer stability 与无历史显存积累测试。
+4. 建立同 commit `materialized/persistent` A/B；两侧均使用 R4-A trusted raw math，并严格验证每 token materialization、reuse、release、parity、rollback 与 Engine trajectory。
+5. quick correctness 通过后再运行 FP16/BF16、8 cases、五轮正式矩阵；保留 p90/p99 全范围，未形成稳定证据时不扩展到 CUDA Graph。

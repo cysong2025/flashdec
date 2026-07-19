@@ -336,13 +336,18 @@ capacity failure -> refcount and ownership unchanged
 - profiler 使用 CPU-only WARMUP→active capture与 inclusive CPU time；少记 range/scalar 最多重采集三次并记录 attempt count，多出立即失败。stage-device attribution留给独立 CUDA Event/Nsight probe。
 - 第一 slice 不同时修改 transaction metadata materialization、output buffer 或 CUDA Graph。
 
-当前证据：focused CUDA correctness已通过；旧单 trial quick仅保留 provisional wall/CPU/scalar 方向。第一次 formal因同名 CUDA user peer契约错误 fail closed；commit `5d2f9c0` stress又连续三次观察到首 decode correlated device time为 0。两次均未生成 CSV，CPU-only profiler修复完成后需重新执行 RTX l4 stress quick。
-
-验收门槛：correctness/rollback/trajectory完全一致；complete-token p50总体至少 `1.05x`，且全部 16 个 `dtype x case` 分组的五轮 p50范围不穿过 1。未达到门槛则记录负结果并停止扩展到 CUDA Graph。
+最终证据：commit `4018449` 的 RTX focused/full correctness 为 `73 passed, 23 subtests passed` 与 `410 passed, 48 subtests passed`。CPU-only l4 stress三轮 p50为 `2.0362x [1.9578,2.2771]`；正式矩阵160行/80 pairs全部通过严格校验，overall p50/TPS为 `1.7307x/1.7131x`，16/16个分组的五轮p50最小值均大于1。append inclusive CPU为 `2.3612x`，checked l2/l4 item/local-scalar为 `20/40`、trusted为0。7/16个p99 ranges跨1，故只冻结p50与host-sync归因，不声明稳定尾延迟或device-kernel加速。R4-A验收完成。
 
 ### R4-B：Persistent transaction metadata
 
-只有 R4-A 稳定通过后，才评估 positions、block ids/offsets、effective seq lens 和 block table 每 token materialize 一次并跨 layer 复用。它必须作为独立 A/B，不能与去同步混成一次提交。
+状态：当前阶段。评估 positions、block ids/offsets、effective seq lens 和 block table 每 token materialize 一次并跨 layer 复用；它必须作为独立 materialized/persistent A/B，不能与R4-A去同步混成一次提交。
+
+- Cache-owned canonical device bundle只在open transaction期间存在，public Cache/Engine view保持detached，不能alias并污染trusted provenance。
+- commit/abort/error必须清除bundle；terminal transaction只保留轻量tombstone，避免`_transactions`长期持有CUDA tensors。
+- 两条benchmark path都固定使用R4-A trusted raw dispatch，用显式counter验证当前`2L+2`套view降为每token一次；不依赖Kineto device peer。
+- 不同时修改kernel、output buffer、Scheduler、prefix或CUDA Graph。
+
+keep门：correctness/parity/rollback/ownership/terminal cleanup全部通过；overall p50至少`1.05x`，且16/16个dtype/case分组的五轮p50最小值严格大于1。未达到则保留负结果并恢复materialized默认，再进入R4-C。
 
 ### R4-C：Integrated scheduled multi-layer workload
 
