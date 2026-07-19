@@ -52,32 +52,30 @@ R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享�
 
 所有权与验收细节见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
-## 当前目标：R4-B Persistent Transaction Metadata
+## 当前目标：R4-C Integrated Scheduled Multi-layer Workload
 
-状态：R4-A 已在 commit `d25107f` 冻结；其 RTX 性能证据绑定 benchmark commit `4018449`。focused/full correctness 为 `73 passed, 23 subtests passed` 与 `410 passed, 48 subtests passed`；五轮正式矩阵共 160 行、80 个 paired trials，complete-token p50/TPS 几何平均为 `1.7307x/1.7131x`，16/16 个 dtype/case 分组的五轮 p50 range 全部稳定胜出。append inclusive CPU 为 `2.3612x`，l2/l4 checked scalar extraction 为 `20/40`、trusted 为 0。7/16 个 p99 ranges仍跨 1，因此不声明稳定尾延迟或 CUDA device-kernel 加速。仓库继续保持 private。
+状态：R4-A 已在 commit `4018449` 完成并冻结。R4-B persistent metadata candidate 在 commit `8047a9c` 通过 focused `101 passed`、完整回归 `434 passed, 48 subtests passed` 和 160-row/80-pair 正式证据完整性校验。overall p50/TPS/append CPU 为 `1.2493x/1.2392x/3.0366x`，但只有 13/16 个分组的五轮 p50 最小值严格大于 1，未通过预注册 16/16 稳定性门；因此主线恢复 R4-A/materialized 默认，不继续同线微调。正式负结果见[R4-B 五轮摘要](../benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)。仓库继续保持 private。
 
-R4-B core、同 commit paired runner 与 strict summary 已实现：Cache 在 host allocator proof 成功后、open transaction 发布前，一次性构造 positions、physical block ids、offsets、block tables 与 effective seq lens 五 tensor canonical bundle；public snapshot也在发布前准备完成，任一构造/clone失败都回滚 reservation、计数与 transaction id，不留下半发布状态。Engine append/decode math 只借用 Cache private bundle，public handle与逐层/commit result均为 detached snapshot。commit、abort或layer异常会释放 device bundle，terminal state只保留host tombstone。build/materialization/reuse/release/resident counters与 invariant共同约束生命周期。
+R4-C 使用冻结的 R4-A/materialized 路径统一验证已经完成的 Scheduler、Shared Prefix 与 Multi-layer Transaction：
 
-Mac 已通过 16 个 dependency-free tests、`py_compile` 与 diff check，但该主机没有 torch/pytest。RTX correctness、quick和formal都尚未执行，因此 R4-B 仍未完成，也没有性能结论。
+```text
+dynamic arrivals
+  -> lifetime scheduler
+  -> caller-supplied multi-layer context
+  -> fixed resident shared-prefix hit / private miss
+  -> begin_step / step_layer / commit_step
+  -> finish/cancel / block reuse
+```
 
-R4-B 的边界：
+第一版边界：
 
-- public `KVTokenTransactionView` 与 `DecodeStepTransaction` 继续是 detached snapshot，绝不与 Cache-owned canonical tensors alias；调用方原地修改 snapshot 不能改变 launch、decode 或 rollback。
-- persistent bundle 只在 transaction open 期间存活；commit、abort 或异常必须立即释放 device tensors。`_transactions` 可保留轻量 terminal tombstone，以继续报告 `already committed/aborted`，但不能积累 GPU metadata。
-- materialized/persistent 两条 A/B 路径都使用已冻结的 R4-A trusted raw dispatch；它们是同 commit、benchmark-only legacy-boundary controlled ablation，不是与旧 `4018449` 做逐指令或跨 commit比较，也不同时改变 CUDA/Triton kernel、output buffer、Scheduler、shared prefix 或 CUDA Graph。
-- 用确定性 Cache counters 验证 metadata build/reuse/terminal cleanup，不把 Kineto device correlation重新引入 strict evidence。
-- counter中的 view只表示Cache transaction-view materialization：legacy materialized为每token `2L+2`，persistent为1次materialization加`L`次跨层reuse；不表示所有Engine result tensor clone。
-- 正式 latency继续来自无 profiler/CUDA Event 的同步 wall；profiler若使用，只报告 CPU attribution，且两条路径的 item/local-scalar必须同为 0。
+- prefix resident set 固定，不同时加入在线 registration/eviction。
+- 保留 scheduler lifetime commitment、shared residency 与 request-private commitment 的现有所有权边界。
+- 每个 admitted batch 通过 `begin_step / step_layer / commit_step` 执行完整多层 token；任一层失败必须 rollback。
+- 主验收是组合 correctness、completion、transaction/block trajectory、finish/cancel 回收与最终零泄漏 cleanup。
+- 性能证据只比较定义一致的组合 workload；不要求 shared prefix 自身带来 latency 加速，也不重新 sweep 已冻结 kernel 参数。
 
-验证顺序：
-
-1. 在RTX运行paged Cache、multi-layer transaction/Engine和R4-B runner/summary focused suite；确认CUDA pointer stability、public in-place tampering隔离、layer failure rollback、commit/abort cleanup和下一token fresh metadata。
-2. focused通过后运行`l4_b4_c128`、FP16、3 trials quick；strict summary验证parity、block/transaction/Engine trajectory与metadata counter公式。
-3. 只有quick通过后才执行 FP16/BF16、8 cases、2 paths、5 trials的160-row正式矩阵。
-4. keep门预注册为 overall complete-token p50 `>=1.05x`，且16/16分组五轮p50最小值严格大于1；否则记录负结果并恢复materialized默认，不继续同线微调。
-5. R4-B冻结或回滚后，再进入R4-C integrated scheduled multi-layer workload。
-
-详细信任边界见[Multi-layer KV Transaction 设计](design_multi_layer_kv_transaction.md)。
+下一步：先定义 trace/schema 与 reference trajectory，再实现 dependency-free validator 和 Engine 集成测试，最后进入 RTX correctness 与组合 workload。
 
 ## 暂停目标：private 维护与可选 v0.1.0 Release Gate
 

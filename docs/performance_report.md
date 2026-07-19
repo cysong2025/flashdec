@@ -244,19 +244,17 @@ commit `4018449` 在 RTX 5070、CUDA 12.8 上完成 `8 cases x 2 dtypes x 2 path
 | decode TPS | `1.7131x` |
 | profiler append CPU/layer | `2.3612x` |
 
-CPU-only profiler 证明 trusted 路径删除了每层 5 次 item/local-scalar 同步；这项归因不代表 kernel math 或 device execution 本身更快。16 个分组中有 7 个 p99 `[min,max]` 穿过 1，因此只能声明稳定的 complete-token p50 改善，不能把 overall p99 几何平均写成稳定尾延迟收益。focused `73 passed, 23 subtests passed` 和完整 `410 passed, 48 subtests passed` 均通过。R4-A已在commit `d25107f`冻结；完整数据见[R4-A 五轮正式摘要](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)。
+CPU-only profiler 证明 trusted 路径删除了每层 5 次 item/local-scalar 同步；这项归因不代表 kernel math 或 device execution 本身更快。16 个分组中有 7 个 p99 `[min,max]` 穿过 1，因此只能声明稳定的 complete-token p50 改善，不能把 overall p99 几何平均写成稳定尾延迟收益。focused `73 passed, 23 subtests passed` 和完整 `410 passed, 48 subtests passed` 均通过。R4-A 已冻结；完整数据见[R4-A 五轮正式摘要](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)。
 
-## R4-B Persistent Metadata 待验证计划（2026-07-19）
+## R4-B Persistent Metadata 正式负结果（2026-07-19）
 
-R4-B core已把同一open transaction的五tensor Cache-owned device metadata改为begin发布前一次构建、跨层只读复用，并在commit/abort/error后释放。public Cache/Engine handle继续是detached no-alias snapshot，Engine math只使用private bundle；atomic snapshot失败会回滚reservation与发布状态。build/materialization/reuse/release/resident counters和invariant用于验证这条生命周期，而不是从wall time反推实现是否走到fast path。
+R4-B commit `8047a9c` 在同一 trusted CUDA/Triton math 下比较 materialized 与 persistent metadata lifetime。focused `101 passed`、完整回归 `434 passed, 48 subtests passed`；正式矩阵为 FP16/BF16、8 cases、2 paths、5 trials，共 160 rows/80 pairs。exact parity、block/transaction/Engine trajectory、rollback、metadata build/reuse/release、CPU ranges 与 terminal zero-resident 均通过严格校验。
 
-新的A/B不是把当前实现与旧commit `4018449`直接相除。`materialized`与`persistent`在同一commit、相同输入、相同transaction/Engine trajectory下运行相同R4-A trusted CUDA/Triton math，benchmark-only hooks只恢复legacy metadata boundary。计数口径限定为Cache transaction-view：materialized为`2L+2` views/token、0 reuse；persistent为1次materialization和`L`次reuse。该数字不统计所有Engine result tensor clone。
-
-当前只有16个dependency-free tests、`py_compile`与diff check通过；Mac没有torch/pytest，RTX correctness、quick/formal尚未执行。因此本节没有R4-B latency/TPS数字，也不声明加速或尾延迟方向。quick通过后才运行160-row五轮formal；keep gate预注册为overall p50 `>=1.05x`且16/16分组的paired p50五轮最小值严格大于1。
+persistent 将 Cache transaction views 从 l2/l4 的 `6/10` 降为 1，并分别复用 2/4 层。overall complete-token p50/TPS 与 append CPU/layer 为 `1.2493x/1.2392x/3.0366x`，但只有 13/16 个分组的五轮 p50 最小值严格大于 1；BF16 `l2_b4_c1024`、FP16 `l2_b16_c128` 与 FP16 `l4_b16_c128` 跨过 1。预注册 keep 门要求 16/16，因此正式状态为 fail，主线恢复 R4-A/materialized 默认。该结果说明 metadata reuse 稳定减少 host append 开销，但不能证明所有完整 token 场景都稳定受益；完整数据见[R4-B 五轮正式负结果](../benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)。
 
 ## 后续工作边界
 
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
-2. Block-aware Scheduler、Multi-layer KV Token Transaction 与 R4-A trusted validation 已完成；当前只执行 R4-B RTX correctness、quick/formal验收，不重新 sweep 已冻结参数。
+2. Block-aware Scheduler、Multi-layer KV Token Transaction 与 R4-A trusted validation 已完成；R4-B 已完成评估并按稳定性门回滚，当前进入 R4-C integrated scheduled multi-layer workload。
 3. clean-install、版本与 tag 留在最终 release gate。
 4. Shared Prefix R3 已完成；当前不继续围绕同一数据调参。固定版本公开基线与 release 均暂停，未来若执行仍必须统一功能与计时边界。

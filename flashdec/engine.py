@@ -503,7 +503,7 @@ class DecodeEngine:
                 effective_seq_lens=cache_transaction.effective_seq_lens.clone(),
             )
         except Exception:
-            self.cache._abort_token_for_engine(cache_transaction)
+            self.cache.abort_token(cache_transaction)
             self._sync_cache_version()
             self._bump_state_version()
             raise
@@ -548,7 +548,7 @@ class DecodeEngine:
 
             range_factory = self._profile_range_factory
             if range_factory is None:
-                q_rotated, metadata = self._write_transaction_layer(
+                q_rotated, cache_view = self._write_transaction_layer(
                     state,
                     layer_idx,
                     q,
@@ -559,13 +559,13 @@ class DecodeEngine:
                 )
                 output = self._decode(
                     q_rotated,
-                    metadata.block_tables,
-                    metadata.effective_seq_lens,
+                    cache_view.block_tables,
+                    cache_view.effective_seq_lens,
                     layer_idx=layer_idx,
                 )
             else:
                 with range_factory(PROFILE_RANGE_APPEND):
-                    q_rotated, metadata = self._write_transaction_layer(
+                    q_rotated, cache_view = self._write_transaction_layer(
                         state,
                         layer_idx,
                         q,
@@ -577,43 +577,25 @@ class DecodeEngine:
                 with range_factory(PROFILE_RANGE_DECODE):
                     output = self._decode(
                         q_rotated,
-                        metadata.block_tables,
-                        metadata.effective_seq_lens,
+                        cache_view.block_tables,
+                        cache_view.effective_seq_lens,
                         layer_idx=layer_idx,
                     )
-            layer_result = self._prepare_layer_step_result(
-                state,
-                layer_idx,
-                output,
-                metadata,
-            )
         except Exception:
-            self._abort_open_step_state(state, return_view=False)
+            self._abort_open_step_state(state)
             raise
 
         state.next_layer_idx += 1
         state.last_output = output
         self._transaction_layer_step_count += 1
-        return layer_result
-
-    def _prepare_layer_step_result(self, state, layer_idx, output, metadata):
-        """Create a detached public layer result inside the abort boundary.
-
-        ``metadata`` is the bundle used for this layer's math.  The production
-        persistent path deliberately clones the Engine-private snapshot rather
-        than exposing that potentially authoritative bundle.  The R4-B paired
-        benchmark may replace this hook when its materialized path already has
-        a detached post-write Cache view.
-        """
-        del metadata
         return DecodeLayerResult(
             transaction_id=state.handle.transaction_id,
             layer_idx=layer_idx,
             request_ids=state.handle.request_ids,
             output=output,
-            positions=state.cache_transaction.positions.clone(),
-            block_tables=state.cache_transaction.block_tables.clone(),
-            effective_seq_lens=state.cache_transaction.effective_seq_lens.clone(),
+            positions=cache_view.positions,
+            block_tables=cache_view.block_tables,
+            effective_seq_lens=cache_view.effective_seq_lens,
         )
 
     def commit_step(self, transaction):
@@ -621,33 +603,23 @@ class DecodeEngine:
         state = self._require_open_step(transaction)
         if state.next_layer_idx != self.cache.num_layers:
             raise RuntimeError("cannot commit decode step before all layers are complete")
-        result = self._commit_cache_transaction_and_prepare_result(state)
+        committed = self.cache.commit_token(state.cache_transaction)
         state.state = "committed"
         self._open_step_transaction = None
         self._completed_step_count += 1
         self._appended_token_count += len(state.handle.request_ids)
         self._sync_cache_version()
         self._bump_state_version()
-        return result
-
-    def _commit_cache_transaction_and_prepare_result(self, state):
-        """Prepare the public result before the no-allocation Cache commit.
-
-        The R4-B materialized benchmark may replace this hook to consume the
-        detached terminal view returned by public ``Cache.commit_token``.
-        """
-        result = DecodeStepResult(
+        return DecodeStepResult(
             status=self.STEP_OK,
             request_ids=state.handle.request_ids,
             output=state.last_output,
-            positions=state.cache_transaction.positions.clone(),
-            block_tables=state.cache_transaction.block_tables.clone(),
-            seq_lens=state.cache_transaction.effective_seq_lens.clone(),
+            positions=committed.positions,
+            block_tables=committed.block_tables,
+            seq_lens=self.cache.seq_lens_tensor(state.handle.request_ids),
             needed_new_blocks=state.needed_new_blocks,
             free_blocks=self.cache.num_free_blocks,
         )
-        self.cache._commit_token_for_engine(state.cache_transaction)
-        return result
 
     def abort_step(self, transaction):
         """Explicitly abort one open token transaction."""
@@ -984,7 +956,7 @@ class DecodeEngine:
         base,
     ):
         if self.append_backend == "fused_cuda":
-            return self.cache._write_token_layer_fused_cuda_for_engine(
+            return self.cache.write_token_layer_fused_cuda(
                 state.cache_transaction,
                 layer_idx,
                 q,
@@ -996,37 +968,31 @@ class DecodeEngine:
 
         from .rope import apply_rope
 
-        metadata = self.cache._transaction_device_metadata_for_engine(
-            state.cache_transaction
-        )
+        cache_view = self.cache.transaction_view(state.cache_transaction)
         q_rotated = apply_rope(
             q,
-            metadata.positions,
+            cache_view.positions,
             rotary_dim=rotary_dim,
             base=base,
         )
         k_rotated = apply_rope(
             k,
-            metadata.positions,
+            cache_view.positions,
             rotary_dim=rotary_dim,
             base=base,
         )
-        self.cache._write_token_layer_for_engine(
+        cache_view = self.cache.write_token_layer(
             state.cache_transaction,
             layer_idx,
             k_rotated,
             v,
         )
-        return q_rotated, metadata
+        return q_rotated, cache_view
 
-    def _abort_open_step_state(self, state, *, return_view=True):
+    def _abort_open_step_state(self, state):
         if self._open_step_transaction is not state or state.state != "open":
             raise RuntimeError("decode step transaction is not open")
-        if return_view:
-            aborted = self.cache.abort_token(state.cache_transaction)
-        else:
-            self.cache._abort_token_for_engine(state.cache_transaction)
-            aborted = None
+        aborted = self.cache.abort_token(state.cache_transaction)
         state.state = "aborted"
         self._open_step_transaction = None
         self._transaction_abort_count += 1

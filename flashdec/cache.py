@@ -40,22 +40,6 @@ class KVTokenTransactionView:
     state: str
 
 
-@dataclass(frozen=True)
-class _KVTokenDeviceMetadata:
-    """Cache-owned device tensors for one open token transaction.
-
-    These tensors are built once from allocator-proven host state.  They must
-    never be exposed directly through the public transaction API because their
-    values are trusted by the private fused CUDA dispatch.
-    """
-
-    positions: object
-    physical_block_ids: object
-    block_offsets: object
-    block_tables: object
-    effective_seq_lens: object
-
-
 @dataclass
 class _KVTokenTransactionState:
     transaction_id: int
@@ -63,8 +47,7 @@ class _KVTokenTransactionState:
     request_ids: tuple[Hashable, ...]
     positions: tuple[int, ...]
     locations: tuple[tuple[int, int], ...]
-    block_table_rows: tuple[tuple[int, ...], ...]
-    device_metadata: _KVTokenDeviceMetadata | None
+    block_tables: object
     newly_allocated_by_request: dict[Hashable, int]
     allocation_order: tuple[int, ...]
     next_layer_idx: int = 0
@@ -168,11 +151,6 @@ class PagedKVCache:
         self._transaction_layer_write_count = 0
         self._transaction_rollback_block_count = 0
         self._transaction_failure_count = 0
-        self._transaction_metadata_build_count = 0
-        self._transaction_metadata_materialization_count = 0
-        self._transaction_metadata_reuse_count = 0
-        self._transaction_metadata_release_count = 0
-        self._resident_transaction_metadata_count = 0
         self._prefix_registration_count = 0
         self._prefix_hit_count = 0
         self._prefix_miss_count = 0
@@ -467,21 +445,10 @@ class PagedKVCache:
             raise RuntimeError("PagedKVCache is out of physical blocks")
 
         transaction_id = self._next_transaction_id
-        cache_version = self._state_version + 1
         positions = tuple(state.seq_len for state in states)
         locations = []
-        block_table_rows = ()
-        device_metadata = None
         newly_allocated = {}
         allocation_order = []
-        transaction = None
-        public_view = None
-        allocation_counters = (
-            self._allocation_count,
-            self._fresh_allocation_count,
-            self._reuse_count,
-        )
-        ever_allocated_blocks = set(self._ever_allocated_blocks)
         try:
             for request_id, state, position in zip(ids, states, positions):
                 logical_block = position // self.block_size
@@ -498,24 +465,7 @@ class PagedKVCache:
                 positions,
                 locations,
             )
-            block_table_rows = tuple(tuple(state.block_ids) for state in states)
-            device_metadata = self._build_transaction_device_metadata(
-                positions,
-                tuple(locations),
-                block_table_rows,
-            )
-            transaction = _KVTokenTransactionState(
-                transaction_id=transaction_id,
-                cache_version=cache_version,
-                request_ids=ids,
-                positions=positions,
-                locations=tuple(locations),
-                block_table_rows=block_table_rows,
-                device_metadata=device_metadata,
-                newly_allocated_by_request=newly_allocated,
-                allocation_order=tuple(allocation_order),
-            )
-            public_view = self._transaction_view(transaction)
+            block_tables = self.block_tables(ids)
             for state in states:
                 state.transaction_id = transaction_id
         except Exception:
@@ -526,36 +476,30 @@ class PagedKVCache:
                 state.transaction_id = None
             for block_id in reversed(allocation_order):
                 self._free_blocks.appendleft(block_id)
-            (
-                self._allocation_count,
-                self._fresh_allocation_count,
-                self._reuse_count,
-            ) = allocation_counters
-            self._ever_allocated_blocks = ever_allocated_blocks
             self._transaction_failure_count += 1
             raise
 
+        cache_version = self._state_version + 1
+        transaction = _KVTokenTransactionState(
+            transaction_id=transaction_id,
+            cache_version=cache_version,
+            request_ids=ids,
+            positions=positions,
+            locations=tuple(locations),
+            block_tables=block_tables,
+            newly_allocated_by_request=newly_allocated,
+            allocation_order=tuple(allocation_order),
+        )
         self._transactions[transaction_id] = transaction
         self._open_transaction_id = transaction_id
         self._next_transaction_id += 1
         self._transaction_begin_count += 1
-        self._transaction_metadata_build_count += 1
-        self._resident_transaction_metadata_count += 1
         self._state_version = cache_version
-        return public_view
+        return self._transaction_view(transaction)
 
     def write_token_layer(self, transaction, layer_idx, k, v):
         """Write one layer at the locations reserved by ``begin_token``."""
         state = self._require_open_transaction(transaction)
-        self._write_token_layer_core(state, layer_idx, k, v)
-        return self._transaction_view(state)
-
-    def _write_token_layer_for_engine(self, transaction, layer_idx, k, v):
-        """Write one Engine-owned layer without materializing a public view."""
-        state = self._require_open_transaction(transaction)
-        self._write_token_layer_core(state, layer_idx, k, v)
-
-    def _write_token_layer_core(self, state, layer_idx, k, v):
         try:
             layer_idx, k, v = self._prepare_transaction_layer_write(
                 state,
@@ -570,7 +514,7 @@ class PagedKVCache:
         except Exception:
             self._transaction_failure_count += 1
             raise
-        self._record_transaction_layer_write(state, layer_idx)
+        return self._record_transaction_layer_write(state, layer_idx)
 
     def write_token_layer_fused_cuda(
         self,
@@ -594,56 +538,6 @@ class PagedKVCache:
         ``begin_token``. This permits the private raw CUDA launch to skip
         repeated device-value reductions without trusting caller-owned values.
         """
-        q_rotated, state, _metadata = self._write_token_layer_fused_cuda_core(
-            transaction,
-            layer_idx,
-            q,
-            k,
-            v,
-            rotary_dim=rotary_dim,
-            base=base,
-        )
-        return q_rotated, self._transaction_view(state)
-
-    def _write_token_layer_fused_cuda_for_engine(
-        self,
-        transaction,
-        layer_idx,
-        q,
-        k,
-        v,
-        *,
-        rotary_dim=None,
-        base=10_000.0,
-    ):
-        """Run the trusted fused write and lend Cache-owned metadata to Engine.
-
-        The returned metadata is authoritative only while this transaction is
-        open.  This package-private boundary is the production R4-B fast path;
-        public callers continue to receive detached transaction snapshots.
-        """
-        q_rotated, _state, metadata = self._write_token_layer_fused_cuda_core(
-            transaction,
-            layer_idx,
-            q,
-            k,
-            v,
-            rotary_dim=rotary_dim,
-            base=base,
-        )
-        return q_rotated, metadata
-
-    def _write_token_layer_fused_cuda_core(
-        self,
-        transaction,
-        layer_idx,
-        q,
-        k,
-        v,
-        *,
-        rotary_dim,
-        base,
-    ):
         state = self._require_open_transaction(transaction)
         try:
             torch = _torch()
@@ -678,42 +572,27 @@ class PagedKVCache:
 
             from ._fused_rope_kv_append import _fused_rope_kv_append_trusted
 
-            metadata = self._transaction_device_metadata_for_layer(state)
+            view = self._transaction_view(state)
             q_rotated = _fused_rope_kv_append_trusted(
                 q,
                 k,
                 v,
                 self.k_cache[layer_idx],
                 self.v_cache[layer_idx],
-                metadata.physical_block_ids,
-                metadata.block_offsets,
-                metadata.positions,
+                view.physical_block_ids,
+                view.block_offsets,
+                view.positions,
                 rotary_dim=rotary_dim,
                 base=base,
             )
         except Exception:
             self._transaction_failure_count += 1
             raise
-        self._record_transaction_layer_write(state, layer_idx)
-        return q_rotated, state, metadata
+        return q_rotated, self._record_transaction_layer_write(state, layer_idx)
 
     def commit_token(self, transaction):
         """Publish one token after every layer has been written successfully."""
         state = self._require_open_transaction(transaction)
-        if state.next_layer_idx != self.num_layers:
-            raise RuntimeError("cannot commit token before all layers are written")
-        terminal_view = self._transaction_view(state, state_override="committed")
-        self._commit_token_state(state)
-        self._release_transaction_device_metadata(state)
-        return terminal_view
-
-    def _commit_token_for_engine(self, transaction):
-        """Commit an Engine-owned token without a terminal tensor snapshot."""
-        state = self._require_open_transaction(transaction)
-        self._commit_token_state(state)
-        self._release_transaction_device_metadata(state)
-
-    def _commit_token_state(self, state):
         if state.next_layer_idx != self.num_layers:
             raise RuntimeError("cannot commit token before all layers are written")
         for request_id in state.request_ids:
@@ -724,22 +603,11 @@ class PagedKVCache:
         self._open_transaction_id = None
         self._transaction_commit_count += 1
         self._state_version += 1
+        return self._transaction_view(state)
 
     def abort_token(self, transaction):
         """Abort an open token and return any boundary blocks it reserved."""
         state = self._require_open_transaction(transaction)
-        terminal_view = self._transaction_view(state, state_override="aborted")
-        self._abort_token_state(state)
-        self._release_transaction_device_metadata(state)
-        return terminal_view
-
-    def _abort_token_for_engine(self, transaction):
-        """Abort an Engine-owned token without a terminal tensor snapshot."""
-        state = self._require_open_transaction(transaction)
-        self._abort_token_state(state)
-        self._release_transaction_device_metadata(state)
-
-    def _abort_token_state(self, state):
         for request_id, block_id in state.newly_allocated_by_request.items():
             request = self._requests[request_id]
             if not request.block_ids or request.block_ids[-1] != block_id:
@@ -754,6 +622,7 @@ class PagedKVCache:
         self._transaction_abort_count += 1
         self._transaction_rollback_block_count += len(state.allocation_order)
         self._state_version += 1
+        return self._transaction_view(state)
 
     def transaction_view(self, transaction):
         """Return the latest detached snapshot for a transaction handle."""
@@ -880,15 +749,6 @@ class PagedKVCache:
             "transaction_layer_write_count": self._transaction_layer_write_count,
             "transaction_rollback_block_count": self._transaction_rollback_block_count,
             "transaction_failure_count": self._transaction_failure_count,
-            "transaction_metadata_build_count": self._transaction_metadata_build_count,
-            "transaction_metadata_materialization_count": (
-                self._transaction_metadata_materialization_count
-            ),
-            "transaction_metadata_reuse_count": self._transaction_metadata_reuse_count,
-            "transaction_metadata_release_count": self._transaction_metadata_release_count,
-            "resident_transaction_metadata_count": (
-                self._resident_transaction_metadata_count
-            ),
             "bytes_per_block": bytes_per_block,
             "allocated_kv_bytes": used_blocks * bytes_per_block,
             "reserved_transaction_bytes": reserved_transaction_blocks * bytes_per_block,
@@ -978,30 +838,6 @@ class PagedKVCache:
             for transaction in self._transactions.values()
             if transaction.state == "open"
         ]
-        resident_metadata = sum(
-            transaction.device_metadata is not None
-            for transaction in self._transactions.values()
-        )
-        if not 0 <= self._resident_transaction_metadata_count <= 1:
-            raise RuntimeError("resident transaction metadata count is out of range")
-        if (
-            self._transaction_metadata_release_count
-            > self._transaction_metadata_build_count
-        ):
-            raise RuntimeError("transaction metadata releases exceed builds")
-        if (
-            self._transaction_metadata_build_count
-            - self._transaction_metadata_release_count
-            != self._resident_transaction_metadata_count
-        ):
-            raise RuntimeError("transaction metadata lifecycle counters diverged")
-        if resident_metadata != self._resident_transaction_metadata_count:
-            raise RuntimeError("resident transaction metadata count diverged")
-        for transaction in self._transactions.values():
-            if transaction.state == "open" and transaction.device_metadata is None:
-                raise RuntimeError("open transaction is missing device metadata")
-            if transaction.state != "open" and transaction.device_metadata is not None:
-                raise RuntimeError("terminal transaction retains device metadata")
         if self._open_transaction_id is None:
             if open_states:
                 raise RuntimeError("open transaction is missing from cache state")
@@ -1134,124 +970,40 @@ class PagedKVCache:
         """Return whether a multi-layer token transaction is open."""
         return self._open_transaction_id is not None
 
-    def _transaction_view(self, transaction, *, state_override=None):
-        metadata = transaction.device_metadata
-        if metadata is None:
-            metadata = self._build_transaction_device_metadata(
-                transaction.positions,
-                transaction.locations,
-                transaction.block_table_rows,
-            )
-        else:
-            metadata = self._clone_transaction_device_metadata(metadata)
-        view = KVTokenTransactionView(
+    def _transaction_view(self, transaction):
+        torch = _torch()
+        block_ids = torch.tensor(
+            [location[0] for location in transaction.locations],
+            device=self.device,
+            dtype=torch.int64,
+        )
+        block_offsets = torch.tensor(
+            [location[1] for location in transaction.locations],
+            device=self.device,
+            dtype=torch.int64,
+        )
+        positions = torch.tensor(
+            transaction.positions,
+            device=self.device,
+            dtype=torch.int64,
+        )
+        effective_seq_lens = torch.tensor(
+            [position + 1 for position in transaction.positions],
+            device=self.device,
+            dtype=torch.int32,
+        )
+        return KVTokenTransactionView(
             transaction_id=transaction.transaction_id,
             cache_version=transaction.cache_version,
             request_ids=transaction.request_ids,
-            positions=metadata.positions,
-            physical_block_ids=metadata.physical_block_ids,
-            block_offsets=metadata.block_offsets,
-            block_tables=metadata.block_tables,
-            effective_seq_lens=metadata.effective_seq_lens,
+            positions=positions,
+            physical_block_ids=block_ids,
+            block_offsets=block_offsets,
+            block_tables=transaction.block_tables.clone(),
+            effective_seq_lens=effective_seq_lens,
             next_layer_idx=transaction.next_layer_idx,
-            state=(transaction.state if state_override is None else state_override),
+            state=transaction.state,
         )
-        self._transaction_metadata_materialization_count += 1
-        return view
-
-    def _build_transaction_device_metadata(
-        self,
-        positions,
-        locations,
-        block_table_rows,
-    ):
-        """Build the canonical five device tensors from proven host metadata."""
-        torch = _torch()
-        max_blocks_per_seq = max(
-            1,
-            max((len(row) for row in block_table_rows), default=0),
-        )
-        padded_block_tables = [
-            list(row) + [-1] * (max_blocks_per_seq - len(row))
-            for row in block_table_rows
-        ]
-        return _KVTokenDeviceMetadata(
-            positions=torch.tensor(
-                positions,
-                device=self.device,
-                dtype=torch.int64,
-            ),
-            physical_block_ids=torch.tensor(
-                [location[0] for location in locations],
-                device=self.device,
-                dtype=torch.int64,
-            ),
-            block_offsets=torch.tensor(
-                [location[1] for location in locations],
-                device=self.device,
-                dtype=torch.int64,
-            ),
-            block_tables=torch.tensor(
-                padded_block_tables,
-                device=self.device,
-                dtype=torch.int32,
-            ),
-            effective_seq_lens=torch.tensor(
-                [position + 1 for position in positions],
-                device=self.device,
-                dtype=torch.int32,
-            ),
-        )
-
-    @staticmethod
-    def _clone_transaction_device_metadata(metadata):
-        return _KVTokenDeviceMetadata(
-            positions=metadata.positions.clone(),
-            physical_block_ids=metadata.physical_block_ids.clone(),
-            block_offsets=metadata.block_offsets.clone(),
-            block_tables=metadata.block_tables.clone(),
-            effective_seq_lens=metadata.effective_seq_lens.clone(),
-        )
-
-    def _transaction_device_metadata_for_layer(self, state):
-        """Lend the persistent bundle used by the production Engine hot path.
-
-        The current runtime permits one open transaction and assumes its
-        sequential layer launches stay on the same CUDA stream.
-
-        Benchmarks may replace this method with
-        ``_materialize_transaction_device_metadata_for_layer`` to recreate the
-        pre-R4-B per-layer materialization boundary without changing math or
-        the trusted raw CUDA launch.
-        """
-        metadata = state.device_metadata
-        if metadata is None:
-            raise RuntimeError("token transaction device metadata was released")
-        self._transaction_metadata_reuse_count += 1
-        return metadata
-
-    def _materialize_transaction_device_metadata_for_layer(self, state):
-        """Return a fresh benchmark-only clone of one open metadata bundle."""
-        metadata = state.device_metadata
-        if metadata is None:
-            raise RuntimeError("token transaction device metadata was released")
-        materialized = self._clone_transaction_device_metadata(metadata)
-        self._transaction_metadata_materialization_count += 1
-        return materialized
-
-    def _transaction_device_metadata_for_engine(self, transaction):
-        """Resolve an Engine handle to Cache-owned authoritative metadata."""
-        state = self._require_open_transaction(transaction)
-        return self._transaction_device_metadata_for_layer(state)
-
-    def _release_transaction_device_metadata(self, state):
-        if state.device_metadata is None:
-            raise RuntimeError("token transaction device metadata is already released")
-        state.device_metadata = None
-        self._resident_transaction_metadata_count -= 1
-        self._transaction_metadata_release_count += 1
-        if self._resident_transaction_metadata_count < 0:
-            raise RuntimeError("resident transaction metadata count became negative")
 
     def _require_transaction(self, transaction):
         if not isinstance(transaction, KVTokenTransactionView):
@@ -1326,6 +1078,7 @@ class PagedKVCache:
         state.written_layers.add(layer_idx)
         state.next_layer_idx += 1
         self._transaction_layer_write_count += 1
+        return self._transaction_view(state)
 
     def _validate_reserved_transaction_locations(
         self,

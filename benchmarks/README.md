@@ -44,8 +44,6 @@ benchmark 记录至少包含：
 - `summarize_shared_prefix_trials.py`：严格验证 hit-rate/dtype/trial matrix、case-order 轮转、seed、capacity monotonicity、block/byte accounting、prefix lifecycle、context correctness 与最终 cleanup，再输出跨 trial 中位数摘要。
 - `run_fused_transaction_fast_path.py`：R4-A 同 commit checked/trusted transaction A/B；覆盖 2/4 layers、batch 4/16、context 128/1024 与 FP16/BF16，正式 wall 不创建 CUDA event，parity、rollback 与 profiler 独立执行。
 - `summarize_fused_transaction_fast_path.py`：严格验证 checked/trusted 完整矩阵、交替顺序、seed、transaction/block/byte trajectory、parity、rollback 和 profiler item/local-scalar 证据，再输出跨 trial ratio 与绝对 attribution。
-- `run_persistent_transaction_metadata.py`：R4-B 同 commit `materialized/persistent` controlled ablation；两侧固定使用 R4-A trusted raw math，只切换 Cache transaction metadata 生命周期，输出 parity、rollback、trajectory 与 build/materialization/reuse/release/resident counters。
-- `summarize_persistent_transaction_metadata.py`：严格验证 160-row 配对矩阵、全 p50/p90/p99 ranges、CPU-only attribution 和 metadata counter 公式，并报告预注册 keep gate；尚未产生的正式 summary 不属于 release evidence。
 
 当前通用 benchmark/profile 默认配置为 `block_size=32, num_warps=2`。FP16 的少数小 shape 可显式使用 `block_size=16` 对照。
 
@@ -310,64 +308,3 @@ python benchmarks/summarize_fused_transaction_fast_path.py \
 正式矩阵共 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`，strict summary 报告 80 个 paired trials。`checked` 与 `trusted` 复用相同 Cache transaction API；runner 只在 benchmark context 中把 Cache 内部 raw launch 切换为 checked 或 trusted，因此状态机和 Engine 路由不变。每个 paired trial 先按轮换顺序完成两条 path 的 non-instrumented synchronized wall，再统一执行 profiler/rollback，避免 attribution 重采集夹在两侧 wall 之间。CPU-only profiler 先在 WARMUP cycle 执行并 abort 一个同形 token，再在唯一 active cycle采集；每个 layer 必须有精确一个 CPU user annotation，其 inclusive CPU total保留 checked 路径 `.item()` 的 host/stream 等待。checked 每个 profiled layer 必须有 5 次 `aten::item`/`aten::_local_scalar_dense`，trusted 为 0。少记 range/scalar 或缺少有效 CPU time可用相同 seed、全新 engine/profiler 重采集，固定最多三次并写入 `profile_attempt_count`；多出 range/scalar 则视为 active-work/fast-path 契约回归并立即终止，不能用重试掩盖。append/decode device time与 CUDA activity不再属于该 strict schema；若未来需要分段 GPU attribution，使用独立 CUDA Event/Nsight probe。summary validator 负责证据完整性，不替代人工性能 gate：overall p50 至少 `1.05x`，且全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1。该证据只归因于 device-value validation，仍存在的 transaction-view H2D materialization/copy 留给独立 R4-B。
 
 commit `4018449` 的 RTX 5070/CUDA 12.8 正式矩阵通过严格校验：160 rows、80 paired trials，全部 16 个 `dtype x case` 分组均为 `trusted_faster` 且五轮 p50 最小值都大于 1。overall complete-token p50/p90/p99、TPS 和 append CPU/layer ratio 分别为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`；focused `73 passed, 23 subtests passed`，完整回归 `410 passed, 48 subtests passed`。7/16 分组的 p99 range 穿过 1，因此不声明稳定尾延迟收益。R4-A 已冻结，canonical release evidence 见[R4-A 五轮正式摘要](results/r4_fused_transaction_fast_path_trials5_summary.md)；当前进入 R4-B persistent transaction metadata。
-
-R4-B 先执行 RTX focused correctness：
-
-```bash
-python -m pytest -q -ra \
-  tests/test_paged_cache.py \
-  tests/test_multi_layer_transaction.py \
-  tests/test_multi_layer_engine.py \
-  tests/test_persistent_transaction_metadata_benchmark.py \
-  tests/test_persistent_transaction_metadata_summary.py
-```
-
-focused 全部通过后执行三轮 FP16 quick：
-
-```bash
-python benchmarks/run_persistent_transaction_metadata.py \
-  --case l4_b4_c128 \
-  --dtype float16 \
-  --metadata-paths materialized persistent \
-  --trials 3 \
-  --quick \
-  --seed 811 \
-  --output benchmarks/results/r4_persistent_transaction_metadata_quick.csv
-
-python benchmarks/summarize_persistent_transaction_metadata.py \
-  --input benchmarks/results/r4_persistent_transaction_metadata_quick.csv \
-  --output benchmarks/results/r4_persistent_transaction_metadata_quick_summary.md \
-  --expected-trials 3 \
-  --expected-cases l4_b4_c32 \
-  --expected-dtypes float16
-```
-
-只有 quick CSV 与 strict summary 都通过后，才执行五轮正式矩阵：
-
-```bash
-python benchmarks/run_persistent_transaction_metadata.py \
-  --case all \
-  --dtype both \
-  --metadata-paths materialized persistent \
-  --trials 5 \
-  --warmup 3 \
-  --repeat 20 \
-  --profile-steps 2 \
-  --parity-steps 2 \
-  --rollback-repeats 2 \
-  --seed 811 \
-  --output benchmarks/results/r4_persistent_transaction_metadata_trials5.csv
-
-python benchmarks/summarize_persistent_transaction_metadata.py \
-  --input benchmarks/results/r4_persistent_transaction_metadata_trials5.csv \
-  --output benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md \
-  --expected-trials 5 \
-  --expected-cases \
-    l2_b4_c128 l2_b4_c1024 l2_b16_c128 l2_b16_c1024 \
-    l4_b4_c128 l4_b4_c1024 l4_b16_c128 l4_b16_c1024 \
-  --expected-dtypes float16 bfloat16
-```
-
-这不是把当前实现与旧 commit `4018449` 做逐指令或跨 commit 比较。runner 在同一 commit 内用 benchmark-only private hooks 恢复 legacy materialization boundary；两侧始终执行相同的 R4-A trusted fused CUDA/Triton math。计数口径只覆盖 Cache transaction-view：`materialized` 为每 token `2L+2` 次 materialization、0 次 reuse；`persistent` 为 1 次 materialization、每层 1 次 reuse（共 `L` 次），两侧均 build/release 各 1 次且 terminal resident 为 0。它不等于所有 Engine result tensor clone 的总数。
-
-keep gate 预注册为 overall complete-token p50 `>=1.05x`，且 16/16 个 `dtype x case` 分组的 paired p50 五轮最小值严格大于 1。RTX 数据尚未执行，当前不能声明 R4-B 完成、加速或尾延迟改善。

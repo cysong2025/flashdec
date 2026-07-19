@@ -22,12 +22,11 @@
 - R3-B scheduler integration：`RequestSpec.prefix_id`、Cache-derived shared block metadata、global residency + private lifetime commitment、admission attach 与 stale external mutation rejection。
 - R3-D hot-path metadata cache：shared block 数只在 submission 时从 resident registry 派生，后续 snapshot/commitment 使用 immutable Engine metadata，并继续与 Cache authoritative request state/version 对齐。
 - R4-A trusted transaction boundary：`begin_token()` 在 host 上验证 reservation provenance；fused Cache transaction 根据 id 回查内部状态并跳过重复 device-value reductions，detached view 的位置 tensor 不参与真实写入。
-- R4-B implementation candidate：在open transaction发布前原子构建positions、physical ids、offsets、block tables和effective seq lens五tensor private bundle；Engine math只借用该bundle，public Cache/Engine snapshots no-alias，terminal路径释放device metadata，并由lifecycle counters/invariant约束。
 
 当前限制：
 
 - legacy `append()`、RoPE helper 和 `DecodeEngine.step()` compatibility wrapper 仍限制 `num_layers=1`；`num_layers>1` 使用 `begin_step()` / `step_layer()` / `commit_step()` sequential transaction API。
-- R4-B core已将同一open transaction改为一次materialize、每层reuse，并保留terminal host tombstone；Mac dependency-free gate已通过，但RTX correctness/quick/formal尚未运行，因此该路径尚未冻结为已验证默认能力，也没有性能结论。
+- R4-A 仍会为 transaction view 重复 materialize CUDA metadata；R4-B 曾评估跨 layer 一次构建/复用并在 terminal 状态释放，但正式稳定性门失败后已恢复 R4-A/materialized 默认。
 - finished/cancelled request id 当前不能重新激活。
 - runtime v2 已通过 RTX 5070 focused/full correctness 验证。
 - R3-B prefix 必须覆盖完整 initial context，并在 request submission 前 resident；尚不包含模型 prefill、content hashing、admission-time prefix eviction、swap/offload 或生产级多线程 serving。
@@ -98,7 +97,7 @@
 - short-churn、mixed-steady、long-pressure synthetic workload 与完整 step p50/p90/p99/TPS/memory metrics。
 - 可选 `profile_ranges=True` 的 preflight/append/decode 归因；默认关闭。
 
-当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和正式 workload 已在 RTX 5070 验证。它仍不是完整模型执行器：Q/K/V 由调用方提供，不包含 multi-layer prompt prefill、model forward、sampling、prefix 内容构建或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成；R3-D commit `fe72e27` 的 targeted `1 passed`、focused `61 passed, 8 subtests passed`、完整 `361 passed, 25 subtests passed` 与 64-row confirmation 也已完成。R4-A benchmark commit `4018449` 的 focused `73 passed, 23 subtests passed`、完整 `410 passed, 48 subtests passed` 与 160-row checked/trusted matrix 均已完成，并在`d25107f`冻结。R4-B core/evidence tooling已实现，但RTX correctness、quick/formal待执行；不能据此声称R4-B完成或更快。
+当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和正式 workload 已在 RTX 5070 验证。它仍不是完整模型执行器：Q/K/V 由调用方提供，不包含 multi-layer prompt prefill、model forward、sampling、prefix 内容构建或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成；R3-D commit `fe72e27` 的 targeted `1 passed`、focused `61 passed, 8 subtests passed`、完整 `361 passed, 25 subtests passed` 与 64-row confirmation 也已完成。R4-A commit `4018449` 的 focused `73 passed, 23 subtests passed`、完整 `410 passed, 48 subtests passed` 与 160-row checked/trusted matrix 均已完成；R4-B commit `8047a9c` correctness 与正式矩阵通过完整性校验，但未通过 16/16 稳定性门，当前生产路径已回滚。
 
 ### Week 11 Native CUDA KV Append
 
