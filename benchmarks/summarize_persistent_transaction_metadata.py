@@ -689,9 +689,14 @@ def aggregate(pairs):
         item["ratios"]["p50"]["min"] > 1.0 for item in aggregates
     )
     overall["group_count"] = len(aggregates)
-    overall["keep_gate_passed"] = (
+    overall["screening_gate_passed"] = (
         overall["p50"] >= 1.05
-        and overall["groups_passing_min"] == overall["group_count"] == 16
+        and overall["groups_passing_min"] == overall["group_count"]
+    )
+    overall["formal_matrix_complete"] = overall["group_count"] == 16
+    overall["keep_gate_passed"] = (
+        overall["screening_gate_passed"]
+        and overall["formal_matrix_complete"]
     )
     return aggregates, overall
 
@@ -789,13 +794,15 @@ def render_markdown(input_path, pairs, aggregates, overall):
             f"| decode tokens/s | {overall['decode_tokens_per_second']:.4f}x |",
             f"| profiler append CPU/layer | {overall['profile_append_cpu']:.4f}x |",
             "",
-            "## Manual Keep Gate",
+            "## Performance Gates",
             "",
             "The validator verifies evidence integrity but does not turn performance noise into a release decision.",
             "",
             "- Required: overall p50 >= 1.05x and all 16 dtype/case groups have paired p50 min > 1.0x.",
             f"- Observed: overall p50 {overall['p50']:.4f}x; groups above 1 in every trial {overall['groups_passing_min']}/{overall['group_count']}.",
-            f"- Gate status: `{'pass' if overall['keep_gate_passed'] else 'fail'}`.",
+            f"- Observed-matrix screening: `{'pass' if overall['screening_gate_passed'] else 'fail'}`.",
+            f"- Formal matrix coverage: {overall['group_count']}/16 groups (`{'complete' if overall['formal_matrix_complete'] else 'incomplete'}`).",
+            f"- Formal keep gate: `{'pass' if overall['keep_gate_passed'] else 'fail' if overall['formal_matrix_complete'] else 'not_evaluated'}`.",
             "",
             "## Interpretation",
             "",

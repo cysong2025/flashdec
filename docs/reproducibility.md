@@ -345,7 +345,7 @@ python -m pytest -q -ra \
   tests/test_persistent_transaction_metadata_summary.py
 ```
 
-focused通过后运行三轮FP16 quick并立即strict summarize：
+focused通过后运行三轮FP16 quick并立即strict summarize。quick只执行当前矩阵的筛选门：overall p50 `>=1.05x`且所有已观测分组的paired p50最小值大于1；16分组正式keep gate在quick中必须显示`not_evaluated`，只有完整formal矩阵才能给出pass/fail：
 
 ```bash
 python benchmarks/run_persistent_transaction_metadata.py \
