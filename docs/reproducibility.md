@@ -345,6 +345,64 @@ python benchmarks/summarize_persistent_transaction_metadata.py \
   --expected-trials 5
 ```
 
+## R4-C Integrated Scheduled Multi-layer 证据
+
+R4-C 固定使用 R4-A trusted fused append、Triton decode 与 materialized metadata。先执行 targeted/focused correctness：
+
+```bash
+python -m pytest -q -ra \
+  tests/test_integrated_workload.py \
+  tests/test_integrated_workload_config.py \
+  tests/test_integrated_workload_benchmark.py \
+  tests/test_integrated_workload_summary.py \
+  tests/test_multi_layer_transaction.py \
+  tests/test_multi_layer_engine.py \
+  tests/test_shared_prefix_blocks.py \
+  tests/test_scheduler.py
+```
+
+然后执行 FP16 quick：
+
+```bash
+python benchmarks/run_integrated_scheduled_multi_layer.py \
+  --case l2_c64 \
+  --dtype float16 \
+  --trials 1 \
+  --quick \
+  --output benchmarks/results/r4_integrated_scheduled_multi_layer_quick.csv
+
+python benchmarks/summarize_integrated_scheduled_multi_layer.py \
+  --input benchmarks/results/r4_integrated_scheduled_multi_layer_quick.csv \
+  --output benchmarks/results/r4_integrated_scheduled_multi_layer_quick_summary.md \
+  --expected-trials 1 \
+  --expected-cases l2_c32 \
+  --expected-dtypes float16
+```
+
+quick 必须通过 reference/observed digest、rollback、reuse 与 cleanup gate。之后运行正式矩阵：
+
+```bash
+python benchmarks/run_integrated_scheduled_multi_layer.py \
+  --case all \
+  --dtype both \
+  --trials 3 \
+  --output benchmarks/results/r4_integrated_scheduled_multi_layer_trials3.csv
+
+python benchmarks/summarize_integrated_scheduled_multi_layer.py \
+  --input benchmarks/results/r4_integrated_scheduled_multi_layer_trials3.csv \
+  --output benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md \
+  --expected-trials 3
+```
+
+正式 CSV 必须为 24 rows：2/4 layers、64/128 context、FP16/BF16、3 trials。四个 case 每轮轮转，seed 连续。随机 tensor 构建、prefix registration 和 terminal prefix eviction 不进入 logical-step wall；private multi-layer context writes、scheduler、transaction/decode 与 finish/cancel 在计时范围内。summary 只报告绝对 p50/p90/p99/TPS 与跨 trial range；没有预注册 backend ratio，也不能把 shared-prefix hit 解释成 latency speedup。
+
+正式矩阵后运行完整回归与 release evidence check，并把 stdout/stderr 与 CSV 一起保存：
+
+```bash
+python -m pytest -q -ra
+python scripts/check_release.py --require-evidence
+```
+
 ## 结果文件与提交规则
 
 默认忽略：
@@ -402,6 +460,7 @@ python scripts/check_release.py --require-clean
 | R3 metadata hot path | 已完成 | submission-time shared-block cache、lookup-count test 与 authoritative Cache cross-check；性能 near-neutral/no stable direction |
 | R4-A trusted transaction | 已完成 | commit `4018449` 的 focused/full correctness、160-row/80-pair RTX 五轮矩阵与 [canonical strict summary](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)；16/16 p50 分组稳定胜出，p99 保留 7/16 穿 1 的限制 |
 | R4-B persistent metadata | 已评估并回滚 | commit `8047a9c` 的 correctness 与 [160-row/80-pair 正式负结果](../benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)；overall p50 `1.2493x`，但仅 13/16 分组稳定胜出，未通过 keep gate |
+| R4-C integrated workload | 实现就绪，等待 RTX | dependency-free reference/validator、multi-layer prompt transaction、observed/reference digest、rollback/reuse/cleanup tests 与 24-row runner；RTX quick/formal/full 待执行 |
 | Clean WSL editable install | 暂停 | 仓库继续 private；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

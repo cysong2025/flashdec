@@ -20,6 +20,7 @@
 - [Block-aware Scheduler](design_scheduler.md)
 - [Multi-layer KV Token Transaction](design_multi_layer_kv_transaction.md)
 - [Shared Prefix Blocks](design_shared_prefix_blocks.md)
+- [R4-C Integrated Scheduled Multi-layer Workload](design_integrated_scheduled_multi_layer.md)
 - [Dynamic workload](design_dynamic_workload.md)
 
 ## 性能与复现

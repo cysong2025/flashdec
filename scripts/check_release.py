@@ -18,6 +18,7 @@ REQUIRED_PATHS = (
     "flashdec/__init__.py",
     "flashdec/cache.py",
     "flashdec/engine.py",
+    "flashdec/integrated_workload.py",
     "flashdec/scheduler.py",
     "flashdec/workload.py",
     "docs/AI_INFRA_SCOPE.md",
@@ -27,6 +28,7 @@ REQUIRED_PATHS = (
     "docs/ROADMAP.md",
     "docs/design_multi_layer_kv_transaction.md",
     "docs/design_shared_prefix_blocks.md",
+    "docs/design_integrated_scheduled_multi_layer.md",
     "docs/design_scheduler.md",
     "docs/reproducibility.md",
     "benchmarks/run_decode_engine_workload.py",
@@ -40,6 +42,8 @@ REQUIRED_PATHS = (
     "benchmarks/summarize_shared_prefix_trials.py",
     "benchmarks/run_fused_transaction_fast_path.py",
     "benchmarks/summarize_fused_transaction_fast_path.py",
+    "benchmarks/run_integrated_scheduled_multi_layer.py",
+    "benchmarks/summarize_integrated_scheduled_multi_layer.py",
     "scripts/check_env.py",
     "scripts/check_docs.py",
     "scripts/check_release.py",
@@ -61,6 +65,10 @@ REQUIRED_PATHS = (
     "tests/test_shared_prefix_workload_summary.py",
     "tests/test_fused_transaction_fast_path_benchmark.py",
     "tests/test_fused_transaction_fast_path_summary.py",
+    "tests/test_integrated_workload.py",
+    "tests/test_integrated_workload_config.py",
+    "tests/test_integrated_workload_benchmark.py",
+    "tests/test_integrated_workload_summary.py",
 )
 
 RELEASE_EVIDENCE_PATHS = (

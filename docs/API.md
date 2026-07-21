@@ -115,6 +115,15 @@ engine.submit_request(
 
 prefix 必须在任何 request submission 之前 resident，并覆盖完整 `initial_context_tokens`。Snapshot 将 prefix residency 作为全局物理占用计一次，将每个 request 的 decode tail 作为 private lifetime commitment。scheduler-managed mode 启动后不能绕过 Engine 修改 prefix registry。
 
+R4-C private miss 的 caller-supplied multi-layer prompt token：
+
+```python
+# k_layers/v_layers: [num_layers, num_kv_heads, head_dim]
+engine.prefill_request_layers(request_id, k_layers, v_layers)
+```
+
+该调用为一个 prompt token 建立 Cache transaction，按 layer 顺序写入，并只在全部成功后发布一次 `seq_len`；失败会自动 rollback。所有 request 进入 finished/cancelled/rejected terminal state 后，可用 `engine.evict_prefix(prefix_id)` 清理 inactive fixed prefix；active workload 中禁止调用。
+
 Unscheduled lifecycle：
 
 ```text
@@ -152,7 +161,8 @@ Layer 必须按 `0..N-1` 顺序执行。`step_layer()` 的输入、写入或 dec
 
 - `run_synthetic_workload()`：single-layer dynamic DecodeEngine workload。
 - `run_scheduler_workload()`：有限 trace 下的 cancel、greedy 与 lifetime scheduler 对照。
-- `WorkloadResult` / `SchedulerWorkloadResult`：complete-step latency、吞吐、完成率、公平性与内存指标。
+- `run_integrated_workload()`：R4-C dynamic arrival、mixed prefix、multi-layer transaction、rollback 与 cleanup reference trace。
+- `WorkloadResult` / `SchedulerWorkloadResult` / `IntegratedWorkloadResult`：complete-step latency、吞吐、完成率、公平性、轨迹与内存指标。
 
 Multi-layer 正式 workload 位于 `benchmarks/run_multi_layer_engine.py`，它是证据生成工具，不属于顶层 runtime API。
 
@@ -160,7 +170,7 @@ Multi-layer 正式 workload 位于 `benchmarks/run_multi_layer_engine.py`，它�
 
 - 参数或状态错误使用 `TypeError`、`ValueError` 或 `RuntimeError`，不静默修正 request 轨迹。
 - Legacy `DecodeEngine.step()` 只支持 `num_layers=1`；多层 Cache 必须使用 transaction API。
-- Q/K/V 由调用方提供；API 不包含模型投影、prefill engine、sampling 或网络服务。
+- Q/K/V 由调用方提供；`prefill_request_layers()` 只提交已构建的 prompt K/V，不包含模型投影、prompt 内容构建、sampling 或网络服务。
 - CUDA extension 使用 lazy JIT；首次构建时间不得计入稳态 benchmark。
 
-状态机和失败原子性的完整说明见[总体设计](design.md)、[DecodeEngine 设计](design_decode_engine.md)、[Multi-layer transaction 设计](design_multi_layer_kv_transaction.md)与[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
+状态机和失败原子性的完整说明见[总体设计](design.md)、[DecodeEngine 设计](design_decode_engine.md)、[Multi-layer transaction 设计](design_multi_layer_kv_transaction.md)、[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)与[R4-C 组合 workload 设计](design_integrated_scheduled_multi_layer.md)。

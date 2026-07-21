@@ -97,7 +97,7 @@
 - short-churn、mixed-steady、long-pressure synthetic workload 与完整 step p50/p90/p99/TPS/memory metrics。
 - 可选 `profile_ranges=True` 的 preflight/append/decode 归因；默认关闭。
 
-当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和正式 workload 已在 RTX 5070 验证。它仍不是完整模型执行器：Q/K/V 由调用方提供，不包含 multi-layer prompt prefill、model forward、sampling、prefix 内容构建或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成；R3-D commit `fe72e27` 的 targeted `1 passed`、focused `61 passed, 8 subtests passed`、完整 `361 passed, 25 subtests passed` 与 64-row confirmation 也已完成。R4-A commit `4018449` 的 focused `73 passed, 23 subtests passed`、完整 `410 passed, 48 subtests passed` 与 160-row checked/trusted matrix 均已完成；R4-B commit `8047a9c` correctness 与正式矩阵通过完整性校验，但未通过 16/16 稳定性门，当前生产路径已回滚。
+当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和 R2 正式 workload 已在 RTX 5070 验证。R4-C 新增 caller-supplied multi-layer prompt K/V transaction，但仍不是完整模型执行器：不包含 prompt/model forward、sampling、prefix 内容构建或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成；R3-D commit `fe72e27` 的 targeted `1 passed`、focused `61 passed, 8 subtests passed`、完整 `361 passed, 25 subtests passed` 与 64-row confirmation 也已完成。R4-A commit `4018449` 的 focused `73 passed, 23 subtests passed`、完整 `410 passed, 48 subtests passed` 与 160-row checked/trusted matrix 均已完成；R4-B commit `8047a9c` correctness 与正式矩阵通过完整性校验，但未通过 16/16 稳定性门，rollback commit `36225d1` 已通过 focused/full `89 passed, 23 subtests` / `410 passed, 48 subtests`。R4-C CUDA correctness 与 24-row matrix 尚待上板。
 
 ### Week 11 Native CUDA KV Append
 

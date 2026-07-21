@@ -17,5 +17,6 @@
 - [Stage 13](week_13_status.md)：Scheduler R1 与 Multi-layer R2
 - [Stage 14](week_14_status.md)：Shared Prefix R3
 - [Stage 15](week_15_status.md)：Trusted Transaction Fast Path R4
+- [Stage 16](week_16_status.md)：Integrated Scheduled Multi-layer Workload R4-C
 
 当前设计与结果入口见[文档索引](../INDEX.md)。

@@ -255,6 +255,6 @@ persistent 将 Cache transaction views 从 l2/l4 的 `6/10` 降为 1，并分别
 ## 后续工作边界
 
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
-2. Block-aware Scheduler、Multi-layer KV Token Transaction 与 R4-A trusted validation 已完成；R4-B 已完成评估并按稳定性门回滚，当前进入 R4-C integrated scheduled multi-layer workload。
+2. Block-aware Scheduler、Multi-layer KV Token Transaction 与 R4-A trusted validation 已完成；R4-B 已完成评估并按稳定性门回滚。R4-C reference/runner/validator 已实现并等待 RTX 5070 correctness 与 24-row formal evidence。
 3. clean-install、版本与 tag 留在最终 release gate。
 4. Shared Prefix R3 已完成；当前不继续围绕同一数据调参。固定版本公开基线与 release 均暂停，未来若执行仍必须统一功能与计时边界。

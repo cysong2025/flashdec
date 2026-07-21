@@ -101,3 +101,21 @@ def test_release_tree_requires_r4_runner_validator_and_dependency_free_tests():
         "benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md"
         in RELEASE_EVIDENCE_PATHS
     )
+
+
+def test_release_tree_requires_r4c_implementation_but_not_pending_evidence():
+    for relative in (
+        "flashdec/integrated_workload.py",
+        "docs/design_integrated_scheduled_multi_layer.md",
+        "benchmarks/run_integrated_scheduled_multi_layer.py",
+        "benchmarks/summarize_integrated_scheduled_multi_layer.py",
+        "tests/test_integrated_workload.py",
+        "tests/test_integrated_workload_config.py",
+        "tests/test_integrated_workload_benchmark.py",
+        "tests/test_integrated_workload_summary.py",
+    ):
+        assert relative in REQUIRED_PATHS
+    assert (
+        "benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md"
+        not in RELEASE_EVIDENCE_PATHS
+    )

@@ -21,6 +21,12 @@ __all__ = [
     "RequestArrival",
     "SchedulerWorkloadConfig",
     "SchedulerWorkloadResult",
+    "IntegratedReferenceStep",
+    "IntegratedReferenceTrajectory",
+    "IntegratedWorkloadConfig",
+    "IntegratedWorkloadResult",
+    "LayerFailure",
+    "RequestCancellation",
     "RopeAppendResult",
     "WorkloadConfig",
     "WorkloadResult",
@@ -38,7 +44,11 @@ __all__ = [
     "rope_paged_kv_append_ref",
     "run_synthetic_workload",
     "run_scheduler_workload",
+    "build_integrated_reference",
     "boundary_deadlock_arrivals",
+    "run_integrated_workload",
+    "standard_integrated_arrivals",
+    "standard_integrated_config",
 ]
 
 __version__ = "0.0.0"
@@ -66,6 +76,43 @@ def __getattr__(name):
             "DecodeLayerResult": DecodeLayerResult,
             "DecodeStepResult": DecodeStepResult,
             "DecodeStepTransaction": DecodeStepTransaction,
+        }[name]
+    if name in (
+        "IntegratedReferenceStep",
+        "IntegratedReferenceTrajectory",
+        "IntegratedWorkloadConfig",
+        "IntegratedWorkloadResult",
+        "LayerFailure",
+        "RequestCancellation",
+        "build_integrated_reference",
+        "run_integrated_workload",
+        "standard_integrated_arrivals",
+        "standard_integrated_config",
+    ):
+        from .integrated_workload import (
+            IntegratedReferenceStep,
+            IntegratedReferenceTrajectory,
+            IntegratedWorkloadConfig,
+            IntegratedWorkloadResult,
+            LayerFailure,
+            RequestCancellation,
+            build_integrated_reference,
+            run_integrated_workload,
+            standard_integrated_arrivals,
+            standard_integrated_config,
+        )
+
+        return {
+            "IntegratedReferenceStep": IntegratedReferenceStep,
+            "IntegratedReferenceTrajectory": IntegratedReferenceTrajectory,
+            "IntegratedWorkloadConfig": IntegratedWorkloadConfig,
+            "IntegratedWorkloadResult": IntegratedWorkloadResult,
+            "LayerFailure": LayerFailure,
+            "RequestCancellation": RequestCancellation,
+            "build_integrated_reference": build_integrated_reference,
+            "run_integrated_workload": run_integrated_workload,
+            "standard_integrated_arrivals": standard_integrated_arrivals,
+            "standard_integrated_config": standard_integrated_config,
         }[name]
     if name in ("KVTokenTransactionView", "PagedKVCache"):
         from .cache import KVTokenTransactionView, PagedKVCache

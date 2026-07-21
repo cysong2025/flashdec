@@ -28,6 +28,7 @@
 - R3-B Engine/scheduler integration：`RequestSpec.prefix_id`、authoritative prefix metadata、admission attach、global residency + request-private commitment accounting，以及共享请求 lifecycle/invariant tests。
 - R3-C shared-prefix workload runner 与严格 trial summary：0%/25%/50%/75% hit rate、bounded-capacity admission、fixed-full-batch decode、block/byte savings、attach/registration/eviction latency、trial-order rotation 与 lifecycle/accounting validator。
 - R4-A trusted fused transaction boundary：public raw append 保留 CUDA index 值域检查，Cache 在 host allocator reservation 时验证 provenance，public transaction API 回查内部状态后使用 private trusted raw launch；新增 detached-view tampering、checked/trusted parity、rollback 与同 commit 五轮配对 benchmark/strict summary。
+- R4-C integrated scheduled multi-layer workload：原子 caller-supplied multi-layer prompt transaction、terminal Engine-owned prefix cleanup、dynamic mixed-prefix reference trajectory、layer-failure rollback、released-block reuse、observed/reference SHA-256 digest、24-row CUDA runner 与 strict summary validator。
 
 ### Changed
 
@@ -77,6 +78,7 @@
 - R4-A commit `5d2f9c0` 的 l4 stress 三次均在首个 decode CPU range 得到零 correlated device time并停止；没有 CSV/summary，不能形成性能结论。
 - R4-A commit `4018449` RTX 5070 focused：`73 passed, 23 subtests passed`；完整回归：`410 passed, 48 subtests passed`。正式 160-row 数据、transaction/Engine trajectory、parity、rollback、CPU range 与 scalar extraction evidence 均通过 strict validator。
 - R4-B commit `8047a9c` RTX 5070 focused：`101 passed`；完整回归：`434 passed, 48 subtests passed`。formal exact parity、transaction/block/Engine trajectory、rollback、metadata lifecycle 与 zero-resident cleanup 均通过。
+- R4-B rollback commit `36225d1` RTX 5070 focused：`89 passed, 23 subtests passed in 4.24s`；完整回归：`410 passed, 48 subtests passed in 6.36s`；release evidence check 为 `PASS`。R4-C 新增代码的 RTX 结果仍待验证。
 
 ### Pending before v0.1.0
 

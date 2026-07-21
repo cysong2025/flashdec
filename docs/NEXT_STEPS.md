@@ -54,7 +54,7 @@ R3 研究重复 system prompt / 固定上下文的 immutable full-block 共享�
 
 ## 当前目标：R4-C Integrated Scheduled Multi-layer Workload
 
-状态：R4-A 已在 commit `4018449` 完成并冻结。R4-B persistent metadata candidate 在 commit `8047a9c` 通过 focused `101 passed`、完整回归 `434 passed, 48 subtests passed` 和 160-row/80-pair 正式证据完整性校验。overall p50/TPS/append CPU 为 `1.2493x/1.2392x/3.0366x`，但只有 13/16 个分组的五轮 p50 最小值严格大于 1，未通过预注册 16/16 稳定性门；因此主线恢复 R4-A/materialized 默认，不继续同线微调。正式负结果见[R4-B 五轮摘要](../benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)。仓库继续保持 private。
+状态：R4-A 已在 commit `4018449` 完成并冻结。R4-B persistent metadata candidate 在 commit `8047a9c` 通过 focused `101 passed`、完整回归 `434 passed, 48 subtests passed` 和 160-row/80-pair 正式证据完整性校验。overall p50/TPS/append CPU 为 `1.2493x/1.2392x/3.0366x`，但只有 13/16 个分组的五轮 p50 最小值严格大于 1，未通过预注册 16/16 稳定性门；因此主线恢复 R4-A/materialized 默认，不继续同线微调。rollback commit `36225d1` 又通过 focused `89 passed, 23 subtests passed`、full `410 passed, 48 subtests passed` 与 release evidence gate。正式负结果见[R4-B 五轮摘要](../benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)。仓库继续保持 private。
 
 R4-C 使用冻结的 R4-A/materialized 路径统一验证已经完成的 Scheduler、Shared Prefix 与 Multi-layer Transaction：
 
@@ -75,7 +75,7 @@ dynamic arrivals
 - 主验收是组合 correctness、completion、transaction/block trajectory、finish/cancel 回收与最终零泄漏 cleanup。
 - 性能证据只比较定义一致的组合 workload；不要求 shared prefix 自身带来 latency 加速，也不重新 sweep 已冻结 kernel 参数。
 
-下一步：先定义 trace/schema 与 reference trajectory，再实现 dependency-free validator 和 Engine 集成测试，最后进入 RTX correctness 与组合 workload。
+当前实现已完成 trace/schema、dependency-free reference、observed/reference digest、multi-layer prompt prefill、Engine 集成测试、CUDA runner 与 strict validator。下一步直接进入 RTX targeted/focused correctness、FP16 quick、24-row formal matrix 和 full regression；完整边界与命令见[组合 workload 设计](design_integrated_scheduled_multi_layer.md)。
 
 ## 暂停目标：private 维护与可选 v0.1.0 Release Gate
 

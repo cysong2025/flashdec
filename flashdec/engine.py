@@ -169,6 +169,28 @@ class DecodeEngine:
         self._sync_cache_version()
         return result
 
+    def evict_prefix(self, prefix_id):
+        """Evict one inactive prefix after all request lifecycles are resolved.
+
+        R4-C keeps the shared-prefix resident set fixed while a workload is
+        active.  This Engine-owned terminal cleanup entry point preserves the
+        cache-version invariant instead of requiring callers to mutate the
+        underlying cache directly.
+        """
+        self._require_no_open_step("evict a shared prefix")
+        self._require_cache_synchronized()
+        if any(
+            status in (self.WAITING, self.ACTIVE)
+            for status in self._statuses.values()
+        ):
+            raise RuntimeError(
+                "shared prefixes can only be evicted after all requests are resolved"
+            )
+        released = self.cache.evict_prefix(prefix_id)
+        self._sync_cache_version()
+        self._bump_state_version()
+        return released
+
     def add_request(self, request_id):
         """Submit a new request in ``waiting`` state without allocating KV memory."""
         if self._scheduler_managed:
@@ -435,7 +457,9 @@ class DecodeEngine:
             raise RuntimeError("prefill_request requires scheduler-managed mode")
         self._require_no_open_step("prefill a request")
         if self.cache.num_layers != 1:
-            raise RuntimeError("multi-layer prompt prefill is not implemented in R2-B")
+            raise RuntimeError(
+                "multi-layer caches require prefill_request_layers"
+            )
         self._require_cache_synchronized()
         self._require_status(request_id, self.ACTIVE)
         spec = self._request_specs[request_id]
@@ -443,6 +467,63 @@ class DecodeEngine:
         if current >= spec.initial_context_tokens:
             raise RuntimeError("request initial context is already fully seeded")
         self.cache.append(layer_idx, [request_id], k, v)
+        self._sync_cache_version()
+        self._bump_state_version()
+        return self.cache.request_state(request_id)["seq_len"]
+
+    def prefill_request_layers(self, request_id, k_layers, v_layers):
+        """Atomically seed one caller-supplied prompt token across all layers.
+
+        ``k_layers`` and ``v_layers`` use
+        ``[num_layers, num_kv_heads, head_dim]``.  Sequence length is published
+        once after every layer succeeds; any layer failure rolls the token and
+        newly reserved block back through the normal Cache transaction path.
+        """
+        torch = _torch()
+        if not self._scheduler_managed:
+            raise RuntimeError("prefill_request_layers requires scheduler-managed mode")
+        self._require_no_open_step("prefill a request")
+        self._require_cache_synchronized()
+        self._require_status(request_id, self.ACTIVE)
+        if not isinstance(k_layers, torch.Tensor) or not isinstance(v_layers, torch.Tensor):
+            raise TypeError("k_layers and v_layers must be torch tensors")
+        expected_shape = (
+            self.cache.num_layers,
+            self.cache.num_kv_heads,
+            self.cache.head_dim,
+        )
+        if tuple(k_layers.shape) != expected_shape or tuple(v_layers.shape) != expected_shape:
+            raise ValueError(
+                "k_layers and v_layers must have shape "
+                "[num_layers, num_kv_heads, head_dim]"
+            )
+        if k_layers.device != self.cache.device or v_layers.device != self.cache.device:
+            raise ValueError("k_layers and v_layers must be on the cache device")
+        if k_layers.dtype != self.cache.dtype or v_layers.dtype != self.cache.dtype:
+            raise ValueError("k_layers and v_layers must use the cache dtype")
+
+        spec = self._request_specs[request_id]
+        current = self.cache.request_state(request_id)["seq_len"]
+        if current >= spec.initial_context_tokens:
+            raise RuntimeError("request initial context is already fully seeded")
+
+        transaction = self.cache.begin_token([request_id])
+        try:
+            for layer_idx in range(self.cache.num_layers):
+                self.cache.write_token_layer(
+                    transaction,
+                    layer_idx,
+                    k_layers[layer_idx].unsqueeze(0),
+                    v_layers[layer_idx].unsqueeze(0),
+                )
+            self.cache.commit_token(transaction)
+        except Exception:
+            if self.cache.has_open_transaction:
+                self.cache.abort_token(transaction)
+            self._sync_cache_version()
+            self._bump_state_version()
+            raise
+
         self._sync_cache_version()
         self._bump_state_version()
         return self.cache.request_state(request_id)["seq_len"]
