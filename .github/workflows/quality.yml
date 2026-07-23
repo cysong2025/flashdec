@@ -43,3 +43,5 @@ jobs:
           tests/test_integrated_workload_config.py
           tests/test_integrated_workload_benchmark.py
           tests/test_integrated_workload_summary.py
+          tests/test_flashinfer_baseline_benchmark.py
+          tests/test_flashinfer_baseline_summary.py

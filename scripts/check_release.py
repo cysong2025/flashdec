@@ -29,6 +29,8 @@ REQUIRED_PATHS = (
     "docs/design_multi_layer_kv_transaction.md",
     "docs/design_shared_prefix_blocks.md",
     "docs/design_integrated_scheduled_multi_layer.md",
+    "docs/design_flashinfer_baseline.md",
+    "docs/notes/from_paged_attention_to_decode_runtime.md",
     "docs/design_scheduler.md",
     "docs/reproducibility.md",
     "benchmarks/run_decode_engine_workload.py",
@@ -44,6 +46,8 @@ REQUIRED_PATHS = (
     "benchmarks/summarize_fused_transaction_fast_path.py",
     "benchmarks/run_integrated_scheduled_multi_layer.py",
     "benchmarks/summarize_integrated_scheduled_multi_layer.py",
+    "benchmarks/run_flashinfer_baseline.py",
+    "benchmarks/summarize_flashinfer_baseline.py",
     "scripts/check_env.py",
     "scripts/check_docs.py",
     "scripts/check_release.py",
@@ -69,6 +73,9 @@ REQUIRED_PATHS = (
     "tests/test_integrated_workload_config.py",
     "tests/test_integrated_workload_benchmark.py",
     "tests/test_integrated_workload_summary.py",
+    "tests/test_flashinfer_baseline_benchmark.py",
+    "tests/test_flashinfer_baseline.py",
+    "tests/test_flashinfer_baseline_summary.py",
 )
 
 RELEASE_EVIDENCE_PATHS = (

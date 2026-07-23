@@ -29,6 +29,7 @@
 - R3-C shared-prefix workload runner 与严格 trial summary：0%/25%/50%/75% hit rate、bounded-capacity admission、fixed-full-batch decode、block/byte savings、attach/registration/eviction latency、trial-order rotation 与 lifecycle/accounting validator。
 - R4-A trusted fused transaction boundary：public raw append 保留 CUDA index 值域检查，Cache 在 host allocator reservation 时验证 provenance，public transaction API 回查内部状态后使用 private trusted raw launch；新增 detached-view tampering、checked/trusted parity、rollback 与同 commit 五轮配对 benchmark/strict summary。
 - R4-C integrated scheduled multi-layer workload：原子 caller-supplied multi-layer prompt transaction、terminal Engine-owned prefix cleanup、dynamic mixed-prefix reference trajectory、layer-failure rollback、released-block reuse、observed/reference SHA-256 digest、24-row CUDA runner 与 strict summary validator。
+- R5 FlashInfer public baseline：固定 `flashinfer-python==0.6.15.post1`，在相同 Q/K/V、page table、HND physical layout 与 CUDA-event timing 下运行 FlashDec Triton、FlashInfer FA2 CUDA-core/tensor-core；新增 72-row runner、strict summary、optional CUDA correctness 与 dependency-free matrix tests。
 
 ### Changed
 

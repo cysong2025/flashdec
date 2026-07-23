@@ -403,6 +403,83 @@ python -m pytest -q -ra
 python scripts/check_release.py --require-evidence
 ```
 
+## R5 FlashInfer 有限公开基线证据
+
+R5 依赖精确固定为 `flashinfer-python==0.6.15.post1`，只使用官方 `BatchDecodeWithPagedKVCacheWrapper`、`backend="fa2"` 和 `use_tensor_cores=False/True` 两条路径。目标 RTX 5070 virtualenv 通过 baseline extra 安装：
+
+```bash
+export RESULT_DIR="$HOME/flashdec_results/r5_$(git rev-parse --short HEAD)_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$RESULT_DIR"
+git status --short
+
+python -m pip install -e ".[dev,cuda-extension,baseline]"
+python -c "import flashinfer; from importlib.metadata import version; print(version('flashinfer-python'))"
+```
+
+先运行 dependency-free 契约、既有 paged decode 回归和 optional CUDA/FlashInfer correctness：
+
+```bash
+python -m pytest -q -ra \
+  tests/test_paged_decode.py \
+  tests/test_flashinfer_baseline.py \
+  tests/test_flashinfer_baseline_benchmark.py \
+  tests/test_flashinfer_baseline_summary.py
+```
+
+quick 使用 uniform fixed-context medium/FP16，三个 backend 各生成一行：
+
+```bash
+python benchmarks/run_flashinfer_baseline.py \
+  --case medium \
+  --dtype float16 \
+  --trials 1 \
+  --quick \
+  --warmup 2 \
+  --repeat 10 \
+  --require-clean \
+  --output "$RESULT_DIR/r5_flashinfer_paged_decode_quick.csv"
+
+python benchmarks/summarize_flashinfer_baseline.py \
+  --input "$RESULT_DIR/r5_flashinfer_paged_decode_quick.csv" \
+  --output "$RESULT_DIR/r5_flashinfer_paged_decode_quick_summary.md" \
+  --expected-trials 1 \
+  --expected-warmup 2 \
+  --expected-repeats 10 \
+  --expected-cases medium_b16_ctx1024 \
+  --expected-dtypes float16
+```
+
+quick summary 只有在 3 rows 的 `reference_validated`、`cross_backend_validated` 和 `validated_invariants` 全部为 `True`，且 strict matrix/pairing 校验通过时才可接受。然后运行正式矩阵：
+
+```bash
+python benchmarks/run_flashinfer_baseline.py \
+  --case all \
+  --dtype both \
+  --trials 3 \
+  --warmup 10 \
+  --repeat 50 \
+  --require-clean \
+  --output "$RESULT_DIR/r5_flashinfer_paged_decode_trials3.csv"
+
+python benchmarks/summarize_flashinfer_baseline.py \
+  --input "$RESULT_DIR/r5_flashinfer_paged_decode_trials3.csv" \
+  --output "$RESULT_DIR/r5_flashinfer_paged_decode_trials3_summary.md" \
+  --expected-trials 3 \
+  --expected-warmup 10 \
+  --expected-repeats 50
+```
+
+正式 CSV 必须恰好为 `4 cases x 2 dtypes x 3 backends x 3 trials = 72 rows`。small/medium/large/large_batch 都是 uniform fixed context，不解释为变长 workload 或 context 上界。三个 backend 共用 Q/K/V、page table、`seq_lens`、`sm_scale` 和 seed；FlashDec token-major `[page, head, token, dim]` 对应 FlashInfer `HND`。CUDA event 只计 `run`/kernel dispatch，排除 input construction、reference validation、FlashInfer plan/JIT 和 workspace/metadata 构建。
+
+summary 用 `FlashDec p50 / external p50` 和 `external TPS / FlashDec TPS` 报告描述性比值；大于 1 表示对应 FlashInfer backend 占优，并另表展示绝对 p90/p99 的跨 trial median/range。`logical_workload_gbps_p50` 是每个 Q/K/V/output 元素只计一次的共同 workload proxy，不是任何 backend 的实测 DRAM bandwidth。runner 的 evidence 模式要求 clean worktree 并记录完整命令；strict summary 固定验证 quick `1/2/10` 或 formal `3/10/50` 采样强度、每个 FlashInfer wrapper 使用 128 MiB workspace，以及 reference/cross-backend normalized tolerance ratio 不超过 1。R5 不设性能 pass/fail 或胜者门。正式 summary 产生后运行：
+
+```bash
+python -m pytest -q -ra
+python scripts/check_release.py --require-clean --require-evidence
+```
+
+结果先写入仓库外的 `$RESULT_DIR`，避免未审核的 formal summary 让 clean-worktree gate 自相矛盾。RTX 结果回传审核后，再把精简 formal summary 复制到 `benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md`、加入 release evidence、提交并在干净 checkout 重跑最终 gate。当前 RTX 5070 quick/formal/full 证据均为 pending；不提前提交 canonical 性能数字。更完整的公平性与不可比边界见 [R5 FlashInfer 基线设计](design_flashinfer_baseline.md)。
+
 ## 结果文件与提交规则
 
 默认忽略：
@@ -461,6 +538,7 @@ python scripts/check_release.py --require-clean
 | R4-A trusted transaction | 已完成 | commit `4018449` 的 focused/full correctness、160-row/80-pair RTX 五轮矩阵与 [canonical strict summary](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)；16/16 p50 分组稳定胜出，p99 保留 7/16 穿 1 的限制 |
 | R4-B persistent metadata | 已评估并回滚 | commit `8047a9c` 的 correctness 与 [160-row/80-pair 正式负结果](../benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)；overall p50 `1.2493x`，但仅 13/16 分组稳定胜出，未通过 keep gate |
 | R4-C integrated workload | 已完成 | commit `6912894` 的 focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`、FP16 quick 与 [24-row/3-trial canonical summary](../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)；digest/rollback/prefix/reuse/cleanup 全部通过 |
+| R5 FlashInfer 有限基线 | 待 RTX 5070 | runner、strict summarizer、correctness 与公平性契约已实现；精确版本安装、focused/full、quick 与 72-row/3-trial canonical evidence 待上板 |
 | Clean WSL editable install | 暂停 | 仓库继续 private；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

@@ -31,6 +31,9 @@ dev = [
 cuda-extension = [
   "ninja",
 ]
+baseline = [
+  "flashinfer-python==0.6.15.post1",
+]
 
 [project.urls]
 Repository = "https://github.com/cysong2025/flashdec"

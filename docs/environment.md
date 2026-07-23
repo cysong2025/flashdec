@@ -57,6 +57,16 @@ not found
 python scripts/check_env.py
 ```
 
+R5 外部基线需要额外安装固定版本 FlashInfer；它不是 FlashDec 核心依赖：
+
+```bash
+python -m pip install -e ".[dev,cuda-extension,baseline]"
+python -c "import flashinfer; from importlib.metadata import version; print(version('flashinfer-python'))"
+flashinfer show-config
+```
+
+预注册版本为 `flashinfer-python==0.6.15.post1`。RTX 正式运行时必须保存 `show-config`、pip freeze、GPU/driver 与 JIT 首次构建日志；runner 会在 distribution version 不完全一致时 fail closed，`--require-clean` 会拒绝把 dirty source 结果绑定到旧 commit，CSV 同时记录 Python/Triton/CUDA、带时区的 run timestamp 与 128 MiB workspace。
+
 ### 机器
 
 - 日期：2026-06-23

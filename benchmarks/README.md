@@ -46,6 +46,8 @@ benchmark 记录至少包含：
 - `summarize_fused_transaction_fast_path.py`：严格验证 checked/trusted 完整矩阵、交替顺序、seed、transaction/block/byte trajectory、parity、rollback 和 profiler item/local-scalar 证据，再输出跨 trial ratio 与绝对 attribution。
 - `run_integrated_scheduled_multi_layer.py`：R4-C dynamic mixed-prefix multi-layer trace；组合 arrival、Scheduler、caller-supplied context、transaction rollback、finish/cancel、block reuse 与 terminal cleanup。
 - `summarize_integrated_scheduled_multi_layer.py`：重建 dependency-free reference，严格验证 24-row matrix、observed/reference digest、transaction/prefix accounting、reuse 与 zero-used cleanup，再输出绝对 latency/TPS range。
+- `run_flashinfer_baseline.py`：R5 固定 `flashinfer-python==0.6.15.post1` 的有限公开 paged-decode 对比；同一 HND physical KV、page table、Q、scale 和 CUDA-event timing 下运行 FlashDec Triton、FlashInfer FA2 CUDA-core 与 tensor-core 三条预注册路径。
+- `summarize_flashinfer_baseline.py`：严格验证 72-row case/dtype/backend/trial matrix、formal `3/10/50` sampling、runner command、版本、128 MiB workspace、clean worktree、布局、normalized tolerance ratio、page-table identity、轮转顺序和计时边界；报告绝对 p50/p90/p99 与 FlashInfer 相对 FlashDec 的 p50/TPS ratio range，logical workload GB/s 明确不是 DRAM bandwidth，不设置事后胜负门。
 
 当前通用 benchmark/profile 默认配置为 `block_size=32, num_warps=2`。FP16 的少数小 shape 可显式使用 `block_size=16` 对照。
 

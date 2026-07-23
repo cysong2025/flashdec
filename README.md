@@ -6,7 +6,7 @@ FlashDec 是一个面向单 GPU LLM decode 的研究型运行时原型，覆盖 
 
 项目关注的核心问题是：在请求长度与 batch 持续变化的情况下，如何维护可验证的 KV 所有权和失败原子性，并证明底层 kernel 优化能够转化为完整 decode step 的系统收益。
 
-> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction、R3 Shared Prefix Blocks 与 R4 均已完成。R4-A commit `4018449` 的 Cache-owned trusted path 在 160-row/80-pair 正式矩阵中取得 complete-token p50/TPS `1.7307x/1.7131x`，16/16 个 dtype/case 分组的五轮 p50 range 均稳定胜出。R4-B persistent metadata 未通过预注册的 16/16 稳定性门，主线已恢复 R4-A/materialized 默认。R4-C commit `6912894` 在 RTX 5070 通过 focused `60 passed, 17 subtests`、full `425 passed, 57 subtests`、FP16 quick 与 24-row/3-trial FP16/BF16 正式矩阵；reference digest、rollback、prefix lifetime、block reuse 和最终零占用 cleanup 全部通过严格校验。仓库继续保持 private 和 `0.0.0`。
+> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction、R3 Shared Prefix Blocks 与 R4 均已完成。R4-A commit `4018449` 的 Cache-owned trusted path 在 160-row/80-pair 正式矩阵中取得 complete-token p50/TPS `1.7307x/1.7131x`，16/16 个 dtype/case 分组的五轮 p50 range 均稳定胜出。R4-B persistent metadata 未通过预注册的 16/16 稳定性门，主线已恢复 R4-A/materialized 默认。R4-C commit `6912894` 在 RTX 5070 通过 focused `60 passed, 17 subtests`、full `425 passed, 57 subtests` 与 24-row 正式矩阵。R5 已固定 `flashinfer-python==0.6.15.post1` 的公平 paged-decode 对比契约并实现 72-row runner/strict validator；RTX 5070 正式结果仍待验证，返回前不写性能胜负结论。仓库继续保持 private 和 `0.0.0`。
 
 ## 架构
 
@@ -47,6 +47,7 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 - **Multi-layer transaction**：一个 token 只预留一次位置；各 layer 共用 block id/offset；全部成功后 seq_len 只增长一次；任一 layer 失败自动 rollback。
 - **Trusted transaction R4**：公开 fused primitive 保留完整索引检查；Cache-owned transaction path 可跳过 allocator 已证明的 device-value reduction，避免每 layer 的重复 host/stream sync。
 - **Integrated workload R4-C**：动态到达、fixed-prefix hit/private miss、multi-layer prompt、逐层 token transaction、rollback、finish/cancel 与 block reuse 使用同一 dependency-free reference trajectory 验证。
+- **External baseline R5**：在同一 Q/K/V、page table、HND physical layout、softmax scale 和 CUDA-event timing 下，对比 FlashDec Triton 与固定版本 FlashInfer FA2 CUDA-core/tensor-core；planning、JIT 和输入转换不混入 kernel-only latency。
 - **证据链**：固定 commit/seed/trial/shape/timing scope 的 benchmark、严格 summary validator、独立 profiler attribution 和 release gate。
 
 ## 结果摘要

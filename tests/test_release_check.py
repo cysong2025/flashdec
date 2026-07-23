@@ -119,3 +119,20 @@ def test_release_tree_requires_r4c_implementation_and_formal_evidence():
         "benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md"
         in RELEASE_EVIDENCE_PATHS
     )
+
+
+def test_release_tree_requires_r5_baseline_implementation_but_not_pending_evidence():
+    for relative in (
+        "docs/design_flashinfer_baseline.md",
+        "docs/notes/from_paged_attention_to_decode_runtime.md",
+        "benchmarks/run_flashinfer_baseline.py",
+        "benchmarks/summarize_flashinfer_baseline.py",
+        "tests/test_flashinfer_baseline.py",
+        "tests/test_flashinfer_baseline_benchmark.py",
+        "tests/test_flashinfer_baseline_summary.py",
+    ):
+        assert relative in REQUIRED_PATHS
+    assert (
+        "benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md"
+        not in RELEASE_EVIDENCE_PATHS
+    )

@@ -21,6 +21,7 @@
 - [Multi-layer KV Token Transaction](design_multi_layer_kv_transaction.md)
 - [Shared Prefix Blocks](design_shared_prefix_blocks.md)
 - [R4-C Integrated Scheduled Multi-layer Workload](design_integrated_scheduled_multi_layer.md)
+- [R5 FlashInfer 有限公开基线](design_flashinfer_baseline.md)
 - [Dynamic workload](design_dynamic_workload.md)
 
 ## 性能与复现
@@ -38,6 +39,7 @@
 - [Triton 基础笔记](notes/triton_basics.md)
 - [GPU memory 基础](notes/gpu_memory_basics.md)
 - [Online softmax](notes/online_softmax.md)
+- [从 PagedAttention 到可解释 Decode Runtime](notes/from_paged_attention_to_decode_runtime.md)
 
 ## 工程历史
 

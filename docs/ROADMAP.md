@@ -368,7 +368,7 @@ dynamic arrivals
 
 ## 9. 阶段 R5：公开基线与项目表达
 
-优先级：P2，保持 private 时暂停；完成 R4 并由所有者明确启动后再执行。
+优先级：P2，已由所有者启动。当前状态为实现就绪、等待 RTX 5070 正式验证；性能数字返回前不写成 R5 已完成。
 
 ### 有限公开对比
 
@@ -377,11 +377,15 @@ dynamic arrivals
 - 分离 kernel-only 与 runtime workload，不把不同计时边界放在同一 speedup 表中。
 - 同时记录安装成本、API/布局转换和不兼容项。
 
+第一版固定 `flashinfer-python==0.6.15.post1`，只比较双方共同支持的 batch paged-decode attention。正式矩阵为 4 个冻结 shape、FP16/BF16、FlashDec Triton + FlashInfer FA2 CUDA-core/tensor-core、3 trials，共 72 rows。输入、page table、softmax scale 与 physical layout 共用；FlashInfer `plan()`、JIT、随机输入和 reference validation 全部在 CUDA-event timing 之外。完整契约见[FlashInfer 基线设计](design_flashinfer_baseline.md)。
+
 ### 对外材料
 
 - 一篇中文技术文章：从 PagedAttention kernel 到 block-aware decode runtime。
 - 架构图、状态机、KV block ownership 图和性能归因图。
 - 技术总览按五层组织：算法、kernel、allocator、scheduler、实验方法。
+
+首版中文文章已落在[从 PagedAttention 到可解释 Decode Runtime](notes/from_paged_attention_to_decode_runtime.md)；正式性能表等待 72-row RTX evidence 后补入。
 
 验收门槛：任何对比数字都绑定版本、shape、计时边界和命令；无法公平对齐的项目明确标记为不可比。
 
@@ -394,7 +398,7 @@ dynamic arrivals
 | P1 | multi-layer KV transaction | 必须，修复当前架构边界 |
 | P2 | shared prefix blocks | 已完成 R3-A 至 R3-D |
 | P1 | trusted transaction fast path + integrated workload | 当前 private R4；先做单变量 A/B，再组合验证 |
-| P2 | FlashInfer/vLLM 有限公开对比 | 未启动；private 维护期间暂停 |
+| P2 | FlashInfer/vLLM 有限公开对比 | 已选择 FlashInfer 并完成 runner/validator；RTX 正式矩阵待执行 |
 | 不做 | HTTP server、完整模型、sampling、TP/PP、多机、swap/offload | 不影响项目完成 |
 
 如果时间不足，项目应在 R2 后停止增加功能，集中完成复现和文章。Scheduler + multi-layer transaction 比再增加三个小 kernel 更能证明 AI Infra 深度。

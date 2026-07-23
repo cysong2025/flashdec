@@ -77,7 +77,15 @@ dynamic arrivals
 
 trace/schema、dependency-free reference、observed/reference digest、multi-layer prompt prefill、Engine 集成测试、CUDA runner 与 strict validator 均已完成。quick/formal 的 reference digest、dynamic trajectory、rollback、transaction/prefix 计数、prefix lifetime、released-block reuse 与 final zero-used cleanup 全部通过。性能数字用于刻画这一有限 trace：p90/p99 受 private context-write admission step 主导，不能解释为 steady-state decode tail，也不用于声明 shared-prefix latency speedup。
 
-下一步保持 private `0.0.0` 维护状态；只有所有者明确启动后，才进入下面的可选 v0.1.0 release gate 或 R5 公开基线工作。
+R4 继续保持冻结，不重新开启 R4-B 或 kernel 参数 sweep。所有者已明确启动 R5；当前工作转入下面的有限公开基线验证。
+
+## 当前目标：R5 FlashInfer 有限公开基线
+
+状态：固定 `flashinfer-python==0.6.15.post1`，只比较双方共同支持的 paged-decode attention。runner、strict summary、optional CUDA correctness、dependency-free matrix tests、设计文档和中文技术文章已经实现；RTX 5070 quick/focused/72-row formal/full evidence 尚待执行。
+
+公平边界固定为同一 Q/K/V、page table、sequence lengths、softmax scale 和 `[page, head, token, dim]` physical layout。FlashDec `token_major` 对应 FlashInfer `HND`；FlashInfer FA2 CUDA-core 与 tensor-core 都预注册并独立报告。`plan()`、JIT、输入构造和 reference validation 均排除在 CUDA-event `run()` timing 外，不把 FlashDec runtime workload 与 FlashInfer kernel-only 数字混在同一张 speedup 表。
+
+正式矩阵为 4 cases × 2 dtypes × 3 backends × 3 trials = 72 rows。R5 没有预设胜负门；strict summary 报告 ratio median `[min,max]` 和所有跨 1 的范围。完整命令见[FlashInfer 基线设计](design_flashinfer_baseline.md)。
 
 ## 暂停目标：private 维护与可选 v0.1.0 Release Gate
 
@@ -101,7 +109,7 @@ trace/schema、dependency-free reference、observed/reference digest、multi-lay
 - 采用 MIT、Apache-2.0，或继续保留无开源授权状态；
 - GitHub `quality` workflow 和公开链接是否正常。
 
-R5 FlashInfer/vLLM 有限公开对比仍是选择性扩展，在 private R4 与 release gate 完成前不启动。
+R5 已选择 FlashInfer 并进入验证；vLLM 完整 serving 对比不在第一版公平范围内。release gate 仍在 R5 正式证据闭合和项目整理之后启动。
 
 不在范围内：HTTP 服务、tokenizer、sampling、完整模型 forward、swap/offload、TP/PP 和多机执行。
 

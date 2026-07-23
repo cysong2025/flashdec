@@ -27,6 +27,7 @@ FlashDec 研究 LLM decode 阶段的三个相互关联的问题：
 | Multi-layer R2 | shared location、sequential layers、commit/rollback | 144-row正式矩阵与最终 RTX 完整回归 |
 | Shared Prefix R3 | immutable full-block reuse、refcount/LRU、shared-aware admission | R3-D correctness 与 8-trial/64-row RTX confirmation 已完成 |
 | Trusted Transaction R4 | checked public raw op、Cache-owned device-value-check-free path、persistent metadata、统一多层调度证据 | R4-A 完成并冻结；R4-B 稳定性门失败后恢复 materialized 默认；R4-C commit `6912894` 完成 RTX correctness 与 24-row 正式验证 |
+| External Baseline R5 | 固定版本 FlashInfer paged-decode 公平对比、strict summary、对外技术文章 | `flashinfer-python==0.6.15.post1` runner/validator 与文档已实现；72-row RTX 正式矩阵待执行 |
 | Release | clean install、版本、tag、公开 release | 最终 release gate，留到项目收尾执行 |
 
 ## 3. 关键设计决策

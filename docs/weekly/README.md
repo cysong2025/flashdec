@@ -18,5 +18,6 @@
 - [Stage 14](week_14_status.md)：Shared Prefix R3
 - [Stage 15](week_15_status.md)：Trusted Transaction Fast Path R4
 - [Stage 16](week_16_status.md)：Integrated Scheduled Multi-layer Workload R4-C
+- [Stage 17](week_17_status.md)：FlashInfer 有限公开基线 R5
 
 当前设计与结果入口见[文档索引](../INDEX.md)。
