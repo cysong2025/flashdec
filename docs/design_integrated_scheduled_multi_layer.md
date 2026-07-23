@@ -102,7 +102,7 @@ dtypes: FP16, BF16
 
 ```bash
 python benchmarks/run_integrated_scheduled_multi_layer.py \
-  --case l2_c64 \
+  --case l2_c32 \
   --dtype float16 \
   --trials 1 \
   --quick \
@@ -131,4 +131,4 @@ python benchmarks/summarize_integrated_scheduled_multi_layer.py \
   --expected-trials 3
 ```
 
-当前实现与 dependency-free validator 已在 Mac 工作区通过；Torch/RTX correctness 和正式性能数字仍待 RTX 5070 验证，在原始证据返回前不得写成 R4-C 已完成。
+commit `6912894` 已在 RTX 5070 完成验证：focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`，FP16 quick 与预注册的 24-row/3-trial FP16/BF16 正式矩阵均通过 strict validator。canonical evidence 见[R4-C 正式摘要](../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)。

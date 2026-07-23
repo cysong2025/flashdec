@@ -12,6 +12,8 @@ R4-C Integrated Scheduled Multi-layer Workload：在冻结的 R4-A/materialized 
 - 新增 dependency-free standard trace/reference trajectory：动态到达、mixed prefix hit/miss、admission/defer、显式 cancel、layer-1 failure、finish 与 block reuse 均有确定预期。
 - runner 逐 step 比对 reference，并从实际观测重新计算 SHA-256 trajectory digest；随机 tensor 构建、prefix registration 与 terminal eviction 不混入 logical-step wall。
 - 新增 RTX runner、24-row formal matrix 和 strict summarizer；validator 会重建 reference 并拒绝 matrix、计数、digest、reuse 或 zero-used cleanup 漂移。
+- commit `6912894` 已在 RTX 5070 完成最终验证：focused `60 passed, 17 subtests passed in 3.09s`，完整回归 `425 passed, 57 subtests passed in 6.52s`。
+- FP16 `l2_c32` quick 为 1 row/1 trial，complete-step p50 `1.341569 ms`、TPS `209.887`；预注册 formal matrix 为 24 rows/3 trials，8 个 dtype/case 分组全部通过严格校验。
 
 ## 本地验证
 
@@ -21,24 +23,17 @@ R4-C Integrated Scheduled Multi-layer Workload：在冻结的 R4-A/materialized 
 - `python3 scripts/check_release.py --require-evidence`：private `0.0.0` tree gate 通过；开发工作树预期为 dirty。
 - runner/summary `--help` 与 `git diff --check`：通过。
 
-## 当前环境限制
+## RTX 5070 正式验证
 
-Mac 工作区没有 Torch/CUDA，因此只能运行 dependency-free config/runner/summary tests、编译与文档检查。CPU/reference Engine integration、fused CUDA/Triton correctness 和正式矩阵必须在 WSL RTX 5070 环境完成。
+- 环境：NVIDIA GeForce RTX 5070、PyTorch `2.11.0+cu128`、CUDA Toolkit 12.8、commit `6912894`。
+- focused：`60 passed, 17 subtests passed in 3.09s`。
+- full：`425 passed, 57 subtests passed in 6.52s`。
+- quick：FP16 `l2_c32`，1 row/1 trial；p50 `1.341569 ms`，TPS `209.887`。
+- formal：2/4 layers、64/128 context、FP16/BF16、3 trials，共 24 rows。8 个分组的 complete-step p50 median 范围为 `1.360588–2.371724 ms`，TPS median 范围为 `43.070–126.641`。
+- strict validator：reference digest、dynamic trajectory、rollback、transaction/prefix 计数、prefix lifetime、released-block reuse 与 final zero-used cleanup 全部通过。
 
-## 需要在 RTX 5070 开发板完成
-
-1. 运行 R4-C targeted/focused suite，覆盖 multi-layer prompt rollback、完整 trace、fused transaction 与 strict summary。
-2. 运行 FP16 `l2_c32` quick 并通过 dependency-free summarizer。
-3. 运行 2/4 layers、64/128 context、FP16/BF16、3 trials 的 24-row formal matrix。
-4. 运行完整 pytest 与 release evidence check，保存 commit、环境、CSV、log 和 summary。
-
-## 上板后要记录
-
-- targeted/focused/full pytest 精确计数与耗时；
-- quick/formal row 数、trajectory digest、transaction/prefix 计数和 final cleanup；
-- 每个 dtype/case 的 p50/p90/p99/TPS median `[min,max]`；
-- 任何 fail-closed 原始日志，不删行或手工补 evidence。
+formal trace 只有 10 个 logical steps，p90/p99 受 private context-write admission steps 主导，不能解释为 steady-state decode tail。context seeding 是 caller-supplied K/V 写入；随机构建、prefix registration 与 terminal eviction 均不在 logical-step wall 内。完整数据与边界见[R4-C 正式摘要](../../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)。
 
 ## 下一步
 
-先完成本地全套 dependency-free gates 并提交实现；随后在 RTX 5070 按[复现指南](../reproducibility.md)执行 quick、focused、formal 与 full validation。正式证据返回前，R4-C 状态保持“实现就绪、等待上板”。
+R4-C 与 R4 阶段已经闭合。下一步保持 private `0.0.0` 维护状态；只有所有者明确启动后，才进入可选 v0.1.0 release gate 或 R5 公开基线工作。

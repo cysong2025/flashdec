@@ -351,7 +351,7 @@ keep门：correctness/parity/rollback/ownership/terminal cleanup全部通过；o
 
 ### R4-C：Integrated scheduled multi-layer workload
 
-状态：实现就绪，等待 RTX 验证。R4-B 已按 keep 门回滚；本阶段以冻结的 R4-A/materialized 路径为组合基线。dependency-free reference、原子 multi-layer prompt prefill、observed/reference digest、CUDA runner 与 strict validator 已实现。
+状态：已完成。R4-B 已按 keep 门回滚；本阶段以冻结的 R4-A/materialized 路径为组合基线。commit `6912894` 在 RTX 5070 通过 focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`、FP16 quick 和 24-row/3-trial FP16/BF16 正式矩阵。
 
 统一验证：
 
@@ -364,7 +364,7 @@ dynamic arrivals
   -> finish/cancel / block reuse
 ```
 
-第一版保持 prefix resident set 固定，不同时引入在线 prefix registration/eviction。主验收是组合 correctness、completion、transaction/block trajectory 与零泄漏 cleanup，不要求 shared prefix 自身带来 latency 加速。正式矩阵预注册为 2/4 layers、64/128 context、FP16/BF16、3 trials，共 24 rows；设计与命令见[组合 workload 设计](design_integrated_scheduled_multi_layer.md)。
+第一版保持 prefix resident set 固定，不同时引入在线 prefix registration/eviction。主验收是组合 correctness、completion、transaction/block trajectory 与零泄漏 cleanup，不要求 shared prefix 自身带来 latency 加速。预注册的 2/4 layers、64/128 context、FP16/BF16、3 trials 共 24 rows 全部通过 reference digest、rollback、计数、prefix lifetime、block reuse 与 final cleanup 校验；正式证据见[R4-C 摘要](../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)。
 
 ## 9. 阶段 R5：公开基线与项目表达
 

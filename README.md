@@ -6,7 +6,7 @@ FlashDec 是一个面向单 GPU LLM decode 的研究型运行时原型，覆盖 
 
 项目关注的核心问题是：在请求长度与 batch 持续变化的情况下，如何维护可验证的 KV 所有权和失败原子性，并证明底层 kernel 优化能够转化为完整 decode step 的系统收益。
 
-> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction、R3 Shared Prefix Blocks 与 R4-A Trusted CUDA Transaction Fast Path 均已完成。R4-A commit `4018449` 在 RTX 5070 通过 focused `73 passed, 23 subtests`、full `410 passed, 48 subtests` 和 160-row/80-pair 正式矩阵；Cache-owned trusted path 的 complete-token p50/TPS 几何平均为 `1.7307x/1.7131x`，16/16 个 dtype/case 分组的五轮 p50 range 均稳定胜出。R4-B persistent transaction metadata 在 commit `8047a9c` 完成 correctness 与 160-row/80-pair 正式矩阵，overall p50/TPS 为 `1.2493x/1.2392x`，但只有 13/16 分组五轮全部胜出，未通过预注册稳定性门，因此主线恢复 R4-A/materialized 默认。R4-C 组合 workload 的 reference trace、原子 multi-layer prompt prefill、runner 与 strict validator 已实现，等待 RTX 5070 correctness/24-row 正式验证。仓库继续保持 private 和 `0.0.0`。
+> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction、R3 Shared Prefix Blocks 与 R4 均已完成。R4-A commit `4018449` 的 Cache-owned trusted path 在 160-row/80-pair 正式矩阵中取得 complete-token p50/TPS `1.7307x/1.7131x`，16/16 个 dtype/case 分组的五轮 p50 range 均稳定胜出。R4-B persistent metadata 未通过预注册的 16/16 稳定性门，主线已恢复 R4-A/materialized 默认。R4-C commit `6912894` 在 RTX 5070 通过 focused `60 passed, 17 subtests`、full `425 passed, 57 subtests`、FP16 quick 与 24-row/3-trial FP16/BF16 正式矩阵；reference digest、rollback、prefix lifetime、block reuse 和最终零占用 cleanup 全部通过严格校验。仓库继续保持 private 和 `0.0.0`。
 
 ## 架构
 
@@ -68,10 +68,11 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 | R4-A 正式矩阵 | p50/p90/TPS `1.7307x/1.6751x/1.7131x`；append CPU `2.3612x` | 160 行、80 pairs、16/16 p50 ranges 稳定胜出；7/16 p99 ranges 跨 1，不声明稳定尾延迟 |
 | R4-B 正式负结果 | p50/TPS/append CPU `1.2493x/1.2392x/3.0366x` | correctness 通过，但仅 13/16 p50 ranges 稳定胜出；keep gate 失败并恢复 materialized 默认 |
 | R4-B 回滚边界回归 | focused `89 passed, 23 subtests passed`；full `410 passed, 48 subtests passed` | commit `36225d1` clean tree 与 release evidence gate 通过，确认 candidate 未残留 |
+| R4-C 组合 workload | focused `60 passed, 17 subtests passed`；full `425 passed, 57 subtests passed`；24 rows | commit `6912894` 的完整 trajectory 与 lifecycle 严格校验通过，R4 收尾完成 |
 
 R2 的 decode device ratio 为 `1.0024x`，而 append device 与 CUDA event ratio 分别为 `1.6103x` 和 `1.9784x`，说明系统收益主要来自 append/launch 路径。每轮仅 20 repeats，p99 接近单轮最大值，因此所有尾延迟结论都保留场景范围，不作生产级稳定性声明。
 
-详细结果见[性能报告](docs/performance_report.md)、[R1 正式摘要](benchmarks/results/r1_scheduler_workload_trials3_summary.md)、[R2 正式摘要](benchmarks/results/r2_multi_layer_engine_trials3_summary.md)、[R3 最终摘要](benchmarks/results/r3_shared_prefix_workload_trials8_summary.md)、[R4-A 正式摘要](benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)和[R4-B 正式负结果](benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)。R3 的 ownership、容量口径与离群点边界记录在[Shared Prefix Blocks 设计](docs/design_shared_prefix_blocks.md)，R4-C 预注册 trace 与 evidence schema 见[组合 workload 设计](docs/design_integrated_scheduled_multi_layer.md)。
+详细结果见[性能报告](docs/performance_report.md)、[R1 正式摘要](benchmarks/results/r1_scheduler_workload_trials3_summary.md)、[R2 正式摘要](benchmarks/results/r2_multi_layer_engine_trials3_summary.md)、[R3 最终摘要](benchmarks/results/r3_shared_prefix_workload_trials8_summary.md)、[R4-A 正式摘要](benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)、[R4-B 正式负结果](benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)和[R4-C 正式摘要](benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)。R3 的 ownership 与容量口径记录在[Shared Prefix Blocks 设计](docs/design_shared_prefix_blocks.md)，R4-C 的 trace 与 evidence schema 见[组合 workload 设计](docs/design_integrated_scheduled_multi_layer.md)。
 
 ## 快速开始
 

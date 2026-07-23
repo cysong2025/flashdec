@@ -36,7 +36,7 @@
 - Python package 核心依赖只保留 torch/triton；pytest 移入 `dev` extra，Ninja 保留在 `cuda-extension` extra。
 - GPU Engine 明确使用 fused CUDA append policy；公开 reference API 默认仍保持 PyTorch 路径。
 - DecodeEngine workload CSV、multi-trial summary 和 profiler evidence 现在绑定生成时的 Git commit。
-- Release artifact/evidence gate 现在同时要求 R1 Scheduler、R2 Multi-layer、R3 Shared Prefix 与 R4-A Trusted Transaction runner、validator、focused tests 和最终 Markdown summary。
+- Release artifact/evidence gate 现在同时要求 R1 Scheduler、R2 Multi-layer、R3 Shared Prefix、R4-A Trusted Transaction 与 R4-C Integrated Workload 的 runner、validator、focused tests 和最终 Markdown summary。
 - R4-A profiler attribution 改用 CPU-only WARMUP→active schedule；active CPU user annotation 提供 inclusive host time，并严格验证 checked/trusted scalar extraction。少记 range/scalar 可用相同 seed、全新 probe 最多重采集三次并记录 attempt count，多记立即失败。paired trial 先完成两条 path 的正式 wall，再运行 attribution/rollback，避免 retry 介入配对计时。未稳定关联的 append/decode device 与 CUDA-activity 字段从 strict schema 删除。
 - R4-B persistent metadata candidate 未通过预注册 16/16 分组稳定性门，生产主线恢复 R4-A/materialized 默认；candidate commit 与正式负结果保留用于追溯，不继续同线微调。
 
@@ -61,6 +61,7 @@
 - R4-A commit `4018449` 的 RTX 5070/CUDA 12.8 五轮正式矩阵共 160 rows、80 paired trials并通过严格校验；16/16 个 `dtype x case` p50 分组均为 `trusted_faster`，且每组五轮最小值都大于 1。overall complete-token p50/p90/p99、TPS 与 append CPU/layer ratio 为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`，R4-A 据此冻结。
 - 7/16 个 R4-A 分组的 p99 range 穿过 1；overall p99 几何平均只作为聚合统计保留，不能声明稳定尾延迟收益。CPU-only attribution 证明移除了 scalar extraction 等待，不代表 kernel device execution 本身加速。
 - R4-B commit `8047a9c` 的 160-row/80-pair RTX 正式矩阵通过完整性校验，overall complete-token p50/TPS 与 append CPU/layer 为 `1.2493x/1.2392x/3.0366x`；只有 13/16 个分组的五轮 p50 最小值大于 1，正式 keep gate 失败。BF16 `l2_b4_c1024`、FP16 `l2_b16_c128` 与 FP16 `l4_b16_c128` 保留跨 1 范围，不删除失败样本。
+- R4-C commit `6912894` 的 RTX 5070 formal matrix 为 FP16/BF16、2/4 layers、64/128 context、3 trials，共 24 rows；8 个分组的 complete-step p50 median 为 `1.360588–2.371724 ms`，TPS median 为 `43.070–126.641`。全部 strict lifecycle gate 通过；p90/p99 受有限 trace 的 private context-write steps 主导，不声明 steady-state tail 或 shared-prefix latency speedup。
 
 ### Correctness evidence
 
@@ -78,7 +79,8 @@
 - R4-A commit `5d2f9c0` 的 l4 stress 三次均在首个 decode CPU range 得到零 correlated device time并停止；没有 CSV/summary，不能形成性能结论。
 - R4-A commit `4018449` RTX 5070 focused：`73 passed, 23 subtests passed`；完整回归：`410 passed, 48 subtests passed`。正式 160-row 数据、transaction/Engine trajectory、parity、rollback、CPU range 与 scalar extraction evidence 均通过 strict validator。
 - R4-B commit `8047a9c` RTX 5070 focused：`101 passed`；完整回归：`434 passed, 48 subtests passed`。formal exact parity、transaction/block/Engine trajectory、rollback、metadata lifecycle 与 zero-resident cleanup 均通过。
-- R4-B rollback commit `36225d1` RTX 5070 focused：`89 passed, 23 subtests passed in 4.24s`；完整回归：`410 passed, 48 subtests passed in 6.36s`；release evidence check 为 `PASS`。R4-C 新增代码的 RTX 结果仍待验证。
+- R4-B rollback commit `36225d1` RTX 5070 focused：`89 passed, 23 subtests passed in 4.24s`；完整回归：`410 passed, 48 subtests passed in 6.36s`；release evidence check 为 `PASS`。
+- R4-C commit `6912894` RTX 5070 focused：`60 passed, 17 subtests passed in 3.09s`；完整回归：`425 passed, 57 subtests passed in 6.52s`；FP16 quick 与 24-row formal matrix 的 reference digest、rollback、prefix lifetime、block reuse 和 final zero-used cleanup 全部通过。
 
 ### Pending before v0.1.0
 
@@ -86,4 +88,3 @@
 - 将 `pyproject.toml` 与 `flashdec.__version__` 同步更新为 `0.1.0`。
 - 创建并验证 `v0.1.0` tag；当前不得提前标记 release。
 - 仓库可见性继续保持 private；公开、版本升级和 tag 等待所有者明确启动 release gate。
-- 当前开发目标为 R4-C integrated scheduled multi-layer workload；使用冻结的 R4-A/materialized 路径，不重新开启 R4-B 同线微调。

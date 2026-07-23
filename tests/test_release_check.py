@@ -103,7 +103,7 @@ def test_release_tree_requires_r4_runner_validator_and_dependency_free_tests():
     )
 
 
-def test_release_tree_requires_r4c_implementation_but_not_pending_evidence():
+def test_release_tree_requires_r4c_implementation_and_formal_evidence():
     for relative in (
         "flashdec/integrated_workload.py",
         "docs/design_integrated_scheduled_multi_layer.md",
@@ -117,5 +117,5 @@ def test_release_tree_requires_r4c_implementation_but_not_pending_evidence():
         assert relative in REQUIRED_PATHS
     assert (
         "benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md"
-        not in RELEASE_EVIDENCE_PATHS
+        in RELEASE_EVIDENCE_PATHS
     )

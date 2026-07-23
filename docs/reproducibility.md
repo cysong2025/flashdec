@@ -365,7 +365,7 @@ python -m pytest -q -ra \
 
 ```bash
 python benchmarks/run_integrated_scheduled_multi_layer.py \
-  --case l2_c64 \
+  --case l2_c32 \
   --dtype float16 \
   --trials 1 \
   --quick \
@@ -460,7 +460,7 @@ python scripts/check_release.py --require-clean
 | R3 metadata hot path | 已完成 | submission-time shared-block cache、lookup-count test 与 authoritative Cache cross-check；性能 near-neutral/no stable direction |
 | R4-A trusted transaction | 已完成 | commit `4018449` 的 focused/full correctness、160-row/80-pair RTX 五轮矩阵与 [canonical strict summary](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)；16/16 p50 分组稳定胜出，p99 保留 7/16 穿 1 的限制 |
 | R4-B persistent metadata | 已评估并回滚 | commit `8047a9c` 的 correctness 与 [160-row/80-pair 正式负结果](../benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)；overall p50 `1.2493x`，但仅 13/16 分组稳定胜出，未通过 keep gate |
-| R4-C integrated workload | 实现就绪，等待 RTX | dependency-free reference/validator、multi-layer prompt transaction、observed/reference digest、rollback/reuse/cleanup tests 与 24-row runner；RTX quick/formal/full 待执行 |
+| R4-C integrated workload | 已完成 | commit `6912894` 的 focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`、FP16 quick 与 [24-row/3-trial canonical summary](../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)；digest/rollback/prefix/reuse/cleanup 全部通过 |
 | Clean WSL editable install | 暂停 | 仓库继续 private；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

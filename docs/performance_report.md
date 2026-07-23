@@ -252,9 +252,24 @@ R4-B commit `8047a9c` 在同一 trusted CUDA/Triton math 下比较 materialized 
 
 persistent 将 Cache transaction views 从 l2/l4 的 `6/10` 降为 1，并分别复用 2/4 层。overall complete-token p50/TPS 与 append CPU/layer 为 `1.2493x/1.2392x/3.0366x`，但只有 13/16 个分组的五轮 p50 最小值严格大于 1；BF16 `l2_b4_c1024`、FP16 `l2_b16_c128` 与 FP16 `l4_b16_c128` 跨过 1。预注册 keep 门要求 16/16，因此正式状态为 fail，主线恢复 R4-A/materialized 默认。该结果说明 metadata reuse 稳定减少 host append 开销，但不能证明所有完整 token 场景都稳定受益；完整数据见[R4-B 五轮正式负结果](../benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)。
 
+## R4-C Integrated Scheduled Multi-layer 正式结果（2026-07-21）
+
+commit `6912894` 在 RTX 5070、PyTorch `2.11.0+cu128`、CUDA 12.8 上完成 focused `60 passed, 17 subtests passed in 3.09s`、完整回归 `425 passed, 57 subtests passed in 6.52s`，并通过 FP16 `l2_c32` quick 与预注册的 24-row/3-trial FP16/BF16 正式矩阵。
+
+| layers / context | BF16 p50 ms / TPS | FP16 p50 ms / TPS |
+| --- | ---: | ---: |
+| 2 / 64 | `1.389153 / 122.698` | `1.371000 / 126.641` |
+| 2 / 128 | `1.360588 / 66.123` | `1.446410 / 65.859` |
+| 4 / 64 | `2.130567 / 83.670` | `2.188326 / 81.959` |
+| 4 / 128 | `2.146924 / 44.887` | `2.371724 / 43.070` |
+
+所有行的 reference digest、dynamic admission/defer/completion/cancellation trajectory、layer failure rollback、transaction/prefix 计数、prefix lifetime、released-block reuse 与 final zero-used cleanup 均通过 strict validator。因此 R4-C 的组合 correctness/lifecycle gate 通过，R4 阶段完成。
+
+这是一条只有 10 个 logical steps 的功能轨迹。p90/p99 受 private miss 的 caller-supplied multi-layer context-write admission steps 主导，不能解释为 steady-state decode tail；矩阵也不比较 R4-B candidate、不证明 shared prefix latency speedup。随机构建、prefix registration 与 terminal eviction 均在计时区间外。完整数据见[R4-C 正式摘要](../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)。
+
 ## 后续工作边界
 
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
-2. Block-aware Scheduler、Multi-layer KV Token Transaction 与 R4-A trusted validation 已完成；R4-B 已完成评估并按稳定性门回滚。R4-C reference/runner/validator 已实现并等待 RTX 5070 correctness 与 24-row formal evidence。
+2. Block-aware Scheduler、Multi-layer KV Token Transaction、R4-A trusted validation 与 R4-C integrated workload 均已完成；R4-B 已完成评估并按稳定性门回滚。
 3. clean-install、版本与 tag 留在最终 release gate。
 4. Shared Prefix R3 已完成；当前不继续围绕同一数据调参。固定版本公开基线与 release 均暂停，未来若执行仍必须统一功能与计时边界。
