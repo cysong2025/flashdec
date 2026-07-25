@@ -9,8 +9,10 @@ from datetime import datetime
 import hashlib
 from importlib import metadata as importlib_metadata
 import math
+import os
 import platform
 from pathlib import Path
+import re
 import shlex
 import statistics
 import subprocess
@@ -26,6 +28,20 @@ from flashdec.perf import dtype_nbytes
 
 
 EXPECTED_FLASHINFER_VERSION = "0.6.15.post1"
+EXPECTED_PYTHON_MAJOR_MINOR = "3.12"
+EXPECTED_TORCH_VERSION = "2.11.0+cu128"
+EXPECTED_TRITON_VERSION = "3.6.0"
+EXPECTED_TORCH_CUDA_VERSION = "12.8"
+EXPECTED_CUDA_TOOLKIT_VERSION = "12.8.1"
+EXPECTED_CUDA_PYTHON_VERSION = "12.9.1"
+EXPECTED_CUDA_BINDINGS_VERSION = "12.9.7"
+EXPECTED_CUDA_PATHFINDER_VERSION = "1.6.0"
+EXPECTED_NINJA_VERSION = "1.13.0"
+EXPECTED_CUDA_HOME_BASENAME = "cuda-12.8"
+EXPECTED_NVCC_RELEASE = "12.8"
+EXPECTED_NVCC_VERSION = "12.8.93"
+FLASHINFER_CUDA_ARCH_ENV = "FLASHINFER_CUDA_ARCH_LIST"
+EXPECTED_FLASHINFER_CUDA_ARCH_LIST = "12.0a"
 FLASHINFER_BACKEND = "fa2"
 FLASHINFER_WORKSPACE_MIB = 128
 BLOCK_SIZE = 32
@@ -122,6 +138,141 @@ def _flashinfer_version(flashinfer):
         if version:
             return str(version)
         raise RuntimeError("cannot determine flashinfer-python version")
+
+
+def _installed_version(distribution, version_getter=None):
+    getter = (
+        importlib_metadata.version if version_getter is None else version_getter
+    )
+    try:
+        return str(getter(distribution))
+    except importlib_metadata.PackageNotFoundError:
+        return "<not installed>"
+
+
+def _parse_nvcc_version(output):
+    match = re.search(
+        r"release\s+(\d+\.\d+),\s+V(\d+\.\d+\.\d+)",
+        output,
+    )
+    if match is None:
+        raise RuntimeError("cannot parse CUDA release/version from nvcc --version")
+    return match.group(1), match.group(2)
+
+
+def _probe_cuda_toolkit(cuda_home):
+    path = Path(cuda_home)
+    if not path.is_absolute():
+        raise RuntimeError("CUDA_HOME must be an absolute path")
+    try:
+        realpath = path.resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError(f"CUDA_HOME cannot be resolved: {cuda_home!r}") from exc
+    nvcc = realpath / "bin" / "nvcc"
+    if not nvcc.is_file() or not os.access(nvcc, os.X_OK):
+        raise RuntimeError(f"CUDA_HOME does not contain executable nvcc: {nvcc}")
+    result = subprocess.run(
+        [str(nvcc), "--version"],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"nvcc --version failed with exit code {result.returncode}")
+    release, version = _parse_nvcc_version(result.stdout)
+    return {
+        "cuda_home_realpath": str(realpath),
+        "nvcc_release": release,
+        "nvcc_version": version,
+    }
+
+
+def _validate_r5_environment(
+    torch,
+    *,
+    environ=None,
+    version_getter=None,
+    python_version=None,
+    cuda_probe=None,
+):
+    """Return the frozen R5 environment or reject it before FlashInfer import/JIT."""
+
+    environ = os.environ if environ is None else environ
+    python_version = (
+        platform.python_version() if python_version is None else python_version
+    )
+    cuda_home = str(environ.get("CUDA_HOME", "")).strip()
+    if cuda_home:
+        probe = _probe_cuda_toolkit if cuda_probe is None else cuda_probe
+        toolkit = probe(cuda_home)
+    else:
+        toolkit = {
+            "cuda_home_realpath": "",
+            "nvcc_release": "",
+            "nvcc_version": "",
+        }
+    actual = {
+        "python": str(python_version),
+        "torch": str(torch.__version__),
+        "triton": _installed_version("triton", version_getter),
+        "cuda": str(torch.version.cuda),
+        "cuda_toolkit": _installed_version("cuda-toolkit", version_getter),
+        "cuda_python": _installed_version("cuda-python", version_getter),
+        "cuda_bindings": _installed_version("cuda-bindings", version_getter),
+        "cuda_pathfinder": _installed_version("cuda-pathfinder", version_getter),
+        "ninja": _installed_version("ninja", version_getter),
+        "flashinfer_version": _installed_version(
+            "flashinfer-python", version_getter
+        ),
+        "cuda_home": cuda_home,
+        **toolkit,
+        "flashinfer_cuda_arch_list": str(
+            environ.get(FLASHINFER_CUDA_ARCH_ENV, "")
+        ).strip(),
+    }
+    expected = {
+        "torch": EXPECTED_TORCH_VERSION,
+        "triton": EXPECTED_TRITON_VERSION,
+        "cuda": EXPECTED_TORCH_CUDA_VERSION,
+        "cuda_toolkit": EXPECTED_CUDA_TOOLKIT_VERSION,
+        "cuda_python": EXPECTED_CUDA_PYTHON_VERSION,
+        "cuda_bindings": EXPECTED_CUDA_BINDINGS_VERSION,
+        "cuda_pathfinder": EXPECTED_CUDA_PATHFINDER_VERSION,
+        "ninja": EXPECTED_NINJA_VERSION,
+        "nvcc_release": EXPECTED_NVCC_RELEASE,
+        "nvcc_version": EXPECTED_NVCC_VERSION,
+        "flashinfer_version": EXPECTED_FLASHINFER_VERSION,
+        "flashinfer_cuda_arch_list": EXPECTED_FLASHINFER_CUDA_ARCH_LIST,
+    }
+    mismatches = [
+        f"{field}: expected {value!r}, got {actual[field]!r}"
+        for field, value in expected.items()
+        if actual[field] != value
+    ]
+    if not actual["python"].startswith(f"{EXPECTED_PYTHON_MAJOR_MINOR}."):
+        mismatches.append(
+            "python: expected "
+            f"{EXPECTED_PYTHON_MAJOR_MINOR}.x, got {actual['python']!r}"
+        )
+    if not cuda_home:
+        mismatches.append("CUDA_HOME: expected an explicit CUDA 12.8 toolkit path")
+    elif Path(cuda_home).name != EXPECTED_CUDA_HOME_BASENAME:
+        mismatches.append(
+            "CUDA_HOME: expected a path ending in "
+            f"{EXPECTED_CUDA_HOME_BASENAME!r}, got {cuda_home!r}"
+        )
+    realpath = actual["cuda_home_realpath"]
+    if not realpath:
+        mismatches.append("CUDA_HOME realpath must be recorded")
+    elif Path(realpath).name != EXPECTED_CUDA_HOME_BASENAME:
+        mismatches.append(
+            "CUDA_HOME realpath: expected a path ending in "
+            f"{EXPECTED_CUDA_HOME_BASENAME!r}, got {realpath!r}"
+        )
+    if mismatches:
+        raise RuntimeError("R5 environment mismatch; " + "; ".join(mismatches))
+    return actual
 
 
 def _git_worktree_clean(root):
@@ -378,6 +529,7 @@ def _run_case(
     run_started_at,
     run_command,
     actual_flashinfer_version,
+    environment,
 ):
     from flashdec.kernels.paged_decode import paged_decode_attention
 
@@ -448,10 +600,22 @@ def _run_case(
             "op": "paged_decode_attention",
             "date": run_started_at,
             "device": torch.cuda.get_device_name(torch.cuda.current_device()),
-            "python": platform.python_version(),
-            "torch": torch.__version__,
-            "triton": importlib_metadata.version("triton"),
-            "cuda": torch.version.cuda,
+            "python": environment["python"],
+            "torch": environment["torch"],
+            "triton": environment["triton"],
+            "cuda": environment["cuda"],
+            "cuda_toolkit": environment["cuda_toolkit"],
+            "cuda_python": environment["cuda_python"],
+            "cuda_bindings": environment["cuda_bindings"],
+            "cuda_pathfinder": environment["cuda_pathfinder"],
+            "ninja": environment["ninja"],
+            "cuda_home": environment["cuda_home"],
+            "cuda_home_realpath": environment["cuda_home_realpath"],
+            "nvcc_release": environment["nvcc_release"],
+            "nvcc_version": environment["nvcc_version"],
+            "flashinfer_cuda_arch_list": environment[
+                "flashinfer_cuda_arch_list"
+            ],
             "git_commit": commit,
             "git_worktree_clean": str(worktree_clean),
             "command": run_command,
@@ -584,12 +748,18 @@ def main(argv=None):
         )
 
     import torch
-    import flashinfer
+
+    try:
+        environment = _validate_r5_environment(torch)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required for the R5 FlashInfer baseline")
     if args.dtype in ("bfloat16", "both") and not torch.cuda.is_bf16_supported():
         raise SystemExit("the selected matrix requires CUDA BF16 support")
+
+    import flashinfer
 
     actual_flashinfer_version = _flashinfer_version(flashinfer)
     if actual_flashinfer_version != args.expected_flashinfer_version:
@@ -625,6 +795,7 @@ def main(argv=None):
                         run_started_at=run_started_at,
                         run_command=run_command,
                         actual_flashinfer_version=actual_flashinfer_version,
+                        environment=environment,
                     )
                 )
                 torch.cuda.empty_cache()

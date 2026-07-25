@@ -60,12 +60,53 @@ python scripts/check_env.py
 R5 外部基线需要额外安装固定版本 FlashInfer；它不是 FlashDec 核心依赖：
 
 ```bash
-python -m pip install -e ".[dev,cuda-extension,baseline]"
-python -c "import flashinfer; from importlib.metadata import version; print(version('flashinfer-python'))"
+python -m pip install \
+  -c constraints/r5-cu128.txt \
+  "torch==2.11.0+cu128" "triton==3.6.0" \
+  --index-url https://download.pytorch.org/whl/cu128 \
+  --extra-index-url https://mirrors.aliyun.com/pypi/simple/
+python -m pip install -c constraints/r5-cu128.txt \
+  "flashinfer-python==0.6.15.post1" \
+  "cuda-python==12.9.1" "cuda-bindings==12.9.7" \
+  "cuda-pathfinder==1.6.0" "cuda-toolkit==12.8.1" \
+  "ninja==1.13.0" pytest \
+  --index-url https://mirrors.aliyun.com/pypi/simple/ \
+  --extra-index-url https://download.pytorch.org/whl/cu128
+python -m pip install --no-build-isolation --no-deps -e .
+
+export CUDA_HOME=/usr/local/cuda-12.8
+export PATH="$CUDA_HOME/bin:$PATH"
+export MAX_JOBS=1
+export FLASHINFER_CUDA_ARCH_LIST="12.0a"
+
+python -m pip check
 flashinfer show-config
 ```
 
-预注册版本为 `flashinfer-python==0.6.15.post1`。RTX 正式运行时必须保存 `show-config`、pip freeze、GPU/driver 与 JIT 首次构建日志；runner 会在 distribution version 不完全一致时 fail closed，`--require-clean` 会拒绝把 dirty source 结果绑定到旧 commit，CSV 同时记录 Python/Triton/CUDA、带时区的 run timestamp 与 128 MiB workspace。
+完整 clean-venv 命令见[复现指南](reproducibility.md#r5-flashinfer-有限公开基线证据)。不得无 constraints 地直接安装 `.[baseline]`，否则 pip 可能把 Torch 2.11/cu128 替换为 Torch 2.13/CUDA 13。传递依赖 `nvidia-cuda-nvdisasm==13.3.73` 是 CUTLASS DSL 工具，不是 CUDA runtime。RTX 正式运行时必须保存 `show-config`、pip freeze、GPU/driver 与 JIT 首次构建日志；runner 会在 FlashInfer import 前检查固定版本、CUDA 12.8、`CUDA_HOME` 和 `FLASHINFER_CUDA_ARCH_LIST=12.0a`，`--require-clean` 会拒绝把 dirty source 结果绑定到旧 commit，CSV 同时记录这些环境字段、带时区的 run timestamp 与 128 MiB workspace。
+
+### R5 FlashInfer SM120a 验证（2026-07-26）
+
+在独立 virtualenv `flashdec-r5-20260726_004807` 中确认：
+
+```text
+GPU: NVIDIA GeForce RTX 5070
+compute capability: (12, 0)
+Python: 3.12
+PyTorch: 2.11.0+cu128
+PyTorch CUDA: 12.8
+Triton: 3.6.0
+FlashInfer: 0.6.15.post1
+cuda-toolkit: 12.8.1
+cuda-python: 12.9.1
+cuda-bindings: 12.9.7
+cuda-pathfinder: 1.6.0
+NVCC: release 12.8, V12.8.93
+FLASHINFER_CUDA_ARCH_LIST: 12.0a
+pip check: No broken requirements found
+```
+
+未设置 arch list 时，FlashInfer 对 SM 12.x 报告 `SM 12.x requires CUDA >= 12.9`；显式设置 `12.0a` 后，CUDA 12.8 路径可编译并运行。commit `570b2cf` 上首次 targeted correctness（含 JIT）为 `2 passed in 162.02s`，随后 focused 为 `90 passed, 24 subtests passed in 8.69s`。本次结果证明安装、SM120a JIT 与三 backend parity 路径可用；新增 environment/schema gate 后仍需在新 commit 上重跑 focused、quick、formal 和 full，才能形成 canonical R5 证据。
 
 ### 机器
 

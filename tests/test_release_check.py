@@ -2,9 +2,21 @@
 
 from pathlib import Path
 
+from benchmarks.run_flashinfer_baseline import (
+    EXPECTED_CUDA_BINDINGS_VERSION,
+    EXPECTED_CUDA_PATHFINDER_VERSION,
+    EXPECTED_CUDA_PYTHON_VERSION,
+    EXPECTED_CUDA_TOOLKIT_VERSION,
+    EXPECTED_FLASHINFER_VERSION,
+    EXPECTED_NINJA_VERSION,
+    EXPECTED_TORCH_VERSION,
+    EXPECTED_TRITON_VERSION,
+)
 from scripts.check_release import (
     RELEASE_EVIDENCE_PATHS,
     REQUIRED_PATHS,
+    R5_CONSTRAINT_PINS,
+    _read_constraint_pins,
     _read_package_version,
     _read_project_version,
     validate_release_tree,
@@ -26,6 +38,12 @@ def _release_tree(tmp_path, project_version="0.1.0", package_version="0.1.0"):
     (tmp_path / "docs/reproducibility.md").write_text(
         "# Reproducibility\n\n## Release gate status\n"
     )
+    (tmp_path / "constraints/r5-cu128.txt").write_text(
+        "".join(
+            f"{name}=={version}\n"
+            for name, version in R5_CONSTRAINT_PINS.items()
+        )
+    )
     return tmp_path
 
 
@@ -33,6 +51,9 @@ def test_release_version_readers_support_pyproject_and_package(tmp_path):
     root = _release_tree(tmp_path)
     assert _read_project_version(root / "pyproject.toml") == "0.1.0"
     assert _read_package_version(root / "flashdec/__init__.py") == "0.1.0"
+    assert _read_constraint_pins(root / "constraints/r5-cu128.txt") == (
+        R5_CONSTRAINT_PINS
+    )
 
 
 def test_validate_release_tree_accepts_complete_candidate(tmp_path):
@@ -48,6 +69,30 @@ def test_validate_release_tree_reports_missing_artifact_and_version_mismatch(tmp
     problems = validate_release_tree(root)
     assert "missing required artifact: benchmarks/profile_decode_engine.py" in problems
     assert "version mismatch: pyproject=0.1.0, package=0.0.0" in problems
+
+
+def test_validate_release_tree_rejects_r5_constraint_drift(tmp_path):
+    root = _release_tree(tmp_path)
+    constraints = root / "constraints/r5-cu128.txt"
+    constraints.write_text(constraints.read_text().replace("3.6.0", "3.7.1"))
+
+    problems = validate_release_tree(root)
+    assert (
+        "R5 constraint mismatch: triton='3.7.1', expected '3.6.0'" in problems
+    )
+
+
+def test_r5_release_constraints_match_runner_environment_contract():
+    assert R5_CONSTRAINT_PINS == {
+        "torch": EXPECTED_TORCH_VERSION,
+        "triton": EXPECTED_TRITON_VERSION,
+        "flashinfer-python": EXPECTED_FLASHINFER_VERSION,
+        "cuda-toolkit": EXPECTED_CUDA_TOOLKIT_VERSION,
+        "cuda-python": EXPECTED_CUDA_PYTHON_VERSION,
+        "cuda-bindings": EXPECTED_CUDA_BINDINGS_VERSION,
+        "cuda-pathfinder": EXPECTED_CUDA_PATHFINDER_VERSION,
+        "ninja": EXPECTED_NINJA_VERSION,
+    }
 
 
 def test_validate_release_tree_requires_final_evidence_only_when_requested(tmp_path):
@@ -123,6 +168,7 @@ def test_release_tree_requires_r4c_implementation_and_formal_evidence():
 
 def test_release_tree_requires_r5_baseline_implementation_but_not_pending_evidence():
     for relative in (
+        "constraints/r5-cu128.txt",
         "docs/design_flashinfer_baseline.md",
         "docs/notes/from_paged_attention_to_decode_runtime.md",
         "benchmarks/run_flashinfer_baseline.py",

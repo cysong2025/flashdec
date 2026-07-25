@@ -112,6 +112,8 @@ export MAX_JOBS=1
 python -m pytest -q -ra
 ```
 
+R5 FlashInfer 正式基线不能使用上述通用安装命令直接解析依赖；它要求独立 Python 3.12 virtualenv、`constraints/r5-cu128.txt` 和 `FLASHINFER_CUDA_ARCH_LIST=12.0a`。完整的分阶段安装、环境探针与结果导出命令见[复现指南的 R5 章节](docs/reproducibility.md#r5-flashinfer-有限公开基线证据)。
+
 完整的分层验证、正式 benchmark 和结果导出命令见[复现指南](docs/reproducibility.md)。
 
 ## API 示例

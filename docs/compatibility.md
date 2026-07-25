@@ -61,15 +61,16 @@
 - block size quick/full sweep 已完成，暂未做 block size autotune。
 - dim-major layout `[num_blocks, num_kv_heads, head_dim, block_size]` 已通过 RTX 5070 correctness、quick 和 full benchmark；full p50 几何平均约慢 31%，不是默认 runtime layout，也不做自动 layout dispatch。
 - `num_stages=default/1/2/3/4` full sweep 已完成，最佳候选仅约快 0.39%，因此不修改默认 staging。
-- R5 已实现与 `flashinfer-python==0.6.15.post1` 的有限 kernel-only 对比，RTX 5070 正式矩阵尚待执行；vLLM/TensorRT-LLM 完整 runtime 不与当前 FlashDec kernel-only timing 直接比较。
+- R5 已实现与 `flashinfer-python==0.6.15.post1` 的有限 kernel-only 对比；Torch `2.11.0+cu128`、Triton `3.6.0`、CUDA Toolkit `12.8.1` 与 SM120a JIT 已在 RTX 5070 验证，正式矩阵尚待执行。vLLM/TensorRT-LLM 完整 runtime 不与当前 FlashDec kernel-only timing 直接比较。
 
 ## R5 FlashInfer Baseline
 
 - 外部依赖是可选 `baseline` extra，不进入 FlashDec 核心 runtime dependency。
+- R5 canonical environment 使用 `constraints/r5-cu128.txt`，并要求在 FlashInfer import/JIT 前设置 `CUDA_HOME=/usr/local/cuda-12.8` 与 `FLASHINFER_CUDA_ARCH_LIST=12.0a`；runner/summary 会验证 CUDA_HOME realpath、NVCC `12.8.93` 并拒绝版本或字段漂移。
 - 共同范围仅为 batch paged-decode attention：FP16/BF16、GQA `32/8` heads、head dim 128、page size 32、无 attention 内部 RoPE/ALiBi。
 - FlashDec `[page, head, token, dim]` 的 `token_major` physical tensor 对应 FlashInfer `HND`；两条路径直接共用 K/V tensor，不在计时区间做 permute/copy。
 - FlashInfer 固定 `backend="fa2"`，分别报告 `use_tensor_cores=False/True`；不使用运行后选择的单一“最佳”外部数字。
-- strict evidence 固定 formal `3/10/50` sampling 和每个 FlashInfer wrapper 128 MiB workspace，绑定 runner command，要求启动时 Git worktree clean，并验证 normalized tolerance ratio 不超过 1；逻辑 workload GB/s 是共同 payload proxy，不是 DRAM traffic 估计。
+- strict evidence 固定 cu128 dependency stack、formal `3/10/50` sampling 和每个 FlashInfer wrapper 128 MiB workspace，绑定 runner command，要求启动时 Git worktree clean，并验证 normalized tolerance ratio 不超过 1；逻辑 workload GB/s 是共同 payload proxy，不是 DRAM traffic 估计。
 - 不可比范围包括 FlashInfer planning/JIT/workspace lifecycle、FlashDec allocator/scheduler/transaction、模型 forward、sampling、CUDA Graph 和服务吞吐。
 
 ## RoPE + Paged KV Append Reference

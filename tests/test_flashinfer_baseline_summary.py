@@ -13,7 +13,13 @@ from benchmarks.run_flashinfer_baseline import (
     BACKENDS,
     DEFAULT_CASES,
     DTYPES,
+    EXPECTED_CUDA_BINDINGS_VERSION,
+    EXPECTED_CUDA_PATHFINDER_VERSION,
+    EXPECTED_CUDA_PYTHON_VERSION,
+    EXPECTED_CUDA_TOOLKIT_VERSION,
     EXPECTED_FLASHINFER_VERSION,
+    EXPECTED_FLASHINFER_CUDA_ARCH_LIST,
+    EXPECTED_NINJA_VERSION,
     FORMAL_REPEATS,
     FORMAL_WARMUP,
     QUICK_REPEATS,
@@ -75,6 +81,16 @@ def _row(
             "torch": "2.11.0+cu128",
             "triton": "3.6.0",
             "cuda": "12.8",
+            "cuda_toolkit": EXPECTED_CUDA_TOOLKIT_VERSION,
+            "cuda_python": EXPECTED_CUDA_PYTHON_VERSION,
+            "cuda_bindings": EXPECTED_CUDA_BINDINGS_VERSION,
+            "cuda_pathfinder": EXPECTED_CUDA_PATHFINDER_VERSION,
+            "ninja": EXPECTED_NINJA_VERSION,
+            "cuda_home": "/usr/local/cuda-12.8",
+            "cuda_home_realpath": "/usr/local/cuda-12.8",
+            "nvcc_release": "12.8",
+            "nvcc_version": "12.8.93",
+            "flashinfer_cuda_arch_list": EXPECTED_FLASHINFER_CUDA_ARCH_LIST,
             "git_commit": "abc1234",
             "git_worktree_clean": "True",
             "command": (
@@ -259,6 +275,9 @@ class FlashInferBaselineSummaryTests(unittest.TestCase):
         markdown = render_markdown("results.csv", rows, aggregates)
         self.assertIn("Rows: 72; trials: 3", markdown)
         self.assertIn(f"`{EXPECTED_FLASHINFER_VERSION}`", markdown)
+        self.assertIn("FlashInfer CUDA arch list: `12.0a`", markdown)
+        self.assertIn("12.8.1 / 12.9.1 / 12.9.7 / 1.6.0", markdown)
+        self.assertIn("NVCC: release 12.8 / V12.8.93", markdown)
         self.assertIn("`HND`", markdown)
         self.assertIn("`token_major`", markdown)
         self.assertIn("FlashDec/external", markdown)
@@ -288,6 +307,12 @@ class FlashInferBaselineSummaryTests(unittest.TestCase):
     def test_rejects_matrix_global_version_shape_or_layout_drift(self):
         mutations = (
             (0, "torch", "old", "global field torch"),
+            (None, "python", "3.13.0", "python must be"),
+            (None, "cuda_toolkit", "13.0.3.0", "cuda_toolkit"),
+            (None, "flashinfer_cuda_arch_list", "12.0", "arch_list"),
+            (None, "cuda_home", "/usr/local/cuda-13.0", "cuda_home"),
+            (None, "cuda_home_realpath", "/opt/cuda-13.0", "realpath"),
+            (None, "nvcc_version", "12.9.86", "nvcc_version"),
             (None, "flashinfer_version", "0.6.14", "flashinfer_version"),
             (None, "flashinfer_workspace_mib", "64", "workspace"),
             (None, "git_worktree_clean", "False", "git_worktree_clean"),

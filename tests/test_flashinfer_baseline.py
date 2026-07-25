@@ -1,11 +1,12 @@
 """CUDA correctness coverage for the optional R5 FlashInfer baseline."""
 
+from importlib import import_module, util
+
 import pytest
 
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("triton")
-flashinfer = pytest.importorskip("flashinfer")
 
 from benchmarks.run_flashinfer_baseline import (
     CASES,
@@ -16,13 +17,22 @@ from benchmarks.run_flashinfer_baseline import (
     _make_flashinfer_wrapper,
     _make_inputs,
     _validate_outputs,
+    _validate_r5_environment,
 )
 
 
-pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available(),
-    reason="R5 FlashInfer baseline requires CUDA",
-)
+if util.find_spec("flashinfer") is None:
+    pytest.skip("could not import 'flashinfer'", allow_module_level=True)
+if not torch.cuda.is_available():
+    pytest.skip("R5 FlashInfer baseline requires CUDA", allow_module_level=True)
+try:
+    _validate_r5_environment(torch)
+except RuntimeError as exc:
+    pytest.fail(str(exc), pytrace=False)
+try:
+    flashinfer = import_module("flashinfer")
+except Exception as exc:
+    pytest.fail(f"installed flashinfer failed to import: {exc}", pytrace=False)
 
 
 @pytest.mark.parametrize("dtype_name", ["float16", "bfloat16"])

@@ -15,6 +15,7 @@ REQUIRED_PATHS = (
     "CONTRIBUTING.md",
     ".github/workflows/quality.yml",
     "pyproject.toml",
+    "constraints/r5-cu128.txt",
     "flashdec/__init__.py",
     "flashdec/cache.py",
     "flashdec/engine.py",
@@ -92,6 +93,17 @@ RELEASE_EVIDENCE_PATHS = (
     "docs/performance_report.md",
 )
 
+R5_CONSTRAINT_PINS = {
+    "torch": "2.11.0+cu128",
+    "triton": "3.6.0",
+    "flashinfer-python": "0.6.15.post1",
+    "cuda-toolkit": "12.8.1",
+    "cuda-python": "12.9.1",
+    "cuda-bindings": "12.9.7",
+    "cuda-pathfinder": "1.6.0",
+    "ninja": "1.13.0",
+}
+
 
 def _read_project_version(path):
     text = Path(path).read_text()
@@ -123,6 +135,28 @@ def _read_package_version(path):
                 break
             return value
     raise ValueError("flashdec/__init__.py does not define a string __version__")
+
+
+def _read_constraint_pins(path):
+    pins = {}
+    lines = Path(path).read_text().splitlines()
+    for line_number, raw_line in enumerate(lines, start=1):
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.count("==") != 1:
+            raise ValueError(
+                f"R5 constraints line {line_number} must be an exact == pin"
+            )
+        name, version = (part.strip() for part in line.split("==", 1))
+        if not name or not version:
+            raise ValueError(
+                f"R5 constraints line {line_number} must include name and version"
+            )
+        if name in pins:
+            raise ValueError(f"duplicate R5 constraint: {name}")
+        pins[name] = version
+    return pins
 
 
 def validate_release_tree(root, require_evidence=False):
@@ -157,6 +191,22 @@ def validate_release_tree(root, require_evidence=False):
     reproducibility = root / "docs/reproducibility.md"
     if reproducibility.is_file() and "## Release gate status" not in reproducibility.read_text():
         problems.append("docs/reproducibility.md must contain Release gate status")
+    constraints = root / "constraints/r5-cu128.txt"
+    if constraints.is_file():
+        try:
+            pins = _read_constraint_pins(constraints)
+        except (OSError, ValueError) as exc:
+            problems.append(str(exc))
+        else:
+            for name, expected in R5_CONSTRAINT_PINS.items():
+                actual = pins.get(name)
+                if actual != expected:
+                    problems.append(
+                        f"R5 constraint mismatch: {name}={actual!r}, expected {expected!r}"
+                    )
+            unexpected = sorted(set(pins) - set(R5_CONSTRAINT_PINS))
+            if unexpected:
+                problems.append(f"unexpected R5 constraints: {unexpected}")
     return problems
 
 

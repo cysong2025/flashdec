@@ -14,18 +14,47 @@ R5 选择一个版本固定、可公开安装的 FlashInfer paged decode 实现�
 
 ## 2. 依赖与公开 API 冻结
 
-FlashInfer 依赖固定为：
+R5 canonical evidence 使用独立的 Linux/Python 3.12 virtualenv，并通过
+`constraints/r5-cu128.txt` 固定已经在 RTX 5070 验证可安装的核心栈：
 
 ```text
+torch==2.11.0+cu128
+triton==3.6.0
 flashinfer-python==0.6.15.post1
+cuda-toolkit==12.8.1
+cuda-python==12.9.1
+cuda-bindings==12.9.7
+cuda-pathfinder==1.6.0
+ninja==1.13.0
 ```
 
-只使用该版本公开导出的 `BatchDecodeWithPagedKVCacheWrapper`，不复制 FlashInfer 内部 kernel，不调用非公开符号，不修改第三方源码。版本与支持环境以 [FlashInfer 安装文档](https://docs.flashinfer.ai/installation.html) 和 [PyPI 包记录](https://pypi.org/project/flashinfer-python/) 为准，wrapper 语义以 [BatchDecodeWithPagedKVCacheWrapper API](https://docs.flashinfer.ai/api/attention.html#flashinfer.decode.BatchDecodeWithPagedKVCacheWrapper) 为准。项目通过 `baseline` extra 精确锁定 `0.6.15.post1`：
+只使用该版本公开导出的 `BatchDecodeWithPagedKVCacheWrapper`，不复制 FlashInfer 内部 kernel，不调用非公开符号，不修改第三方源码。版本与支持环境以 [FlashInfer 安装文档](https://docs.flashinfer.ai/installation.html) 和 [PyPI 包记录](https://pypi.org/project/flashinfer-python/) 为准，wrapper 语义以 [BatchDecodeWithPagedKVCacheWrapper API](https://docs.flashinfer.ai/api/attention.html#flashinfer.decode.BatchDecodeWithPagedKVCacheWrapper) 为准。`baseline` extra 继续固定 FlashInfer 包；R5 constraints 只约束正式 GPU 证据环境，不把 CUDA wheel 版本写入 FlashDec 的通用 package metadata。
+
+必须先从 PyTorch cu128 index 安装 torch/triton，再在 constraints 下解析 FlashInfer，最后以 `--no-deps` 安装本项目：
 
 ```bash
-python -m pip install -e ".[dev,cuda-extension,baseline]"
-python -c "import flashinfer; from importlib.metadata import version; print(version('flashinfer-python'))"
+python -m pip install \
+  -c constraints/r5-cu128.txt \
+  "torch==2.11.0+cu128" "triton==3.6.0" \
+  --index-url https://download.pytorch.org/whl/cu128 \
+  --extra-index-url https://mirrors.aliyun.com/pypi/simple/
+
+python -m pip install \
+  -c constraints/r5-cu128.txt \
+  "flashinfer-python==0.6.15.post1" \
+  "cuda-python==12.9.1" \
+  "cuda-bindings==12.9.7" \
+  "cuda-pathfinder==1.6.0" \
+  "cuda-toolkit==12.8.1" \
+  "ninja==1.13.0" pytest \
+  --index-url https://mirrors.aliyun.com/pypi/simple/ \
+  --extra-index-url https://download.pytorch.org/whl/cu128
+
+python -m pip install --no-build-isolation --no-deps -e .
+python -m pip check
 ```
+
+不得在已有 cu128 环境中无 constraints 地直接执行 `pip install -e ".[baseline]"`；FlashInfer 的未限定 torch 依赖可能让 resolver 升级到 Torch 2.13/CUDA 13。安装过程中出现的 `nvidia-cuda-nvdisasm==13.3.73` 是 CUTLASS DSL 的反汇编工具依赖，不代表 PyTorch runtime 或 Toolkit 已切换到 CUDA 13。
 
 FlashInfer 的 `plan()`、JIT 编译与 workspace 初始化在计时前完成。CUDA-core 和 Tensor-core wrapper 各自持有 128 MiB workspace；一个 case/backend/dtype 的 wrapper 在 warmup 和正式 repeat 之间复用，不把每次 token 前的 plan 包装成 decode kernel 成本。
 
@@ -109,16 +138,34 @@ formal strict summary 默认且强制 `trials=3, warmup=10, repeats=50`；quick 
 下列命令使用独立结果目录，同时保留原始 log、CSV 和 summary：
 
 ```bash
+set -o pipefail
+
 export RESULT_DIR="$HOME/flashdec_results/r5_$(git rev-parse --short HEAD)_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$RESULT_DIR"
 git status --short
 
-python -m pip install -e ".[dev,cuda-extension,baseline]" \
-  2>&1 | tee "$RESULT_DIR/install_flashinfer.log"
+export CUDA_HOME=/usr/local/cuda-12.8
+export PATH="$CUDA_HOME/bin:$PATH"
+export MAX_JOBS=1
+export FLASHINFER_CUDA_ARCH_LIST="12.0a"
 
-python -c "import flashinfer; from importlib.metadata import version; print(version('flashinfer-python'))" \
-  2>&1 | tee "$RESULT_DIR/flashinfer_version.log"
+python -m pip check \
+  2>&1 | tee "$RESULT_DIR/pip_check.log"
+
+"$CUDA_HOME/bin/nvcc" --version \
+  2>&1 | tee "$RESULT_DIR/nvcc_version.log"
+
+python -c "import os, torch, triton, flashinfer; from importlib.metadata import version; print('arch_list=', os.environ.get('FLASHINFER_CUDA_ARCH_LIST')); print('device=', torch.cuda.get_device_name()); print('capability=', torch.cuda.get_device_capability()); print('torch=', torch.__version__); print('torch_cuda=', torch.version.cuda); print('triton=', triton.__version__); print('flashinfer=', version('flashinfer-python')); print('cuda_toolkit=', version('cuda-toolkit')); print('cuda_python=', version('cuda-python')); print('cuda_bindings=', version('cuda-bindings')); print('cuda_pathfinder=', version('cuda-pathfinder'))" \
+  2>&1 | tee "$RESULT_DIR/flashinfer_sm120a_probe.log"
+
+flashinfer show-config \
+  2>&1 | tee "$RESULT_DIR/flashinfer_show_config.log"
+
+python -m pip freeze --all \
+  > "$RESULT_DIR/pip_freeze.txt"
 ```
+
+RTX 5070 是 SM 12.0。CUDA 12.8 下必须在任何 FlashInfer import/JIT 前显式设置 `FLASHINFER_CUDA_ARCH_LIST=12.0a`；不使用需要 CUDA 12.9 的 `12.0f`。runner 会在 import FlashInfer 前严格检查上述 distributions、`CUDA_HOME` 的绝对路径/realpath、可执行 `nvcc` 的 release `12.8`/version `12.8.93` 和 arch list，并把实际值写入每个 CSV row；strict summary 再拒绝缺字段或漂移。
 
 focused correctness：
 
@@ -196,8 +243,8 @@ R5 有限基线只有在以下条件同时满足时才算完成：
 2. quick 覆盖三个 backend，每个 row 的 `reference_validated`、`cross_backend_validated` 与 `validated_invariants` 全部为 `True`；
 3. formal 恰好包含 72 rows，8 个 case/dtype 分组各含 3 backend x 3 trials；
 4. 所有可比 row 的 seed、`page_table_digest`、shape、seq_lens、page metadata 与 `sm_scale` 对齐；
-5. strict summary 通过矩阵、`3/10/50` 正式采样强度、版本、128 MiB workspace、clean-worktree、归一化 tolerance ratio、correctness 与正值/有限 latency 校验；
-6. canonical summary 绑定带时区的 run timestamp、FlashDec commit、Python/PyTorch/Triton/CUDA、FlashInfer `0.6.15.post1`、GPU、runner command 和计时边界，并展示绝对 p50/p90/p99；
+5. strict summary 通过矩阵、`3/10/50` 正式采样强度、固定 cu128 dependency stack、CUDA Toolkit realpath/NVCC `12.8.93`、`FLASHINFER_CUDA_ARCH_LIST=12.0a`、128 MiB workspace、clean-worktree、归一化 tolerance ratio、correctness 与正值/有限 latency 校验；
+6. canonical summary 绑定带时区的 run timestamp、FlashDec commit、Python/PyTorch/Triton/PyTorch CUDA、CUDA package versions、`CUDA_HOME`、FlashInfer `0.6.15.post1`、arch list、GPU、runner command 和计时边界，并展示绝对 p50/p90/p99；
 7. 结论同时记录胜出、持平、负结果与不可比项，不从单轮 p99 外推生产尾延迟。
 
-当前只冻结了设计、接口和验收口径；RTX 5070 正式性能与最终结论待上板证据补全。
+RTX 5070 已确认上述依赖组合和 `12.0a` JIT 路径可运行，并通过 FlashInfer targeted `2 passed` 与 focused `90 passed, 24 subtests passed`。这些结果来自环境契约固化前的 commit `570b2cf`，只作为安装/JIT 可行性证据；新 schema 的 quick、formal、full 与最终结论仍须在本次提交后的 clean checkout 重新产生。

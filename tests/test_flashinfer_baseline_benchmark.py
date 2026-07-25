@@ -10,7 +10,19 @@ from benchmarks.run_flashinfer_baseline import (
     CASES,
     DEFAULT_CASES,
     DTYPES,
+    EXPECTED_CUDA_BINDINGS_VERSION,
+    EXPECTED_CUDA_PATHFINDER_VERSION,
+    EXPECTED_CUDA_PYTHON_VERSION,
+    EXPECTED_CUDA_TOOLKIT_VERSION,
     EXPECTED_FLASHINFER_VERSION,
+    EXPECTED_FLASHINFER_CUDA_ARCH_LIST,
+    EXPECTED_NINJA_VERSION,
+    EXPECTED_NVCC_RELEASE,
+    EXPECTED_NVCC_VERSION,
+    EXPECTED_PYTHON_MAJOR_MINOR,
+    EXPECTED_TORCH_CUDA_VERSION,
+    EXPECTED_TORCH_VERSION,
+    EXPECTED_TRITON_VERSION,
     FLASHDEC_KV_LAYOUT,
     FLASHINFER_KV_LAYOUT,
     FORMAL_REPEATS,
@@ -24,8 +36,10 @@ from benchmarks.run_flashinfer_baseline import (
     _dtype_order,
     _logical_workload_bytes,
     _page_table_digest,
+    _parse_nvcc_version,
     _selected_cases,
     _selected_dtypes,
+    _validate_r5_environment,
     main,
     parse_args,
 )
@@ -43,6 +57,35 @@ class _FakeTensor:
 
     def tolist(self):
         return list(self._values)
+
+
+class _FakeTorch:
+    __version__ = EXPECTED_TORCH_VERSION
+
+    class version:
+        cuda = EXPECTED_TORCH_CUDA_VERSION
+
+
+def _canonical_environment():
+    environ = {
+        "CUDA_HOME": "/usr/local/cuda-12.8",
+        "FLASHINFER_CUDA_ARCH_LIST": EXPECTED_FLASHINFER_CUDA_ARCH_LIST,
+    }
+    versions = {
+        "triton": EXPECTED_TRITON_VERSION,
+        "cuda-toolkit": EXPECTED_CUDA_TOOLKIT_VERSION,
+        "cuda-python": EXPECTED_CUDA_PYTHON_VERSION,
+        "cuda-bindings": EXPECTED_CUDA_BINDINGS_VERSION,
+        "cuda-pathfinder": EXPECTED_CUDA_PATHFINDER_VERSION,
+        "ninja": EXPECTED_NINJA_VERSION,
+        "flashinfer-python": EXPECTED_FLASHINFER_VERSION,
+    }
+    toolkit = {
+        "cuda_home_realpath": "/usr/local/cuda-12.8",
+        "nvcc_release": EXPECTED_NVCC_RELEASE,
+        "nvcc_version": EXPECTED_NVCC_VERSION,
+    }
+    return environ, versions, toolkit
 
 
 class FlashInferBaselineBenchmarkTests(unittest.TestCase):
@@ -69,8 +112,85 @@ class FlashInferBaselineBenchmarkTests(unittest.TestCase):
 
     def test_layout_and_dependency_version_are_pre_registered(self):
         self.assertEqual(EXPECTED_FLASHINFER_VERSION, "0.6.15.post1")
+        self.assertEqual(EXPECTED_TORCH_VERSION, "2.11.0+cu128")
+        self.assertEqual(EXPECTED_TRITON_VERSION, "3.6.0")
+        self.assertEqual(EXPECTED_TORCH_CUDA_VERSION, "12.8")
+        self.assertEqual(EXPECTED_CUDA_TOOLKIT_VERSION, "12.8.1")
+        self.assertEqual(EXPECTED_CUDA_PYTHON_VERSION, "12.9.1")
+        self.assertEqual(EXPECTED_CUDA_BINDINGS_VERSION, "12.9.7")
+        self.assertEqual(EXPECTED_CUDA_PATHFINDER_VERSION, "1.6.0")
+        self.assertEqual(EXPECTED_NINJA_VERSION, "1.13.0")
+        self.assertEqual(EXPECTED_NVCC_RELEASE, "12.8")
+        self.assertEqual(EXPECTED_NVCC_VERSION, "12.8.93")
+        self.assertEqual(EXPECTED_FLASHINFER_CUDA_ARCH_LIST, "12.0a")
+        self.assertEqual(EXPECTED_PYTHON_MAJOR_MINOR, "3.12")
         self.assertEqual(FLASHDEC_KV_LAYOUT, "token_major")
         self.assertEqual(FLASHINFER_KV_LAYOUT, "HND")
+
+    def test_canonical_r5_environment_is_returned_for_csv_evidence(self):
+        environ, versions, toolkit = _canonical_environment()
+        actual = _validate_r5_environment(
+            _FakeTorch,
+            environ=environ,
+            version_getter=versions.__getitem__,
+            python_version="3.12.3",
+            cuda_probe=lambda _path: toolkit,
+        )
+        self.assertEqual(actual["torch"], "2.11.0+cu128")
+        self.assertEqual(actual["cuda_toolkit"], "12.8.1")
+        self.assertEqual(actual["cuda_home"], "/usr/local/cuda-12.8")
+        self.assertEqual(actual["cuda_home_realpath"], "/usr/local/cuda-12.8")
+        self.assertEqual(actual["nvcc_version"], "12.8.93")
+        self.assertEqual(actual["flashinfer_cuda_arch_list"], "12.0a")
+
+    def test_nvcc_version_parser_requires_release_and_full_version(self):
+        output = "Cuda compilation tools, release 12.8, V12.8.93"
+        self.assertEqual(_parse_nvcc_version(output), ("12.8", "12.8.93"))
+        with self.assertRaisesRegex(RuntimeError, "cannot parse"):
+            _parse_nvcc_version("Cuda compilation tools, unknown")
+
+    def test_r5_environment_rejects_version_arch_or_toolkit_path_drift(self):
+        mutations = (
+            ("environment", "FLASHINFER_CUDA_ARCH_LIST", "", "arch_list"),
+            ("environment", "FLASHINFER_CUDA_ARCH_LIST", "12.0", "arch_list"),
+            ("environment", "CUDA_HOME", "/usr/local/cuda-13.0", "CUDA_HOME"),
+            ("versions", "triton", "3.7.1", "triton"),
+            ("versions", "cuda-toolkit", "13.0.3.0", "cuda_toolkit"),
+            ("toolkit", "nvcc_version", "12.9.86", "nvcc_version"),
+            (
+                "toolkit",
+                "cuda_home_realpath",
+                "/usr/local/cuda-13.0",
+                "realpath",
+            ),
+        )
+        for target, field, value, message in mutations:
+            with self.subTest(field=field, value=value):
+                environ, versions, toolkit = _canonical_environment()
+                selected = {
+                    "environment": environ,
+                    "versions": versions,
+                    "toolkit": toolkit,
+                }[target]
+                selected[field] = value
+                with self.assertRaisesRegex(RuntimeError, message):
+                    _validate_r5_environment(
+                        _FakeTorch,
+                        environ=environ,
+                        version_getter=versions.__getitem__,
+                        python_version="3.12.3",
+                        cuda_probe=lambda _path: toolkit,
+                    )
+
+        environ, versions, toolkit = _canonical_environment()
+        with self.assertRaisesRegex(RuntimeError, "python"):
+            _validate_r5_environment(
+                _FakeTorch,
+                environ=environ,
+                version_getter=versions.__getitem__,
+                python_version="3.13.0",
+                cuda_probe=lambda _path: toolkit,
+            )
 
     def test_trial_orders_rotate_without_mutating_inputs(self):
         cases = tuple(CASES.values())

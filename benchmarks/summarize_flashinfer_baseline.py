@@ -20,7 +20,20 @@ from benchmarks.run_flashinfer_baseline import (
     BLOCK_SIZE,
     DEFAULT_CASES,
     DTYPES,
+    EXPECTED_CUDA_BINDINGS_VERSION,
+    EXPECTED_CUDA_HOME_BASENAME,
+    EXPECTED_CUDA_PATHFINDER_VERSION,
+    EXPECTED_CUDA_PYTHON_VERSION,
+    EXPECTED_CUDA_TOOLKIT_VERSION,
     EXPECTED_FLASHINFER_VERSION,
+    EXPECTED_FLASHINFER_CUDA_ARCH_LIST,
+    EXPECTED_NINJA_VERSION,
+    EXPECTED_NVCC_RELEASE,
+    EXPECTED_NVCC_VERSION,
+    EXPECTED_PYTHON_MAJOR_MINOR,
+    EXPECTED_TORCH_CUDA_VERSION,
+    EXPECTED_TORCH_VERSION,
+    EXPECTED_TRITON_VERSION,
     FLASHDEC_KV_LAYOUT,
     FLASHINFER_BACKEND,
     FLASHINFER_KV_LAYOUT,
@@ -54,6 +67,16 @@ GLOBAL_IDENTITY_FIELDS = (
     "torch",
     "triton",
     "cuda",
+    "cuda_toolkit",
+    "cuda_python",
+    "cuda_bindings",
+    "cuda_pathfinder",
+    "ninja",
+    "cuda_home",
+    "cuda_home_realpath",
+    "nvcc_release",
+    "nvcc_version",
+    "flashinfer_cuda_arch_list",
     "git_commit",
     "git_worktree_clean",
     "command",
@@ -220,6 +243,17 @@ def _validate_global_identity(
     expected_strings = {
         "name": "r5_flashinfer_paged_decode",
         "op": "paged_decode_attention",
+        "torch": EXPECTED_TORCH_VERSION,
+        "triton": EXPECTED_TRITON_VERSION,
+        "cuda": EXPECTED_TORCH_CUDA_VERSION,
+        "cuda_toolkit": EXPECTED_CUDA_TOOLKIT_VERSION,
+        "cuda_python": EXPECTED_CUDA_PYTHON_VERSION,
+        "cuda_bindings": EXPECTED_CUDA_BINDINGS_VERSION,
+        "cuda_pathfinder": EXPECTED_CUDA_PATHFINDER_VERSION,
+        "ninja": EXPECTED_NINJA_VERSION,
+        "nvcc_release": EXPECTED_NVCC_RELEASE,
+        "nvcc_version": EXPECTED_NVCC_VERSION,
+        "flashinfer_cuda_arch_list": EXPECTED_FLASHINFER_CUDA_ARCH_LIST,
         "flashinfer_version": EXPECTED_FLASHINFER_VERSION,
         "expected_flashinfer_version": EXPECTED_FLASHINFER_VERSION,
         "flashinfer_backend": FLASHINFER_BACKEND,
@@ -238,9 +272,8 @@ def _validate_global_identity(
         "date",
         "device",
         "python",
-        "torch",
-        "triton",
-        "cuda",
+        "cuda_home",
+        "cuda_home_realpath",
         "git_commit",
         "command",
     ):
@@ -266,6 +299,16 @@ def _validate_global_identity(
         raise FlashInferBaselineValidationError(
             "command must include --require-clean"
         )
+    if not first["python"].startswith(f"{EXPECTED_PYTHON_MAJOR_MINOR}."):
+        raise FlashInferBaselineValidationError(
+            f"python must be {EXPECTED_PYTHON_MAJOR_MINOR}.x"
+        )
+    for field in ("cuda_home", "cuda_home_realpath"):
+        value = Path(first[field])
+        if not value.is_absolute() or value.name != EXPECTED_CUDA_HOME_BASENAME:
+            raise FlashInferBaselineValidationError(
+                f"{field} must identify the frozen CUDA 12.8 toolkit"
+            )
     expected_integers = {
         "num_q_heads": NUM_Q_HEADS,
         "num_kv_heads": NUM_KV_HEADS,
@@ -725,7 +768,10 @@ def render_markdown(input_path, rows, aggregates):
         f"- Rows: {len(rows)}; trials: {first['trial_count']}.",
         f"- Device: {first['device']}.",
         f"- Run started: {first['date']}.",
-        f"- Python/PyTorch/Triton/CUDA: {first['python']} / {first['torch']} / {first['triton']} / {first['cuda']}.",
+        f"- Python/PyTorch/Triton/PyTorch CUDA: {first['python']} / {first['torch']} / {first['triton']} / {first['cuda']}.",
+        f"- CUDA packages (toolkit/python/bindings/pathfinder): {first['cuda_toolkit']} / {first['cuda_python']} / {first['cuda_bindings']} / {first['cuda_pathfinder']}; Ninja: {first['ninja']}.",
+        f"- CUDA_HOME: `{first['cuda_home']}` (realpath `{first['cuda_home_realpath']}`); NVCC: release {first['nvcc_release']} / V{first['nvcc_version']}.",
+        f"- FlashInfer CUDA arch list: `{first['flashinfer_cuda_arch_list']}`.",
         f"- FlashInfer: `{first['flashinfer_version']}` (fixed expected version `{EXPECTED_FLASHINFER_VERSION}`).",
         f"- FlashInfer workspace: {first['flashinfer_workspace_mib']} MiB per wrapper.",
         f"- Git commit: `{first['git_commit']}`.",

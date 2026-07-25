@@ -30,6 +30,15 @@ git rev-parse --short HEAD
 
 正式 GPU 结果必须记录 Python、PyTorch、Triton、CUDA、NVCC、GPU 和 Git commit。
 
+R5 FlashInfer 证据另用独立 Python 3.12 virtualenv 和 `constraints/r5-cu128.txt`；在任何 FlashInfer import/JIT 前设置并检查：
+
+```bash
+export FLASHINFER_CUDA_ARCH_LIST="12.0a"
+python -m pip check
+```
+
+R5 runner 必须看到 Torch `2.11.0+cu128`、Triton `3.6.0`、PyTorch CUDA 12.8、CUDA Toolkit `12.8.1`、`CUDA_HOME` 及其 realpath 的末级目录 `cuda-12.8`、NVCC `12.8.93` 和 arch list `12.0a`，否则正式 benchmark 不开始。
+
 ## 3. 分层验证
 
 Dependency-free 检查：
@@ -66,6 +75,7 @@ CUDA 可用的正式回归不应因缺少 `CUDA_HOME` 或 NVCC 跳过 native tes
 - torch/fused 对照使用同一 shape、输入轨迹和 backend-order 轮转。
 - 输入生成、JIT、profiler 与错误路径 probe 不混入正式 latency。
 - CSV/log 作为本地原始证据；公开仓库只提交审核后的 Markdown summary。
+- R5 额外保存 `pip freeze --all`、`flashinfer show-config` 和 SM120a probe；不接受缺失固定环境字段的旧 schema CSV。
 
 ## 5. 提交前检查
 

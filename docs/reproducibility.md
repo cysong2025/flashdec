@@ -405,16 +405,69 @@ python scripts/check_release.py --require-evidence
 
 ## R5 FlashInfer 有限公开基线证据
 
-R5 依赖精确固定为 `flashinfer-python==0.6.15.post1`，只使用官方 `BatchDecodeWithPagedKVCacheWrapper`、`backend="fa2"` 和 `use_tensor_cores=False/True` 两条路径。目标 RTX 5070 virtualenv 通过 baseline extra 安装：
+R5 只使用 `flashinfer-python==0.6.15.post1` 的官方 `BatchDecodeWithPagedKVCacheWrapper`、`backend="fa2"` 和 `use_tensor_cores=False/True` 两条路径。正式证据环境固定为 Python 3.12、Torch `2.11.0+cu128`、Triton `3.6.0`、CUDA Toolkit `12.8.1`，完整核心 pin 见 `constraints/r5-cu128.txt`。必须使用独立 virtualenv，不能在已有环境中用无 constraints 的一条 `.[baseline]` 命令让 pip 自由升级 torch。
 
 ```bash
+set -o pipefail
+
+export R5_VENV="$HOME/.virtualenvs/flashdec-r5-$(date +%Y%m%d_%H%M%S)"
+python3.12 -m venv "$R5_VENV"
+source "$R5_VENV/bin/activate"
+
 export RESULT_DIR="$HOME/flashdec_results/r5_$(git rev-parse --short HEAD)_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$RESULT_DIR"
 git status --short
 
-python -m pip install -e ".[dev,cuda-extension,baseline]"
-python -c "import flashinfer; from importlib.metadata import version; print(version('flashinfer-python'))"
+python -m pip install --upgrade pip "setuptools>=68,<82" wheel \
+  --index-url https://mirrors.aliyun.com/pypi/simple/ \
+  --timeout 600 --retries 30 --progress-bar off \
+  2>&1 | tee "$RESULT_DIR/install_build_tools.log"
+
+python -m pip install \
+  -c constraints/r5-cu128.txt \
+  "torch==2.11.0+cu128" "triton==3.6.0" \
+  --index-url https://download.pytorch.org/whl/cu128 \
+  --extra-index-url https://mirrors.aliyun.com/pypi/simple/ \
+  --timeout 600 --retries 30 --progress-bar off \
+  2>&1 | tee "$RESULT_DIR/install_torch_cu128.log"
+
+python -m pip install \
+  -c constraints/r5-cu128.txt \
+  "flashinfer-python==0.6.15.post1" \
+  "cuda-python==12.9.1" \
+  "cuda-bindings==12.9.7" \
+  "cuda-pathfinder==1.6.0" \
+  "cuda-toolkit==12.8.1" \
+  "ninja==1.13.0" pytest \
+  --index-url https://mirrors.aliyun.com/pypi/simple/ \
+  --extra-index-url https://download.pytorch.org/whl/cu128 \
+  --timeout 600 --retries 30 --progress-bar off \
+  2>&1 | tee "$RESULT_DIR/install_flashinfer_pinned.log"
+
+python -m pip install --no-build-isolation --no-deps -e . \
+  2>&1 | tee "$RESULT_DIR/install_flashdec_editable.log"
+
+export CUDA_HOME=/usr/local/cuda-12.8
+export PATH="$CUDA_HOME/bin:$PATH"
+export MAX_JOBS=1
+export FLASHINFER_CUDA_ARCH_LIST="12.0a"
+
+python -m pip check \
+  2>&1 | tee "$RESULT_DIR/pip_check.log"
+
+"$CUDA_HOME/bin/nvcc" --version \
+  2>&1 | tee "$RESULT_DIR/nvcc_version.log"
+
+python -c "import os, torch, triton, flashinfer; from importlib.metadata import version; print('arch_list=', os.environ.get('FLASHINFER_CUDA_ARCH_LIST')); print('device=', torch.cuda.get_device_name()); print('capability=', torch.cuda.get_device_capability()); print('torch=', torch.__version__); print('torch_cuda=', torch.version.cuda); print('triton=', triton.__version__); print('flashinfer=', version('flashinfer-python')); print('cuda_toolkit=', version('cuda-toolkit')); print('cuda_python=', version('cuda-python')); print('cuda_bindings=', version('cuda-bindings')); print('cuda_pathfinder=', version('cuda-pathfinder'))" \
+  2>&1 | tee "$RESULT_DIR/flashinfer_sm120a_probe.log"
+
+flashinfer show-config \
+  2>&1 | tee "$RESULT_DIR/flashinfer_show_config.log"
+
+python -m pip freeze --all > "$RESULT_DIR/pip_freeze.txt"
 ```
+
+RTX 5070 的 compute capability 是 `(12, 0)`。在 CUDA 12.8 下，FlashInfer 必须在首次 import/JIT 前显式使用 `FLASHINFER_CUDA_ARCH_LIST=12.0a`；runner 会在 FlashInfer import 前 fail closed，strict summary 也会验证 CSV 记录的完整依赖版本、`CUDA_HOME`/realpath、NVCC release `12.8`/version `12.8.93` 和 arch list。传递安装中的 `nvidia-cuda-nvdisasm==13.3.73` 只是 CUTLASS DSL 工具依赖，不表示 PyTorch runtime 或 Toolkit 升级到 CUDA 13。
 
 先运行 dependency-free 契约、既有 paged decode 回归和 optional CUDA/FlashInfer correctness：
 
@@ -471,14 +524,14 @@ python benchmarks/summarize_flashinfer_baseline.py \
 
 正式 CSV 必须恰好为 `4 cases x 2 dtypes x 3 backends x 3 trials = 72 rows`。small/medium/large/large_batch 都是 uniform fixed context，不解释为变长 workload 或 context 上界。三个 backend 共用 Q/K/V、page table、`seq_lens`、`sm_scale` 和 seed；FlashDec token-major `[page, head, token, dim]` 对应 FlashInfer `HND`。CUDA event 只计 `run`/kernel dispatch，排除 input construction、reference validation、FlashInfer plan/JIT 和 workspace/metadata 构建。
 
-summary 用 `FlashDec p50 / external p50` 和 `external TPS / FlashDec TPS` 报告描述性比值；大于 1 表示对应 FlashInfer backend 占优，并另表展示绝对 p90/p99 的跨 trial median/range。`logical_workload_gbps_p50` 是每个 Q/K/V/output 元素只计一次的共同 workload proxy，不是任何 backend 的实测 DRAM bandwidth。runner 的 evidence 模式要求 clean worktree 并记录完整命令；strict summary 固定验证 quick `1/2/10` 或 formal `3/10/50` 采样强度、每个 FlashInfer wrapper 使用 128 MiB workspace，以及 reference/cross-backend normalized tolerance ratio 不超过 1。R5 不设性能 pass/fail 或胜者门。正式 summary 产生后运行：
+summary 用 `FlashDec p50 / external p50` 和 `external TPS / FlashDec TPS` 报告描述性比值；大于 1 表示对应 FlashInfer backend 占优，并另表展示绝对 p90/p99 的跨 trial median/range。`logical_workload_gbps_p50` 是每个 Q/K/V/output 元素只计一次的共同 workload proxy，不是任何 backend 的实测 DRAM bandwidth。runner 的 evidence 模式要求 clean worktree，记录完整命令和固定 cu128 环境；strict summary 验证 `12.0a`、quick `1/2/10` 或 formal `3/10/50` 采样强度、每个 FlashInfer wrapper 的 128 MiB workspace，以及 reference/cross-backend normalized tolerance ratio 不超过 1。R5 不设性能 pass/fail 或胜者门。正式 summary 产生后运行：
 
 ```bash
 python -m pytest -q -ra
 python scripts/check_release.py --require-clean --require-evidence
 ```
 
-结果先写入仓库外的 `$RESULT_DIR`，避免未审核的 formal summary 让 clean-worktree gate 自相矛盾。RTX 结果回传审核后，再把精简 formal summary 复制到 `benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md`、加入 release evidence、提交并在干净 checkout 重跑最终 gate。当前 RTX 5070 quick/formal/full 证据均为 pending；不提前提交 canonical 性能数字。更完整的公平性与不可比边界见 [R5 FlashInfer 基线设计](design_flashinfer_baseline.md)。
+结果先写入仓库外的 `$RESULT_DIR`，避免未审核的 formal summary 让 clean-worktree gate 自相矛盾。RTX 结果回传审核后，再把精简 formal summary 复制到 `benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md`、加入 release evidence、提交并在干净 checkout 重跑最终 gate。commit `570b2cf` 已确认 `12.0a` 环境探针、targeted `2 passed` 与 focused `90 passed, 24 subtests passed`；由于本次提交新增了 fail-closed environment/schema 字段，quick/formal/full 与最终 focused 必须在新 commit 上重跑，不提前提交 canonical 性能数字。更完整的公平性与不可比边界见 [R5 FlashInfer 基线设计](design_flashinfer_baseline.md)。
 
 ## 结果文件与提交规则
 
@@ -538,7 +591,7 @@ python scripts/check_release.py --require-clean
 | R4-A trusted transaction | 已完成 | commit `4018449` 的 focused/full correctness、160-row/80-pair RTX 五轮矩阵与 [canonical strict summary](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)；16/16 p50 分组稳定胜出，p99 保留 7/16 穿 1 的限制 |
 | R4-B persistent metadata | 已评估并回滚 | commit `8047a9c` 的 correctness 与 [160-row/80-pair 正式负结果](../benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)；overall p50 `1.2493x`，但仅 13/16 分组稳定胜出，未通过 keep gate |
 | R4-C integrated workload | 已完成 | commit `6912894` 的 focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`、FP16 quick 与 [24-row/3-trial canonical summary](../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)；digest/rollback/prefix/reuse/cleanup 全部通过 |
-| R5 FlashInfer 有限基线 | 待 RTX 5070 | runner、strict summarizer、correctness 与公平性契约已实现；精确版本安装、focused/full、quick 与 72-row/3-trial canonical evidence 待上板 |
+| R5 FlashInfer 有限基线 | 进行中 | commit `570b2cf` 已确认精确依赖安装、SM120a JIT、targeted `2 passed` 与 pre-schema focused `90 passed, 24 subtests passed`；environment/schema gate 已补强，post-schema focused、quick、full 与 72-row/3-trial canonical evidence 待执行 |
 | Clean WSL editable install | 暂停 | 仓库继续 private；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

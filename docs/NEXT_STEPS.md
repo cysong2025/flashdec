@@ -81,11 +81,11 @@ R4 继续保持冻结，不重新开启 R4-B 或 kernel 参数 sweep。所有者
 
 ## 当前目标：R5 FlashInfer 有限公开基线
 
-状态：固定 `flashinfer-python==0.6.15.post1`，只比较双方共同支持的 paged-decode attention。runner、strict summary、optional CUDA correctness、dependency-free matrix tests、设计文档和中文技术文章已经实现；RTX 5070 quick/focused/72-row formal/full evidence 尚待执行。
+状态：固定 Torch `2.11.0+cu128`、Triton `3.6.0`、CUDA Toolkit `12.8.1`、FlashInfer `0.6.15.post1` 与 `FLASHINFER_CUDA_ARCH_LIST=12.0a`，只比较双方共同支持的 paged-decode attention。commit `570b2cf` 已在 RTX 5070 通过 targeted `2 passed` 与 focused `90 passed, 24 subtests passed`，确认安装/JIT/parity 可行；随后新增 constraints、runner fail-closed environment gate 与 strict CSV schema，因此需在新 commit 重跑 focused，quick/72-row formal/full 仍待执行。
 
 公平边界固定为同一 Q/K/V、page table、sequence lengths、softmax scale 和 `[page, head, token, dim]` physical layout。FlashDec `token_major` 对应 FlashInfer `HND`；FlashInfer FA2 CUDA-core 与 tensor-core 都预注册并独立报告。`plan()`、JIT、输入构造和 reference validation 均排除在 CUDA-event `run()` timing 外，不把 FlashDec runtime workload 与 FlashInfer kernel-only 数字混在同一张 speedup 表。
 
-正式矩阵为 4 cases × 2 dtypes × 3 backends × 3 trials = 72 rows。R5 没有预设胜负门；strict summary 报告 ratio median `[min,max]` 和所有跨 1 的范围。完整命令见[FlashInfer 基线设计](design_flashinfer_baseline.md)。
+正式矩阵为 4 cases × 2 dtypes × 3 backends × 3 trials = 72 rows。R5 没有预设胜负门；strict summary 报告 ratio median `[min,max]` 和所有跨 1 的范围，并拒绝 Torch/CUDA/FlashInfer/arch-list 漂移。下一步顺序为拉取新 commit → focused → quick + quick summary → formal + formal summary → full/release check；完整命令见[FlashInfer 基线设计](design_flashinfer_baseline.md)。
 
 ## 暂停目标：private 维护与可选 v0.1.0 Release Gate
 
