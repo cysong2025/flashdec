@@ -10,6 +10,7 @@
 - 当前默认路径是 token-major KV、block size 32、2 warps、implicit stages、fused CUDA append、Triton decode、lifetime FIFO + aging scheduler，以及 R4-A materialized trusted transaction。
 - 仓库保持 private `0.0.0` development candidate，不代表已经发布 `v0.1.0`。
 - 项目整理只统一文档、索引、证据入口和结构门禁，不修改 kernel/runtime 行为，也不重新解释历史数据。
+- GitHub landing page、issue forms 和 PR template 已对齐 R1–R5 的 correctness/evidence-first 边界；它们不改变版本、可见性或 release 状态。
 - 所有者已明确暂缓新环境复现；fresh virtualenv、版本升级、公开设置和 tag 均不在本轮范围内。
 
 ## 可交付成果
@@ -50,7 +51,7 @@
 
 - 最新 GPU 证据代码 commit `d7d4feb`：post-schema focused `93 passed, 37 subtests passed`，full `453 passed, 94 subtests passed`，R5 formal 72 rows/3 trials。
 - canonical evidence commit `01d8c7c`：`python scripts/check_release.py --require-clean --require-evidence` 为 `PASS`。
-- 本轮项目整理只变更文档、索引、release artifact coverage 和对应 dependency-free test；documentation/release/compile/diff checks 通过，dependency-free suite 为 `145 passed, 94 subtests passed`，不需要重跑 GPU 性能矩阵。
+- 本轮项目整理只变更文档、GitHub collaboration surface、索引、release artifact coverage 和对应 dependency-free tests；documentation/release/compile/diff/YAML checks 通过，dependency-free suite 为 `147 passed, 94 subtests passed`，不需要重跑 GPU 性能矩阵。
 - 本轮验证结果记录在 [Stage 18 状态](weekly/week_18_status.md)。
 
 ## 暂缓的 release 工作

@@ -35,7 +35,7 @@ docs/environment.md
 python scripts/check_docs.py
 ```
 
-该脚本扫描 README、CHANGELOG、CONTRIBUTING、`docs/`、`benchmarks/` 和 `scripts/` 中的 canonical Markdown 链接，拒绝缺失目标、逃逸出仓库的相对路径，以及与项目实现无关的个人评估措辞；外部 URL 不发起网络请求。`benchmarks/results/` 下由 Git 忽略的 `*_quick_summary.md`、`*_smoke.md` 和 `local_backups/` 不属于交付文档，因此不进入扫描。
+该脚本扫描 README、CHANGELOG、CONTRIBUTING、`docs/`、`benchmarks/`、`scripts/` 和 `.github/` 中的 canonical Markdown 链接，拒绝缺失目标、逃逸出仓库的相对路径，以及与项目实现无关的个人评估措辞；外部 URL 不发起网络请求。`benchmarks/results/` 下由 Git 忽略的 `*_quick_summary.md`、`*_smoke.md` 和 `local_backups/` 不属于交付文档，因此不进入扫描。
 
 发布候选结构检查：
 
@@ -49,7 +49,7 @@ python scripts/check_release.py
 python scripts/check_release.py --require-clean --require-evidence --require-tag
 ```
 
-结构检查同时要求完整 R1 scheduled-workload surface、交付/结果/复现入口、R1–R5 runner/validator/tests，以及 `constraints/r5-cu128.txt` 的预注册 Torch/Triton/FlashInfer/CUDA Python packages/Ninja pins。`--require-evidence` 额外要求 R1–R5 canonical summaries、multi-trial、complete-step profile 与最终 performance summary；candidate 开发阶段可以不启用，正式 tag 必须启用。
+结构检查同时要求 GitHub workflow/issue/PR collaboration surface、完整 R1 scheduled-workload surface、交付/结果/复现入口、R1–R5 runner/validator/tests，以及 `constraints/r5-cu128.txt` 的预注册 Torch/Triton/FlashInfer/CUDA Python packages/Ninja pins。`--require-evidence` 额外要求 R1–R5 canonical summaries、multi-trial、complete-step profile 与最终 performance summary；candidate 开发阶段可以不启用，正式 tag 必须启用。
 
 R0 分阶段验证与 Windows 结果导出：
 

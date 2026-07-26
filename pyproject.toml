@@ -5,11 +5,23 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "flashdec"
 version = "0.0.0"
-description = "A single-GPU LLM decode runtime with paged KV cache, Triton attention, CUDA append, scheduling, and multi-layer transactions."
+description = "Single-GPU LLM decode research prototype with paged KV cache, Triton attention, CUDA append, scheduling, shared prefixes, and multi-layer transactions."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "songchuangye" }]
-keywords = ["llm", "inference", "triton", "cuda", "paged-attention", "kv-cache"]
+keywords = [
+  "llm-inference",
+  "inference-runtime",
+  "gpu-kernels",
+  "pytorch",
+  "triton",
+  "cuda",
+  "paged-attention",
+  "kv-cache",
+  "request-scheduling",
+  "prefix-caching",
+  "systems-research",
+]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -38,6 +50,8 @@ baseline = [
 [project.urls]
 Repository = "https://github.com/cysong2025/flashdec"
 Documentation = "https://github.com/cysong2025/flashdec/tree/main/docs"
+Issues = "https://github.com/cysong2025/flashdec/issues"
+Changelog = "https://github.com/cysong2025/flashdec/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 include = ["flashdec*"]

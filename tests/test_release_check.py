@@ -157,6 +157,17 @@ def test_release_tree_requires_delivery_index_and_complete_r1_surface():
         assert relative in REQUIRED_PATHS
 
 
+def test_release_tree_requires_github_collaboration_surface():
+    for relative in (
+        ".github/workflows/quality.yml",
+        ".github/ISSUE_TEMPLATE/bug_report.yml",
+        ".github/ISSUE_TEMPLATE/change_proposal.yml",
+        ".github/ISSUE_TEMPLATE/config.yml",
+        ".github/pull_request_template.md",
+    ):
+        assert relative in REQUIRED_PATHS
+
+
 def test_release_tree_requires_r4_runner_validator_and_dependency_free_tests():
     for relative in (
         "benchmarks/run_fused_transaction_fast_path.py",

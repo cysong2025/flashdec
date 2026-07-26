@@ -37,6 +37,17 @@ class DocumentationCheckTests(unittest.TestCase):
             self.assertEqual(local_link_problems(root), [])
             self.assertEqual(len(markdown_files(root)), 2)
 
+    def test_scans_github_markdown_templates(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            github = root / ".github"
+            github.mkdir()
+            template = github / "pull_request_template.md"
+            template.write_text("[missing](../docs/missing.md)\n")
+
+            self.assertEqual(markdown_files(root), [template])
+            self.assertEqual(len(local_link_problems(root)), 1)
+
     def test_ignores_local_and_quick_result_markdown(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

@@ -1,4 +1,4 @@
-name: quality
+name: repository checks
 
 on:
   push:

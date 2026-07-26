@@ -32,6 +32,7 @@
 - R5 FlashInfer public baseline：固定 `flashinfer-python==0.6.15.post1`，在相同 Q/K/V、page table、HND physical layout 与 CUDA-event timing 下运行 FlashDec Triton、FlashInfer FA2 CUDA-core/tensor-core；新增 72-row runner、strict summary、optional CUDA correctness 与 dependency-free matrix tests。
 - R5 CUDA 12.8/SM120a 复现护栏：新增 `constraints/r5-cu128.txt`，固定 Torch/Triton/CUDA Python packages/Ninja；runner 在 FlashInfer import/JIT 前验证 `CUDA_HOME` 与 `FLASHINFER_CUDA_ARCH_LIST=12.0a`，CSV/strict summary 记录并拒绝环境漂移。
 - R1–R5 [交付状态](docs/DELIVERY_STATUS.md)与 [benchmark 结果索引](benchmarks/results/README.md)：集中记录能力、canonical evidence、负结果、本地产物边界和暂停的 release 项。
+- GitHub landing page 与协作入口：分层 README、Mermaid runtime 数据流、correctness/regression issue form、scoped change/evidence proposal、PR validation template，以及与完整能力对齐的 package description/keywords/URLs。
 
 ### Changed
 
@@ -41,6 +42,7 @@
 - DecodeEngine workload CSV、multi-trial summary 和 profiler evidence 现在绑定生成时的 Git commit。
 - Release artifact/evidence gate 现在同时要求冻结 kernel 默认配置、R1 Scheduler、R2 Multi-layer、R3 Shared Prefix、R4-A Trusted Transaction、R4-B Persistent Metadata 正式负结果、R4-C Integrated Workload 与 R5 FlashInfer Baseline 的 runner、validator、focused tests 和最终 Markdown summary。
 - Release artifact gate 进一步覆盖完整 R1 scheduled-workload surface、交付/复现/结果索引和当前核心设计文档；Markdown checker 忽略 Git 本就不跟踪的 quick/smoke summaries 与 `local_backups/`，避免本地证据污染 canonical 文档检查。
+- Repository checks 现在扫描 `.github/` Markdown，并要求 workflow、issue forms 与 PR template 存在，防止 GitHub 展示/协作入口与冻结项目边界漂移。
 - R4-A profiler attribution 改用 CPU-only WARMUP→active schedule；active CPU user annotation 提供 inclusive host time，并严格验证 checked/trusted scalar extraction。少记 range/scalar 可用相同 seed、全新 probe 最多重采集三次并记录 attempt count，多记立即失败。paired trial 先完成两条 path 的正式 wall，再运行 attribution/rollback，避免 retry 介入配对计时。未稳定关联的 append/decode device 与 CUDA-activity 字段从 strict schema 删除。
 - R4-B persistent metadata candidate 未通过预注册 16/16 分组稳定性门，生产主线恢复 R4-A/materialized 默认；candidate commit 与正式负结果保留用于追溯，不继续同线微调。
 

@@ -1,0 +1,103 @@
+name: "🧭 Scoped change / evidence proposal"
+description: "Propose a bounded maintenance change or an explicitly approved research extension."
+title: "[Proposal]: "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        FlashDec is in private R1–R5 maintenance. Define the semantic boundary, validation plan, and non-goals before implementation; performance claims require paired evidence and negative-result handling.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - Paged KV Cache / ownership
+        - Scheduler / admission
+        - DecodeEngine / multi-layer transaction
+        - Triton decode kernel
+        - CUDA RoPE / KV append
+        - Benchmark / summary validator
+        - Documentation / CI / packaging
+        - Multiple areas
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Problem and motivation
+      description: What concrete correctness, maintainability, evidence, or explicitly approved research gap does this address?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest implementation or documentation change that resolves the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Semantic boundary and non-goals
+      description: State what changes, what remains authoritative, and what is explicitly out of scope.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: state_impact
+    attributes:
+      label: State or compatibility impact
+      options:
+        - None / documentation only
+        - Cache ownership / lifecycle
+        - Scheduler admission / fairness
+        - Transaction atomicity / rollback
+        - Kernel layout / dtype / shape
+        - Benchmark / evidence schema
+        - Multiple impacts (explain above)
+    validations:
+      required: true
+
+  - type: textarea
+    id: correctness
+    attributes:
+      label: Correctness plan
+      description: Cover reference/parity, error paths, ownership, lifecycle, atomicity, rollback, and compatibility as applicable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence plan
+      description: For performance work include baseline, paired scope, commit/device/environment, shapes/dtypes, seeds, warmup/repeats/trials, timing boundary, ranges, and negative-result handling. Write N/A with a reason for non-performance work.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List objective keep/rollback gates and the exact validation commands expected before merge.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Proposal checklist
+      options:
+        - label: I identified affected frozen defaults, APIs, and invariants.
+          required: true
+        - label: I will update relevant design, compatibility, reproduction, and evidence documentation.
+          required: true
+        - label: This proposal does not authorize version, tag, visibility, license, or release changes.
+          required: true
+        - label: The scope is maintenance work or an owner-approved new research stage.
+          required: true

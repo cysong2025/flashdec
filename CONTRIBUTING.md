@@ -2,6 +2,15 @@
 
 FlashDec 是一个以 correctness、状态所有权和可复现实验为优先级的研究型 runtime。Issue、bug report、文档修正和范围明确的实现建议都欢迎；较大的功能改动应先说明语义边界和验证方案。R1–R5 已完成并冻结，当前能力、证据与限制以[交付状态](docs/DELIVERY_STATUS.md)为准。
 
+## Issue 与变更提案
+
+请从 [GitHub issue selector](https://github.com/cysong2025/flashdec/issues/new/choose) 选择对应表单：
+
+- correctness、状态 invariant 或回归使用 `Correctness / regression`；
+- 范围明确的维护改动或经所有者批准的新研究使用 `Scoped change / evidence proposal`。
+
+Issue 必须提供 commit、worktree、环境和最小复现；性能提案还必须写清 paired baseline、shape/dtype、seed、warmup/repeat/trial、计时边界和负结果处理。Issue 本身不授权版本、tag、可见性、许可证或 release 变更。
+
 ## 开发环境
 
 推荐 Linux/WSL、Python 3.10+。GPU 路径需要 CUDA-compatible PyTorch、Triton，以及与 PyTorch CUDA build 匹配的 Toolkit。完整环境要求见[复现指南](docs/reproducibility.md)。

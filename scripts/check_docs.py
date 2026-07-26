@@ -11,7 +11,7 @@ from urllib.parse import unquote
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 SKIP_PREFIXES = ("http://", "https://", "mailto:", "data:", "#")
 DEFAULT_ROOT_FILES = ("README.md", "CHANGELOG.md", "CONTRIBUTING.md")
-DEFAULT_DIRECTORIES = ("docs", "benchmarks", "scripts")
+DEFAULT_DIRECTORIES = ("docs", "benchmarks", "scripts", ".github")
 IGNORED_RESULT_DIRECTORIES = ("local_backups",)
 IGNORED_RESULT_SUFFIXES = ("_quick_summary.md", "_smoke.md")
 DISALLOWED_PORTFOLIO_TERMS = (
@@ -24,7 +24,7 @@ DISALLOWED_PORTFOLIO_TERMS = (
 
 
 def markdown_files(root: Path):
-    """Return the Markdown files included in the public documentation tree."""
+    """Return the Markdown files included in the canonical repository docs."""
     files = [root / name for name in DEFAULT_ROOT_FILES if (root / name).is_file()]
     for directory in DEFAULT_DIRECTORIES:
         path = root / directory

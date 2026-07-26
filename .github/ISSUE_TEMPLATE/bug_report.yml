@@ -1,0 +1,106 @@
+name: "🐛 Correctness / regression"
+description: "Report incorrect behavior, a broken invariant, or a regression in the frozen R1–R5 baseline."
+title: "[Bug]: "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping keep FlashDec correct. Please preserve exact commands, environment versions, and state transitions. Do not include credentials, private paths, or unrelated logs.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Paged KV Cache / ownership
+        - Scheduler / admission
+        - DecodeEngine / multi-layer transaction
+        - Triton decode kernel
+        - CUDA RoPE / KV append
+        - Benchmark / summary validator
+        - Documentation / CI / packaging
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: revision
+    attributes:
+      label: Failing revision
+      description: Output of `git rev-parse --short HEAD`.
+      placeholder: b91f489
+    validations:
+      required: true
+
+  - type: dropdown
+    id: worktree
+    attributes:
+      label: Worktree state
+      options:
+        - Clean
+        - Dirty (explain below)
+        - Unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS/WSL, Python, PyTorch, Triton, PyTorch CUDA build, Toolkit/NVCC, and GPU.
+      placeholder: |
+        OS / WSL:
+        Python:
+        PyTorch / CUDA build:
+        Triton:
+        Toolkit / NVCC:
+        GPU:
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide the smallest deterministic command or code path that reproduces the issue.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and relevant output
+      description: Include the first useful error, invariant failure, or incorrect state transition.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior or violated invariant
+      description: State the expected output, ownership rule, atomicity guarantee, or reference result.
+    validations:
+      required: true
+
+  - type: textarea
+    id: regression
+    attributes:
+      label: Regression range or related evidence
+      description: Optional good/bad commits, canonical summary, profiler note, or design section.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Submission checklist
+      options:
+        - label: I read `CONTRIBUTING.md` and `docs/DELIVERY_STATUS.md`.
+          required: true
+        - label: I removed credentials, private paths, and unrelated logs.
+          required: true
+        - label: I tested the current revision or explained why that was not possible.
+          required: true
+        - label: I am not treating first-run JIT compilation latency as steady-state performance.
+          required: true
