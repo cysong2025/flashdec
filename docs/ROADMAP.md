@@ -29,17 +29,19 @@ FlashDec 后续不再通过增加零散算子或重复参数 sweep 扩充内容�
 - R1 Block-aware Scheduler v2 正式 36 行策略矩阵与容量安全/进展保证结论。
 - R2 Multi-layer KV Token Transaction 的 Cache、Engine、fused CUDA correctness，以及 commit `fa0f89a` 的 144 行正式性能矩阵。
 - R3 Shared Prefix Blocks 的 ownership、scheduler integration、64-row RTX confirmation 与容量/admission 结论。
+- R4-A trusted transaction、R4-B 负结果/回滚与 R4-C 24-row integrated workload。
+- R5 固定 FlashInfer `0.6.15.post1` 的 72-row/3-trial RTX kernel-only baseline 与 canonical evidence。
 
-### 当前代码暴露出的缺口
+### 当前仍保留的边界
 
 | 缺口 | 当前证据 | 为什么值得做 |
 | --- | --- | --- |
 | 结果稳定性 | 36 行正式 3-trial 已通过严格配对/invariant 校验 | short-churn p50 跨 1.0，p99 范围很宽，必须继续按场景报告 |
 | 阶段耗时归因 | 12-case profiler 已验证 Engine ranges 与 CUDA event | fusion 主要减少 append/launch/runtime 开销，attention device time 基本不变 |
 | 调度策略 | R1 lifetime commitment 已解决 boundary deadlock，并保留 cancel/greedy 负对照 | 后续重点是表达容量安全与公平性，不宣称所有普通 workload 更快 |
-| 多 layer fused host 同步 | cache-owned transaction 每 layer 仍执行五次 device reduction + `.item()` 索引检查 | allocator 已在 host 证明索引范围；重复同步可能掩盖 kernel 收益，应做同 commit checked/trusted A/B |
-| 系统能力组合 | R1/R2/R3 分别闭合，但正式 workload 尚未同时覆盖 scheduler、multi-layer transaction、shared-prefix hit/miss 与 churn | README 的完整链路需要由统一 trajectory 和 strict validator 证明，而不能只拼接独立实验 |
-| 发布证据 | 缺少 clean-install reproduction、CHANGELOG 和正式 tag | 代码可运行不等于第三方可以复现 |
+| 多 layer fused host 同步 | R4-A 已用 Cache-owned trusted path 移除重复 device reduction + `.item()`；public raw op 继续保留完整检查 | R4-B persistent candidate 未过 16/16 keep gate，主线保持 R4-A/materialized，不继续同线调参 |
+| 系统能力组合 | R4-C 已用统一 trajectory 覆盖 scheduler、multi-layer transaction、shared-prefix hit/miss、rollback 与 churn | 24-row strict evidence 证明组合 correctness；有限 trace 的 p90/p99 不解释为稳态 decode tail |
+| 发布证据 | R1-R5 canonical summaries、CHANGELOG 与 release checker 已齐备；clean-install、版本和 tag 暂停 | 项目整理与 release gate 分离，未经所有者指令不升级 `0.0.0` 或创建 tag |
 
 ## 3. 目标架构
 
@@ -122,7 +124,7 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 ### R0.3 v0.1.0 可复现发布
 
-当前状态：reproducibility guide、release checker、R0 phase orchestrator 与 R1-R3 正式证据均已完成；clean WSL venv、版本升级、公开和 tag 按所有者要求暂停。
+当前状态：reproducibility guide、release checker、R0 phase orchestrator 与 R1-R5 正式证据均已完成；clean WSL venv、版本升级、公开和 tag 按所有者要求暂停。
 
 交付物：
 
@@ -368,7 +370,7 @@ dynamic arrivals
 
 ## 9. 阶段 R5：公开基线与项目表达
 
-优先级：P2，已由所有者启动。当前状态为实现就绪、等待 RTX 5070 正式验证；性能数字返回前不写成 R5 已完成。
+优先级：P2，已完成。commit `d7d4feb` 已通过 RTX 5070 post-schema focused、quick、72-row formal、full 与 clean-tree release check；canonical evidence 已纳入 release gate。
 
 ### 有限公开对比
 
@@ -377,7 +379,7 @@ dynamic arrivals
 - 分离 kernel-only 与 runtime workload，不把不同计时边界放在同一 speedup 表中。
 - 同时记录安装成本、API/布局转换和不兼容项。
 
-第一版固定 `flashinfer-python==0.6.15.post1`，只比较双方共同支持的 batch paged-decode attention。正式矩阵为 4 个冻结 shape、FP16/BF16、FlashDec Triton + FlashInfer FA2 CUDA-core/tensor-core、3 trials，共 72 rows。输入、page table、softmax scale 与 physical layout 共用；FlashInfer `plan()`、JIT、随机输入和 reference validation 全部在 CUDA-event timing 之外。完整契约见[FlashInfer 基线设计](design_flashinfer_baseline.md)。
+第一版固定 `flashinfer-python==0.6.15.post1`，只比较双方共同支持的 batch paged-decode attention。正式矩阵为 4 个冻结 shape、FP16/BF16、FlashDec Triton + FlashInfer FA2 CUDA-core/tensor-core、3 trials，共 72 rows。输入、page table、softmax scale 与 physical layout 共用；FlashInfer `plan()`、JIT、随机输入和 reference validation 全部在 CUDA-event timing 之外。CUDA-core/tensor-core 的 p50 ratio 几何平均为 `1.2003x/1.2284x`，16/16 个三轮范围高于 1；p99 的 7/16 范围重叠，不作稳定尾延迟或 runtime 胜负声明。完整契约见[FlashInfer 基线设计](design_flashinfer_baseline.md)，逐组数据见[R5 正式摘要](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md)。
 
 ### 对外材料
 
@@ -385,7 +387,7 @@ dynamic arrivals
 - 架构图、状态机、KV block ownership 图和性能归因图。
 - 技术总览按五层组织：算法、kernel、allocator、scheduler、实验方法。
 
-首版中文文章已落在[从 PagedAttention 到可解释 Decode Runtime](notes/from_paged_attention_to_decode_runtime.md)；正式性能表等待 72-row RTX evidence 后补入。
+首版中文文章已落在[从 PagedAttention 到可解释 Decode Runtime](notes/from_paged_attention_to_decode_runtime.md)，并已补入范围受限的 R5 正式结论与 canonical evidence 链接。
 
 验收门槛：任何对比数字都绑定版本、shape、计时边界和命令；无法公平对齐的项目明确标记为不可比。
 
@@ -397,8 +399,8 @@ dynamic arrivals
 | P1 | block-aware scheduler | 必须，最重要的系统扩展 |
 | P1 | multi-layer KV transaction | 必须，修复当前架构边界 |
 | P2 | shared prefix blocks | 已完成 R3-A 至 R3-D |
-| P1 | trusted transaction fast path + integrated workload | 当前 private R4；先做单变量 A/B，再组合验证 |
-| P2 | FlashInfer/vLLM 有限公开对比 | 已选择 FlashInfer 并完成 runner/validator；RTX 正式矩阵待执行 |
+| P1 | trusted transaction fast path + integrated workload | R4-A 与 R4-C 已完成；R4-B 未过 keep gate 后已回滚 |
+| P2 | FlashInfer/vLLM 有限公开对比 | 已选择 FlashInfer；runner/validator、RTX 72-row 正式矩阵和 canonical evidence 均已完成 |
 | 不做 | HTTP server、完整模型、sampling、TP/PP、多机、swap/offload | 不影响项目完成 |
 
 如果时间不足，项目应在 R2 后停止增加功能，集中完成复现和文章。Scheduler + multi-layer transaction 比再增加三个小 kernel 更能证明 AI Infra 深度。
@@ -418,10 +420,8 @@ dynamic arrivals
 
 ## 12. 当前立即执行顺序
 
-1. R1 Scheduler、R2 Multi-layer 与 R3 Shared Prefix 的实现、正式 summary、RTX correctness 和负结果归档均已完成。
-2. R3 最终 8-trial summary 已成为 release evidence；旧 3-trial summary 继续作为优化前历史基线。
-3. 执行 R4-A checked/trusted 单变量优化：保持 public safety，先完成 correctness 与配对 benchmark，再决定是否进入 metadata reuse。
-4. R4-A 冻结后，用 integrated scheduled multi-layer workload 组合验证 R1-R3；在线 prefix eviction 留到组合基线之后。
-5. 仓库继续保持 private；收到所有者明确指令后，才执行 clean-machine install、公开基线、版本与 tag。
+1. R1 Scheduler、R2 Multi-layer、R3 Shared Prefix、R4 trusted/integrated 与 R5 public baseline 的实现和正式证据均已完成。
+2. 先进行项目整理与交付审查：统一当前状态、结果索引、范围声明、仓库结构和可复现入口，不新增功能或重新调参。
+3. 仓库继续保持 private `0.0.0`；收到所有者明确指令后，才执行 clean-machine install、版本升级、公开设置与 tag。
 
-这条顺序保证每次只引入一个新的系统变量，实验结果仍然可解释。
+这条顺序把研究阶段与发布阶段分离，避免在整理中改变已经冻结的实验边界。

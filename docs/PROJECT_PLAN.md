@@ -27,7 +27,7 @@ FlashDec 研究 LLM decode 阶段的三个相互关联的问题：
 | Multi-layer R2 | shared location、sequential layers、commit/rollback | 144-row正式矩阵与最终 RTX 完整回归 |
 | Shared Prefix R3 | immutable full-block reuse、refcount/LRU、shared-aware admission | R3-D correctness 与 8-trial/64-row RTX confirmation 已完成 |
 | Trusted Transaction R4 | checked public raw op、Cache-owned device-value-check-free path、persistent metadata、统一多层调度证据 | R4-A 完成并冻结；R4-B 稳定性门失败后恢复 materialized 默认；R4-C commit `6912894` 完成 RTX correctness 与 24-row 正式验证 |
-| External Baseline R5 | 固定版本 FlashInfer paged-decode 公平对比、strict summary、对外技术文章 | cu128/SM120a 安装、JIT 与 pre-schema focused 已在 RTX 5070 验证；constraints/environment gate 已补强，post-schema focused、quick 与 72-row formal 待执行 |
+| External Baseline R5 | 固定版本 FlashInfer paged-decode 公平对比、strict summary、对外技术文章 | commit `d7d4feb` 的 post-schema focused、quick、72-row formal、full 与 release check 全部通过；canonical evidence 已固化 |
 | Release | clean install、版本、tag、公开 release | 最终 release gate，留到项目收尾执行 |
 
 ## 3. 关键设计决策
@@ -70,6 +70,7 @@ Scheduler 不持有 K/V tensor 或 physical blocks；kernel 不推进 request se
 - R4-A 针对 multi-layer fused transaction 每 layer 重复执行的 CUDA index reduction + `.item()` host sync。public raw primitive 保持完整检查；`PagedKVCache.begin_token()` 以纯 host invariant 证明 allocator 位置，公开 transaction API 根据 transaction id 回查该内部状态并调用 private trusted raw primitive，DecodeEngine 仍只依赖 Cache public API。commit `4018449` 已在 RTX 5070 完成 focused `73 passed, 23 subtests passed`、full `410 passed, 48 subtests passed` 与 160-row/80-pair 五轮正式矩阵。trusted complete-token p50/TPS 几何平均为 `1.7307x/1.7131x`，16/16 个 dtype/case p50 ranges 均稳定胜出，append inclusive CPU 为 `2.3612x`；7/16 个 p99 ranges跨 1，因此只冻结 p50 与 host-sync 归因，不声明稳定尾延迟或 device-kernel 加速。
 - R4-B commit `8047a9c` 的 persistent metadata candidate 通过 focused `101 passed`、full `434 passed, 48 subtests passed` 与 160-row/80-pair 正式证据完整性校验。overall p50/TPS/append CPU 为 `1.2493x/1.2392x/3.0366x`，但只有 13/16 个分组的五轮 p50 最小值大于 1，未达到预注册 16/16 keep 门；因此保留正式负结果并恢复 R4-A/materialized 默认，不继续同线微调。
 - rollback commit `36225d1` 已通过 focused `89 passed, 23 subtests passed`、full `410 passed, 48 subtests passed` 与 release evidence gate。随后 R4-C commit `6912894` 在 RTX 5070 通过 focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`、FP16 quick 与 24-row/3-trial FP16/BF16 正式矩阵；dynamic mixed-prefix reference digest、multi-layer prompt transaction、failure rollback、prefix lifetime、block reuse 与最终零占用 cleanup 全部严格通过，R4 阶段完成。
+- R5 commit `d7d4feb` 在固定 Python 3.12/Torch `2.11.0+cu128`/Triton `3.6.0`/CUDA 12.8/FlashInfer `0.6.15.post1` 环境完成 post-schema focused `93 passed, 37 subtests passed`、3-row quick、72-row/3-trial formal、full `453 passed, 94 subtests passed` 与 clean-tree release check。CUDA-core/tensor-core 的 8 组 p50 ratio 几何平均为 `1.2003x/1.2284x`，16/16 个三轮范围均高于 1；small-shape 幅度波动和 7/16 p99 range 重叠被保留，因此只冻结有限 kernel-only p50 观察，不外推端到端 runtime 或生产尾延迟。
 - R2 正式结果绑定 commit `fa0f89a`；证据提交 `67bee15` 在 RTX 5070 完成 `337 passed, 25 subtests passed` 的无跳过回归。
 - 当前仓库仍为 private `0.0.0` development candidate。
 - clean-install、版本更新、公开与 tag 按所有者要求暂停在最后 release 阶段。

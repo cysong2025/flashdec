@@ -146,7 +146,7 @@ R5 使用固定的 `flashinfer-python==0.6.15.post1` 和官方 `BatchDecodeWithP
 
 这个基线只计 `run`/kernel dispatch 的 CUDA-event 时间，排除 plan、JIT、input construction、layout metadata 适配和 reference validation。因此它能回答“共同 paged decode shape 下的 kernel 表现如何”，但不能回答“哪个 runtime 端到端更快”。FlashDec 的 allocator、scheduler、transaction 和 lifecycle 能力由它们自己的组合 workload 证据支撑，不会被第三方 kernel-only 数字代替。
 
-预注册的 R5 正式矩阵覆盖四个 shape、FP16/BF16、三个 backend 与三轮 trial。当前 RTX 5070 正式结果仍待验证，因此本文只记录设计与方法，不预写性能排名。
+预注册的 R5 正式矩阵覆盖四个 shape、FP16/BF16、三个 backend 与三轮 trial。commit `d7d4feb` 已在 RTX 5070 完成 72 rows：FlashInfer FA2 CUDA-core 与 tensor-core 的 8 个 dtype/case p50 ratio 几何平均分别为 `1.2003x` 和 `1.2284x`，16/16 个三轮范围都高于 1。这个结果只说明共同 kernel-only 矩阵中的 p50 方向一致；small-shape 个别 trial 的幅度波动很大，p99 也有 7/16 范围重叠和两项 tensor-core 中位数反向，因此不声明稳定尾延迟或完整 runtime 胜负。逐组数据与环境绑定见 [R5 正式摘要](../../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md)。
 
 ## 总结
 

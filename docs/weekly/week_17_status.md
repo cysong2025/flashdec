@@ -14,25 +14,27 @@ R5 FlashInfer 有限公开基线与项目技术表达：在 R4 系统路径已�
 - 预注册矩阵为 small/medium/large/large_batch、FP16/BF16、3 backends、3 trials，合计 72 rows。
 - 新增 `run_flashinfer_baseline.py`：检查精确 FlashInfer 版本和 clean-worktree evidence 前提，按 trial 轮转 case/dtype/backend 顺序，复用同一输入对象和各自 128 MiB FlashInfer workspace，并记录带时区的单次 run timestamp、Python/PyTorch/Triton/CUDA、reference/cross-backend 误差与 CUDA-event 统计。
 - 新增 `summarize_flashinfer_baseline.py`：严格检查矩阵完整性、formal `3/10/50` 与 quick `1/2/10` 采样强度、固定 geometry、配对 page-table digest、轮转顺序、版本、128 MiB workspace、clean worktree、normalized tolerance ratio 与派生吞吐；summary 绑定 runner command 并展示绝对 p50/p90/p99，只生成描述性比值，不定胜负门。逻辑 workload GB/s 只作共同 payload proxy，不解释为 DRAM bandwidth。
-- 新增 dependency-free runner/summary tests 与 optional CUDA correctness test；RTX 安装/JIT/focused 可行性计数已在下一项记录，canonical post-schema 计数仍待重跑。
+- 新增 dependency-free runner/summary tests 与 optional CUDA correctness test；RTX 安装/JIT/focused 可行性和 canonical post-schema 计数均已完成并在后续条目记录。
 - 2026-07-26 在独立 RTX 5070 virtualenv 确认工作组合：Torch `2.11.0+cu128`、Triton `3.6.0`、CUDA Toolkit `12.8.1`、FlashInfer `0.6.15.post1`，并对 SM 12.0 显式设置 `FLASHINFER_CUDA_ARCH_LIST=12.0a`。commit `570b2cf` 的首次 targeted correctness 为 `2 passed in 162.02s`（含 JIT），随后 focused 为 `90 passed, 24 subtests passed in 8.69s`。
 - 安装排障确认无 constraints 的 baseline extra 会把既有 cu128 环境升级到 Torch 2.13/CUDA 13；新增 `constraints/r5-cu128.txt`、runner import/JIT 前 environment gate、CUDA_HOME realpath/NVCC `12.8.93` probe、CSV 环境字段与 strict summary 校验。`nvidia-cuda-nvdisasm==13.3.73` 只是 CUTLASS DSL 工具依赖，不代表 runtime 升级。
+- commit `d7d4feb` 的 post-schema focused 为 `93 passed, 37 subtests passed in 5.60s`；FP16 medium quick 生成 3 rows 并通过 strict summary。
+- 同一 clean commit 的 formal 生成 72 rows/3 trials，run timestamp 为 `2026-07-26T15:28:08+08:00`；所有 reference/cross-backend parity、page-table pairing、环境和 timing invariant 均通过。随后 full 为 `453 passed, 94 subtests passed in 86.33s`，release check 为 `PASS`。
+- CUDA-core/tensor-core 的 8 组 p50 ratio 几何平均为 `1.2003x/1.2284x`，16/16 个三轮范围高于 1；FP16 small 幅度波动明显，p99 有 7/16 范围重叠，因此只冻结有限 kernel-only p50 观察，不声明稳定尾延迟或端到端 runtime 胜负。
 - 设计、命令和验收口径见 [R5 FlashInfer 基线设计](../design_flashinfer_baseline.md)；五层项目总览见[从 PagedAttention 到 Decode Runtime](../notes/from_paged_attention_to_decode_runtime.md)。
 
-## 当前环境限制
+## 结果边界
 
 - 当前本地文档与 dependency-free 检查环境不是 RTX 5070 CUDA 开发板，不用它产生或推断 FlashInfer 性能数字。
-- 依赖安装、SM120a JIT 与 focused parity 已在目标板验证；由于 environment/schema gate 是后续补强，仍需在该提交的 clean checkout 重跑 focused，旧 CSV 不能通过新 strict schema。
+- 依赖安装、SM120a JIT、post-schema focused、quick、formal 和 full 已在目标板验证；旧 schema CSV 仍不作为正式证据。
 - FlashInfer wrapper 需要 plan、workspace 和 CSR paged metadata；这些是真实 API 差异，但不在本次 kernel-only CUDA-event 时间中。
-- 当前没有可引用的 R5 正式性能结果；不在 weekly status 中预写胜负。
+- 三轮 `[min,max]` 不是置信区间；R5 没有事后设置的性能 pass/fail 门，正式方向与波动均按原样保留。
 
-## 需要在 RTX 5070 开发板完成
+## RTX 5070 验收完成
 
-1. 拉取 environment/schema gate 提交，在现有独立 R5 virtualenv 中重新运行 focused tests，确认新字段和错误路径。
-2. 运行 FP16 medium quick（warmup 2/repeat 10），要求 3 rows/1 trial 完整，且每个 row 的 `reference_validated`、`cross_backend_validated` 与 `validated_invariants` 全部为 `True`。
-3. 运行 72-row/3-trial FP16/BF16 正式矩阵，不删除慢 case、失败 row 或负结果。
-4. 用 strict summarizer 验证矩阵、输入 digest、固定 cu128 环境、`12.0a`、correctness 与有限 latency，然后运行 full pytest 与 release evidence gate。
-5. 将通过验证的精简 formal summary 固化为 canonical evidence，再开始 README/ROADMAP/NEXT_STEPS 等项目整理。
+1. post-schema focused、FP16 medium quick 和 72-row/3-trial FP16/BF16 正式矩阵均已执行。
+2. strict summarizer 已验证矩阵、输入 digest、固定 cu128 环境、`12.0a`、correctness 与有限 latency。
+3. full pytest 和 clean-tree release evidence gate 均已通过。
+4. 审核后的精简结果已固化为 [R5 canonical summary](../../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md) 并纳入 release evidence。
 
 ## 上板后要记录
 
@@ -46,4 +48,4 @@ R5 FlashInfer 有限公开基线与项目技术表达：在 R4 系统路径已�
 
 ## 下一步
 
-先完成 R5 RTX 5070 quick/formal/correctness 证据闭环，对结果做保守解释并保留不可比项。R5 验收通过后再统一清理历史状态文档、索引、release evidence 与项目对外表达；当前不提前升级版本或创建 tag。
+R5 已验收完成。下一阶段按所有者要求进行项目整理和交付审查，统一检查文档状态、结果索引、对外表达与仓库结构；当前仍不提前升级版本、公开仓库或创建 tag。

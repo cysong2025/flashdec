@@ -38,7 +38,7 @@
 - Python package 核心依赖只保留 torch/triton；pytest 移入 `dev` extra，Ninja 保留在 `cuda-extension` extra。
 - GPU Engine 明确使用 fused CUDA append policy；公开 reference API 默认仍保持 PyTorch 路径。
 - DecodeEngine workload CSV、multi-trial summary 和 profiler evidence 现在绑定生成时的 Git commit。
-- Release artifact/evidence gate 现在同时要求 R1 Scheduler、R2 Multi-layer、R3 Shared Prefix、R4-A Trusted Transaction 与 R4-C Integrated Workload 的 runner、validator、focused tests 和最终 Markdown summary。
+- Release artifact/evidence gate 现在同时要求 R1 Scheduler、R2 Multi-layer、R3 Shared Prefix、R4-A Trusted Transaction、R4-C Integrated Workload 与 R5 FlashInfer Baseline 的 runner、validator、focused tests 和最终 Markdown summary。
 - R4-A profiler attribution 改用 CPU-only WARMUP→active schedule；active CPU user annotation 提供 inclusive host time，并严格验证 checked/trusted scalar extraction。少记 range/scalar 可用相同 seed、全新 probe 最多重采集三次并记录 attempt count，多记立即失败。paired trial 先完成两条 path 的正式 wall，再运行 attribution/rollback，避免 retry 介入配对计时。未稳定关联的 append/decode device 与 CUDA-activity 字段从 strict schema 删除。
 - R4-B persistent metadata candidate 未通过预注册 16/16 分组稳定性门，生产主线恢复 R4-A/materialized 默认；candidate commit 与正式负结果保留用于追溯，不继续同线微调。
 
@@ -64,6 +64,8 @@
 - 7/16 个 R4-A 分组的 p99 range 穿过 1；overall p99 几何平均只作为聚合统计保留，不能声明稳定尾延迟收益。CPU-only attribution 证明移除了 scalar extraction 等待，不代表 kernel device execution 本身加速。
 - R4-B commit `8047a9c` 的 160-row/80-pair RTX 正式矩阵通过完整性校验，overall complete-token p50/TPS 与 append CPU/layer 为 `1.2493x/1.2392x/3.0366x`；只有 13/16 个分组的五轮 p50 最小值大于 1，正式 keep gate 失败。BF16 `l2_b4_c1024`、FP16 `l2_b16_c128` 与 FP16 `l4_b16_c128` 保留跨 1 范围，不删除失败样本。
 - R4-C commit `6912894` 的 RTX 5070 formal matrix 为 FP16/BF16、2/4 layers、64/128 context、3 trials，共 24 rows；8 个分组的 complete-step p50 median 为 `1.360588–2.371724 ms`，TPS median 为 `43.070–126.641`。全部 strict lifecycle gate 通过；p90/p99 受有限 trace 的 private context-write steps 主导，不声明 steady-state tail 或 shared-prefix latency speedup。
+- R5 commit `d7d4feb` 的 RTX 5070 formal matrix 为 4 cases、FP16/BF16、FlashDec Triton + FlashInfer FA2 CUDA-core/tensor-core、3 trials，共 72 rows；post-schema focused `93 passed, 37 subtests passed`、full `453 passed, 94 subtests passed` 与 clean-tree release check 均通过。
+- R5 CUDA-core/tensor-core 的 8 组 p50 ratio 几何平均为 `1.2003x/1.2284x`，16/16 个三轮范围严格高于 1。FP16 small 的两条 ratio range 都有明显上界扩张；绝对 p99 有 7/16 范围重叠并含两项 tensor-core 中位数反向，因此不声明稳定尾延迟或端到端 runtime 胜负。
 
 ### Correctness evidence
 

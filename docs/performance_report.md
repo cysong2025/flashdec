@@ -267,9 +267,24 @@ commit `6912894` 在 RTX 5070、PyTorch `2.11.0+cu128`、CUDA 12.8 上完成 foc
 
 这是一条只有 10 个 logical steps 的功能轨迹。p90/p99 受 private miss 的 caller-supplied multi-layer context-write admission steps 主导，不能解释为 steady-state decode tail；矩阵也不比较 R4-B candidate、不证明 shared prefix latency speedup。随机构建、prefix registration 与 terminal eviction 均在计时区间外。完整数据见[R4-C 正式摘要](../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)。
 
+## R5 FlashInfer 有限公开基线（2026-07-26）
+
+commit `d7d4feb` 在 RTX 5070、Python 3.12.3、PyTorch `2.11.0+cu128`、Triton `3.6.0`、CUDA Toolkit 12.8.1、NVCC 12.8.93 与 `flashinfer-python==0.6.15.post1` 上完成预注册的 `4 cases x 2 dtypes x 3 backends x 3 trials = 72 rows`。post-schema focused 为 `93 passed, 37 subtests passed`，完整回归为 `453 passed, 94 subtests passed`；strict summary 和 clean-tree release check 均通过。
+
+三个 backend 共用 Q/K/V、logical pages、page table、sequence lengths、softmax scale、dtype 和 seed。FlashDec token-major physical layout 对应 FlashInfer `HND`；CUDA event 只包围 `run`/kernel dispatch，排除输入构造、reference validation、FlashInfer plan/JIT、workspace 与 metadata 构建。因此下面只回答共同 paged-decode shape 的 kernel-only 表现，不能与 FlashDec scheduler/transaction/runtime 或完整 serving 直接相除。
+
+| FlashInfer 执行选项 | 8 组 p50 ratio 几何平均 | 三轮 range 全部高于 1 | 最小 range 下界 |
+| --- | ---: | ---: | ---: |
+| FA2 CUDA-core | `1.2003x` | `8/8` | `1.0231x` |
+| FA2 tensor-core | `1.2284x` | `8/8` | `1.1197x` |
+
+ratio 定义为 `FlashDec p50 / FlashInfer p50`，大于 1 表示对应 FlashInfer 路径延迟更低；TPS ratio 与其同方向。两条执行选项合计为 16/16 个 backend/dtype/case 三轮 p50 range 严格高于 1。它们来自同一个固定 FlashInfer 安装，不把合计 16 项当作独立系统样本，也不在看到结果后只选择较快的路径。
+
+稳定性限制同样属于结果：FP16 small 的 CUDA-core/tensor-core 上界分别达到 `2.8514x/4.1659x`，呈现与两条比较共用的 FlashDec baseline 扰动一致的特征，不能作为典型收益。绝对 p90 中位数在 16/16 组低于 FlashDec，但 2/16 三轮范围重叠；绝对 p99 中位数在 14/16 组低于 FlashDec，7/16 范围重叠，另外两组 tensor-core 中位数方向反转。每 row 只有 50 repeats，p99 接近样本最大值，因此不声明稳定或生产级尾延迟优势。完整逐组数字见[R5 正式摘要](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md)。
+
 ## 后续工作边界
 
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
 2. Block-aware Scheduler、Multi-layer KV Token Transaction、R4-A trusted validation 与 R4-C integrated workload 均已完成；R4-B 已完成评估并按稳定性门回滚。
 3. clean-install、版本与 tag 留在最终 release gate。
-4. Shared Prefix R3 已完成；当前不继续围绕同一数据调参。固定版本公开基线与 release 均暂停，未来若执行仍必须统一功能与计时边界。
+4. Shared Prefix R3 与固定版本公开基线 R5 已完成；当前不继续围绕同一数据调参。下一阶段先做项目整理与交付审查，版本、公开和 tag 仍等待所有者明确启动 release gate。

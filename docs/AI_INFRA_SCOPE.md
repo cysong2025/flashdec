@@ -106,8 +106,9 @@ allocate/free/reuse      block_tables/seq_lens
 | Paged KV Runtime | lifecycle、free/reuse、capacity atomicity、metrics、churn 与 multi-layer transaction 已完成 | Cache 是 block ownership 与事务状态的唯一来源 |
 | Decode Data Path | torch/CUDA/fused 三条路径通过 RTX correctness；fused append-only p50 为 `1.2226x` | native kernel 不修改 allocator 或 seq_len |
 | Execution Engine | dynamic batch、backpressure、Scheduler R1 与 multi-layer R2 已完成 | 不包含模型 forward、sampling 或网络层 |
-| End-to-End Evaluation | 36-row Engine、36-row Scheduler、144-row Multi-layer 与 64-row Shared Prefix confirmation 完成 | profiler 只做归因；p99 保留范围 |
-| Reproducibility | 环境检查、分层验证、严格 summary 与 release checker 已完成 | clean-machine install、版本与 tag 留在最终发布阶段 |
+| End-to-End Evaluation | 36-row Engine、36-row Scheduler、144-row Multi-layer、64-row Shared Prefix confirmation 与 24-row R4-C 组合轨迹完成 | profiler 只做归因；p99 保留范围 |
+| External Baseline | 固定 FlashInfer 0.6.15.post1 的 72-row/3-trial 共同 paged-decode kernel-only 对比完成 | 不外推 scheduler、transaction、完整 serving 或生产尾延迟 |
+| Reproducibility | 环境检查、分层验证、严格 summary、R1-R5 canonical evidence 与 release checker 已完成 | clean-machine install、版本与 tag 留在最终发布阶段 |
 
 ## Release candidate 完成标准
 
@@ -125,4 +126,4 @@ allocate/free/reuse      block_tables/seq_lens
 
 ## 选择性扩展边界
 
-Block-aware Scheduler、multi-layer KV token transaction 与 shared prefix blocks 均已完成。当前没有自动启动下一条功能主线；仓库保持 private，FlashInfer/vLLM 有限公开对比与 release 工作都等待所有者明确决定。完整优先级与验收门槛见 `docs/ROADMAP.md`。
+Block-aware Scheduler、multi-layer KV token transaction、shared prefix blocks、trusted/integrated transaction 与 FlashInfer 有限公开基线均已完成。当前不自动启动下一条功能主线；仓库保持 private `0.0.0`，先进行项目整理与交付审查，版本、公开和 tag 等待所有者明确启动 release gate。完整优先级与验收门槛见 `docs/ROADMAP.md`。

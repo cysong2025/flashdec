@@ -106,7 +106,20 @@ FLASHINFER_CUDA_ARCH_LIST: 12.0a
 pip check: No broken requirements found
 ```
 
-未设置 arch list 时，FlashInfer 对 SM 12.x 报告 `SM 12.x requires CUDA >= 12.9`；显式设置 `12.0a` 后，CUDA 12.8 路径可编译并运行。commit `570b2cf` 上首次 targeted correctness（含 JIT）为 `2 passed in 162.02s`，随后 focused 为 `90 passed, 24 subtests passed in 8.69s`。本次结果证明安装、SM120a JIT 与三 backend parity 路径可用；新增 environment/schema gate 后仍需在新 commit 上重跑 focused、quick、formal 和 full，才能形成 canonical R5 证据。
+未设置 arch list 时，FlashInfer 对 SM 12.x 报告 `SM 12.x requires CUDA >= 12.9`；显式设置 `12.0a` 后，CUDA 12.8 路径可编译并运行。commit `570b2cf` 上首次 targeted correctness（含 JIT）为 `2 passed in 162.02s`，随后 focused 为 `90 passed, 24 subtests passed in 8.69s`，证明安装、SM120a JIT 与三 backend parity 路径可用。
+
+环境/schema gate 固化后的 commit `d7d4feb` 又完成：
+
+```text
+post-schema focused: 93 passed, 37 subtests passed in 5.60s
+quick: 3 rows, 1 trial, strict summary passed
+formal: 72 rows, 3 trials, strict summary passed
+full: 453 passed, 94 subtests passed in 86.33s
+release check: PASS (clean worktree)
+formal run started: 2026-07-26T15:28:08+08:00
+```
+
+formal 每行均记录并通过 Python/PyTorch/Triton/PyTorch CUDA、CUDA packages、Ninja、`CUDA_HOME` realpath、NVCC、arch list、FlashInfer version、workspace、runner command、clean commit 与 timing/correctness invariant 校验。精简证据见 [R5 canonical summary](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md)。
 
 ### 机器
 

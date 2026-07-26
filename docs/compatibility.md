@@ -61,7 +61,7 @@
 - block size quick/full sweep 已完成，暂未做 block size autotune。
 - dim-major layout `[num_blocks, num_kv_heads, head_dim, block_size]` 已通过 RTX 5070 correctness、quick 和 full benchmark；full p50 几何平均约慢 31%，不是默认 runtime layout，也不做自动 layout dispatch。
 - `num_stages=default/1/2/3/4` full sweep 已完成，最佳候选仅约快 0.39%，因此不修改默认 staging。
-- R5 已实现与 `flashinfer-python==0.6.15.post1` 的有限 kernel-only 对比；Torch `2.11.0+cu128`、Triton `3.6.0`、CUDA Toolkit `12.8.1` 与 SM120a JIT 已在 RTX 5070 验证，正式矩阵尚待执行。vLLM/TensorRT-LLM 完整 runtime 不与当前 FlashDec kernel-only timing 直接比较。
+- R5 已完成与 `flashinfer-python==0.6.15.post1` 的有限 kernel-only 对比；Torch `2.11.0+cu128`、Triton `3.6.0`、CUDA Toolkit `12.8.1`、SM120a JIT、72-row/3-trial formal 与完整回归均已在 RTX 5070 验证。vLLM/TensorRT-LLM 完整 runtime 不与当前 FlashDec kernel-only timing 直接比较。
 
 ## R5 FlashInfer Baseline
 
@@ -71,6 +71,7 @@
 - FlashDec `[page, head, token, dim]` 的 `token_major` physical tensor 对应 FlashInfer `HND`；两条路径直接共用 K/V tensor，不在计时区间做 permute/copy。
 - FlashInfer 固定 `backend="fa2"`，分别报告 `use_tensor_cores=False/True`；不使用运行后选择的单一“最佳”外部数字。
 - strict evidence 固定 cu128 dependency stack、formal `3/10/50` sampling 和每个 FlashInfer wrapper 128 MiB workspace，绑定 runner command，要求启动时 Git worktree clean，并验证 normalized tolerance ratio 不超过 1；逻辑 workload GB/s 是共同 payload proxy，不是 DRAM traffic 估计。
+- commit `d7d4feb` 的正式结果包含 72 rows；CUDA-core/tensor-core 的 8 组 p50 ratio 几何平均为 `1.2003x/1.2284x`，16/16 个三轮范围高于 1。p99 有 7/16 范围重叠，因此不声明稳定尾延迟优势；完整边界见 [canonical summary](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md)。
 - 不可比范围包括 FlashInfer planning/JIT/workspace lifecycle、FlashDec allocator/scheduler/transaction、模型 forward、sampling、CUDA Graph 和服务吞吐。
 
 ## RoPE + Paged KV Append Reference

@@ -10,7 +10,7 @@ R5 选择一个版本固定、可公开安装的 FlashInfer paged decode 实现�
 - FlashInfer FA2：官方 `BatchDecodeWithPagedKVCacheWrapper`，`backend="fa2"`、`use_tensor_cores=False`。
 - FlashInfer FA2 Tensor Core option：同一 decode wrapper 与 backend，设置公开的 `use_tensor_cores=True` dispatch 选项；它不是另一个包版本，也不宣称是独立命名的专用 decode kernel。
 
-正式性能结果仍为 **pending RTX 5070**。在 72-row 正式 CSV、strict summary 与 focused/full correctness 都产生之前，不声明胜负、speedup 或稳定尾延迟。
+正式性能结果已在 RTX 5070 完成：72-row 正式 CSV、strict summary 与 focused/full correctness 全部通过。结论仍严格限制在共同 kernel-only 边界；不声明端到端 runtime 胜负或稳定生产尾延迟。
 
 ## 2. 依赖与公开 API 冻结
 
@@ -247,4 +247,6 @@ R5 有限基线只有在以下条件同时满足时才算完成：
 6. canonical summary 绑定带时区的 run timestamp、FlashDec commit、Python/PyTorch/Triton/PyTorch CUDA、CUDA package versions、`CUDA_HOME`、FlashInfer `0.6.15.post1`、arch list、GPU、runner command 和计时边界，并展示绝对 p50/p90/p99；
 7. 结论同时记录胜出、持平、负结果与不可比项，不从单轮 p99 外推生产尾延迟。
 
-RTX 5070 已确认上述依赖组合和 `12.0a` JIT 路径可运行，并通过 FlashInfer targeted `2 passed` 与 focused `90 passed, 24 subtests passed`。这些结果来自环境契约固化前的 commit `570b2cf`，只作为安装/JIT 可行性证据；新 schema 的 quick、formal、full 与最终结论仍须在本次提交后的 clean checkout 重新产生。
+RTX 5070 已完成上述验收。commit `d7d4feb` 的 post-schema focused 为 `93 passed, 37 subtests passed`，quick 为 3 rows，formal 为 72 rows/3 trials，完整回归为 `453 passed, 94 subtests passed`，clean-tree release check 为 `PASS`。strict summary 验证所有 row 的 reference/cross-backend parity、page-table pairing、固定环境和 timing invariant；canonical evidence 见 [R5 正式摘要](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md)。
+
+正式矩阵中，FlashInfer FA2 CUDA-core 与 tensor-core 的 8 个 dtype/case p50 ratio 几何平均分别为 `1.2003x` 与 `1.2284x`，16/16 个 backend/dtype/case 三轮范围严格高于 1。该范围是三轮观察到的 `[min,max]`，不是置信区间；FP16 small 的两条比较共用同一 FlashDec baseline，并同时出现明显上界扩张。绝对 p99 的 7/16 组范围重叠且有两组 tensor-core 中位数方向反转，因此 R5 不声明稳定尾延迟优势。以上结论只适用于本设计的共同 paged-decode kernel-only 边界，不比较 runtime 调度、KV ownership、transaction、planning/JIT 或服务吞吐。

@@ -166,7 +166,7 @@ def test_release_tree_requires_r4c_implementation_and_formal_evidence():
     )
 
 
-def test_release_tree_requires_r5_baseline_implementation_but_not_pending_evidence():
+def test_release_tree_requires_r5_baseline_implementation_and_formal_evidence():
     for relative in (
         "constraints/r5-cu128.txt",
         "docs/design_flashinfer_baseline.md",
@@ -180,5 +180,5 @@ def test_release_tree_requires_r5_baseline_implementation_but_not_pending_eviden
         assert relative in REQUIRED_PATHS
     assert (
         "benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md"
-        not in RELEASE_EVIDENCE_PATHS
+        in RELEASE_EVIDENCE_PATHS
     )

@@ -531,7 +531,7 @@ python -m pytest -q -ra
 python scripts/check_release.py --require-clean --require-evidence
 ```
 
-结果先写入仓库外的 `$RESULT_DIR`，避免未审核的 formal summary 让 clean-worktree gate 自相矛盾。RTX 结果回传审核后，再把精简 formal summary 复制到 `benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md`、加入 release evidence、提交并在干净 checkout 重跑最终 gate。commit `570b2cf` 已确认 `12.0a` 环境探针、targeted `2 passed` 与 focused `90 passed, 24 subtests passed`；由于本次提交新增了 fail-closed environment/schema 字段，quick/formal/full 与最终 focused 必须在新 commit 上重跑，不提前提交 canonical 性能数字。更完整的公平性与不可比边界见 [R5 FlashInfer 基线设计](design_flashinfer_baseline.md)。
+结果先写入仓库外的 `$RESULT_DIR`，避免未审核的 formal summary 让 clean-worktree gate 自相矛盾。commit `d7d4feb` 已按该流程在 RTX 5070 完成 post-schema focused `93 passed, 37 subtests passed`、3-row quick、72-row/3-trial formal、full `453 passed, 94 subtests passed` 与 clean-tree release check `PASS`。审核后的精简结果已固化为 [R5 canonical summary](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md) 并加入 release evidence。该 summary 绑定 `2026-07-26T15:28:08+08:00`、固定 cu128 环境、`12.0a`、clean commit 与完整 runner command；更完整的公平性与不可比边界见 [R5 FlashInfer 基线设计](design_flashinfer_baseline.md)。
 
 ## 结果文件与提交规则
 
@@ -591,7 +591,7 @@ python scripts/check_release.py --require-clean
 | R4-A trusted transaction | 已完成 | commit `4018449` 的 focused/full correctness、160-row/80-pair RTX 五轮矩阵与 [canonical strict summary](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)；16/16 p50 分组稳定胜出，p99 保留 7/16 穿 1 的限制 |
 | R4-B persistent metadata | 已评估并回滚 | commit `8047a9c` 的 correctness 与 [160-row/80-pair 正式负结果](../benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)；overall p50 `1.2493x`，但仅 13/16 分组稳定胜出，未通过 keep gate |
 | R4-C integrated workload | 已完成 | commit `6912894` 的 focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`、FP16 quick 与 [24-row/3-trial canonical summary](../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)；digest/rollback/prefix/reuse/cleanup 全部通过 |
-| R5 FlashInfer 有限基线 | 进行中 | commit `570b2cf` 已确认精确依赖安装、SM120a JIT、targeted `2 passed` 与 pre-schema focused `90 passed, 24 subtests passed`；environment/schema gate 已补强，post-schema focused、quick、full 与 72-row/3-trial canonical evidence 待执行 |
+| R5 FlashInfer 有限基线 | 已完成 | commit `d7d4feb` 的 post-schema focused `93 passed, 37 subtests passed`、3-row quick、72-row/3-trial formal、full `453 passed, 94 subtests passed` 与 clean-tree release check `PASS`；[canonical summary](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md) 已纳入 evidence gate |
 | Clean WSL editable install | 暂停 | 仓库继续 private；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |

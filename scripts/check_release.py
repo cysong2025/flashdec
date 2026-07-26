@@ -90,6 +90,7 @@ RELEASE_EVIDENCE_PATHS = (
     "benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md",
     "benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md",
     "benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md",
+    "benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md",
     "docs/performance_report.md",
 )
 

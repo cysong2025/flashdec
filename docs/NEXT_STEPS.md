@@ -21,12 +21,14 @@ Block-aware Scheduler
 - fused CUDA append、动态 DecodeEngine workload 和阶段 profiler 归因。
 - R1 block-aware scheduler：容量安全、FIFO + aging、公平 runnable subset 和 stale decision 拒绝。
 - R2 multi-layer token transaction：共享位置、单次 seq_len commit 和异常 rollback。
-- RTX 5070 最终回归：`337 passed, 25 subtests passed`，无 skipped 或 failure。
+- R2 证据提交最终回归：`337 passed, 25 subtests passed`，无 skipped 或 failure。
 - R2 正式矩阵：144 行全部通过严格校验，complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`。
 - R3 shared prefix：A-D 已闭合；8-trial/64-row confirmation 继续确认 75% hit 节省 `68.8%`/`5.5 MiB` KV capacity，并把 bounded-pool admission 从 `9/16` 提高到 `16/16`。
 - R3-D RTX 回归：targeted `1 passed`、focused `61 passed, 8 subtests passed`、full `361 passed, 25 subtests passed`。
+- R4 trusted transaction 与 integrated scheduled multi-layer workload 已完成；R4-B 未过 keep gate 后已回滚。
+- R5 FlashInfer 有限公开基线已完成：72-row/3-trial formal、full `453 passed, 94 subtests passed` 与 release check 均通过。
 
-当前版本仍为 `0.0.0`。这表示 release gate 尚未启动，不表示 R1-R3 功能未完成。
+当前版本仍为 `0.0.0`。这表示 release gate 尚未启动，不表示 R1-R5 功能或正式证据未完成。
 
 ## 已完成目标：R3 Shared Prefix Blocks
 
@@ -77,19 +79,29 @@ dynamic arrivals
 
 trace/schema、dependency-free reference、observed/reference digest、multi-layer prompt prefill、Engine 集成测试、CUDA runner 与 strict validator 均已完成。quick/formal 的 reference digest、dynamic trajectory、rollback、transaction/prefix 计数、prefix lifetime、released-block reuse 与 final zero-used cleanup 全部通过。性能数字用于刻画这一有限 trace：p90/p99 受 private context-write admission step 主导，不能解释为 steady-state decode tail，也不用于声明 shared-prefix latency speedup。
 
-R4 继续保持冻结，不重新开启 R4-B 或 kernel 参数 sweep。所有者已明确启动 R5；当前工作转入下面的有限公开基线验证。
+R4 继续保持冻结，不重新开启 R4-B 或 kernel 参数 sweep。
 
-## 当前目标：R5 FlashInfer 有限公开基线
+## 已完成目标：R5 FlashInfer 有限公开基线
 
-状态：固定 Torch `2.11.0+cu128`、Triton `3.6.0`、CUDA Toolkit `12.8.1`、FlashInfer `0.6.15.post1` 与 `FLASHINFER_CUDA_ARCH_LIST=12.0a`，只比较双方共同支持的 paged-decode attention。commit `570b2cf` 已在 RTX 5070 通过 targeted `2 passed` 与 focused `90 passed, 24 subtests passed`，确认安装/JIT/parity 可行；随后新增 constraints、runner fail-closed environment gate 与 strict CSV schema，因此需在新 commit 重跑 focused，quick/72-row formal/full 仍待执行。
+状态：固定 Torch `2.11.0+cu128`、Triton `3.6.0`、CUDA Toolkit `12.8.1`、FlashInfer `0.6.15.post1` 与 `FLASHINFER_CUDA_ARCH_LIST=12.0a`，只比较双方共同支持的 paged-decode attention。commit `d7d4feb` 已在 RTX 5070 通过 post-schema focused `93 passed, 37 subtests passed`、3-row quick、72-row/3-trial formal、full `453 passed, 94 subtests passed` 与 clean-tree release check。canonical evidence 见[R5 正式摘要](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md)。
 
 公平边界固定为同一 Q/K/V、page table、sequence lengths、softmax scale 和 `[page, head, token, dim]` physical layout。FlashDec `token_major` 对应 FlashInfer `HND`；FlashInfer FA2 CUDA-core 与 tensor-core 都预注册并独立报告。`plan()`、JIT、输入构造和 reference validation 均排除在 CUDA-event `run()` timing 外，不把 FlashDec runtime workload 与 FlashInfer kernel-only 数字混在同一张 speedup 表。
 
-正式矩阵为 4 cases × 2 dtypes × 3 backends × 3 trials = 72 rows。R5 没有预设胜负门；strict summary 报告 ratio median `[min,max]` 和所有跨 1 的范围，并拒绝 Torch/CUDA/FlashInfer/arch-list 漂移。下一步顺序为拉取新 commit → focused → quick + quick summary → formal + formal summary → full/release check；完整命令见[FlashInfer 基线设计](design_flashinfer_baseline.md)。
+正式矩阵为 4 cases × 2 dtypes × 3 backends × 3 trials = 72 rows。R5 没有预设胜负门；strict summary 报告 ratio median `[min,max]` 并拒绝 Torch/CUDA/FlashInfer/arch-list 漂移。CUDA-core/tensor-core 的 8 组 p50 ratio 几何平均为 `1.2003x/1.2284x`，16/16 个三轮范围均高于 1；small-shape 幅度波动明显，p99 有 7/16 范围重叠，因此不声明稳定尾延迟或端到端 runtime 胜负。
+
+## 当前目标：项目整理与交付审查
+
+R5 验收后不立即升级版本。先在不新增功能、不改动冻结性能路径的前提下完成：
+
+1. 审核 README、项目计划、路线图、兼容性、性能、复现与 weekly 状态的一致性。
+2. 盘点 R1-R5 的可交付成果、canonical evidence、公开 API、已知限制与负结果。
+3. 清理重复或失效的“pending”状态，保持历史日志可追溯，不重写原始实验事实。
+4. 运行 docs、release evidence、compile、全量 pytest 与 Git cleanliness 检查，形成项目整理报告。
+5. 整理完成后再由所有者决定是否启动独立的 v0.1.0 release gate。
 
 ## 暂停目标：private 维护与可选 v0.1.0 Release Gate
 
-状态：R3 技术目标已经完成；按所有者要求暂不公开、不升级版本、不创建 tag。只有收到明确指令后才启动以下 release gate。
+状态：R1-R5 技术目标已经完成；按所有者要求先做项目整理，暂不公开、不升级版本、不创建 tag。只有收到明确指令后才启动以下 release gate。
 
 执行顺序：
 
@@ -109,7 +121,7 @@ R4 继续保持冻结，不重新开启 R4-B 或 kernel 参数 sweep。所有者
 - 采用 MIT、Apache-2.0，或继续保留无开源授权状态；
 - GitHub `quality` workflow 和公开链接是否正常。
 
-R5 已选择 FlashInfer 并进入验证；vLLM 完整 serving 对比不在第一版公平范围内。release gate 仍在 R5 正式证据闭合和项目整理之后启动。
+R5 已完成 FlashInfer 有限 kernel-only 对比；vLLM 完整 serving 对比不在第一版公平范围内。release gate 仍在项目整理完成后由所有者单独启动。
 
 不在范围内：HTTP 服务、tokenizer、sampling、完整模型 forward、swap/offload、TP/PP 和多机执行。
 

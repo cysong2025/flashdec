@@ -49,7 +49,7 @@ python scripts/check_release.py
 python scripts/check_release.py --require-clean --require-evidence --require-tag
 ```
 
-结构检查同时要求 `constraints/r5-cu128.txt` 存在且精确匹配预注册的 Torch/Triton/FlashInfer/CUDA Python packages/Ninja pins。`--require-evidence` 额外要求 multi-trial、complete-step profile 与最终 performance summary；candidate 开发阶段可以不启用，正式 tag 必须启用。
+结构检查同时要求 `constraints/r5-cu128.txt` 存在且精确匹配预注册的 Torch/Triton/FlashInfer/CUDA Python packages/Ninja pins。`--require-evidence` 额外要求 R1-R5 canonical summaries、multi-trial、complete-step profile 与最终 performance summary；candidate 开发阶段可以不启用，正式 tag 必须启用。
 
 R0 分阶段验证与 Windows 结果导出：
 
