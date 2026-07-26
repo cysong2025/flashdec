@@ -302,4 +302,4 @@ ratio 定义为 `FlashDec p50 / FlashInfer p50`，大于 1 表示对应 FlashInf
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
 2. Block-aware Scheduler、Multi-layer KV Token Transaction、R4-A trusted validation 与 R4-C integrated workload 均已完成；R4-B 已完成评估并按稳定性门回滚。
 3. 项目整理已完成当前状态、结果索引和证据边界统一；不把文档整理解释为新的 GPU 性能运行。
-4. clean-install、新环境复现、版本、公开与 tag 留在最终 release gate，并等待所有者明确启动。
+4. public-source gate 只把已验证证据整理为 `0.0.0` research preview，没有产生新的 GPU 结果；clean-install、新环境复现、`v0.1.0` 版本与 tag 留在未来独立稳定发布 gate。

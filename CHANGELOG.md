@@ -33,6 +33,8 @@
 - R5 CUDA 12.8/SM120a 复现护栏：新增 `constraints/r5-cu128.txt`，固定 Torch/Triton/CUDA Python packages/Ninja；runner 在 FlashInfer import/JIT 前验证 `CUDA_HOME` 与 `FLASHINFER_CUDA_ARCH_LIST=12.0a`，CSV/strict summary 记录并拒绝环境漂移。
 - R1–R5 [交付状态](docs/DELIVERY_STATUS.md)与 [benchmark 结果索引](benchmarks/results/README.md)：集中记录能力、canonical evidence、负结果、本地产物边界和暂停的 release 项。
 - GitHub landing page 与协作入口：分层 README、GitHub light/dark 双主题 runtime SVG、correctness/regression issue form、scoped change/evidence proposal、PR validation template，以及与完整能力对齐的 package description/keywords/URLs。
+- 公开仓库治理与协作入口：安全政策、行为准则、支持说明、引用元数据、CODEOWNERS、Dependabot、usage/environment question form 与 public-readiness checklist。
+- 由 canonical summaries 派生的 R1–R5 双主题实验概览图、受版本控制的公开数据快照、确定性生成器和回归检查；图表保留 R4-B 负结果与 R5 kernel-only 边界。
 
 ### Changed
 
@@ -95,4 +97,4 @@
 - clean WSL venv editable install 和 quick workload 复现。
 - 将 `pyproject.toml` 与 `flashdec.__version__` 同步更新为 `0.1.0`。
 - 创建并验证 `v0.1.0` tag；当前不得提前标记 release。
-- 仓库可见性继续保持 private；公开、版本升级和 tag 等待所有者明确启动 release gate。
+- 源码公开使用独立的 public-readiness gate；`v0.1.0` 仍等待 fresh-environment 认证、版本同步和 tag/release 验证。

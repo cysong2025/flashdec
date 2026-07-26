@@ -2,7 +2,7 @@
 
 ## Validation
 
-- Input: `/mnt/c/Users/user/flashdec_results/r4b_8047a9c_formal_20260719_234925/r4_persistent_transaction_metadata_trials5.csv`.
+- Input artifact: `r4_persistent_transaction_metadata_trials5.csv` (local source path normalized for publication; raw CSV is not tracked).
 - Rows: 160; paired trials: 80.
 - Device: NVIDIA GeForce RTX 5070.
 - PyTorch/CUDA: 2.11.0+cu128 / 12.8.

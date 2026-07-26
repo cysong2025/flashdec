@@ -72,7 +72,7 @@ seq_lens:     [num_seqs]
 已完成静态验证：
 
 ```bash
-/Users/songchuangye/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -m compileall flashdec tests
+python3 -m compileall flashdec tests
 ```
 
 结果：编译通过。
@@ -91,7 +91,7 @@ No module named torch
 - OS：Linux / WSL2。
 - Python：3.12.3。
 - pytest：9.1.1。
-- 测试路径：`/home/user/work/flashdec`。
+- 测试路径：`<repo>`。
 
 运行命令：
 

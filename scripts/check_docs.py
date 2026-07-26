@@ -14,7 +14,14 @@ HTML_RESOURCE = re.compile(
     re.IGNORECASE,
 )
 SKIP_PREFIXES = ("http://", "https://", "mailto:", "data:", "#")
-DEFAULT_ROOT_FILES = ("README.md", "CHANGELOG.md", "CONTRIBUTING.md")
+DEFAULT_ROOT_FILES = (
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    "SUPPORT.md",
+)
 DEFAULT_DIRECTORIES = ("docs", "benchmarks", "scripts", ".github")
 IGNORED_RESULT_DIRECTORIES = ("local_backups",)
 IGNORED_RESULT_SUFFIXES = ("_quick_summary.md", "_smoke.md")
@@ -24,6 +31,72 @@ DISALLOWED_PORTFOLIO_TERMS = (
     "简历",
     "interview",
     "resume",
+)
+
+# These files describe the repository's current public-facing state. Historical
+# weekly notes and benchmark summaries are deliberately excluded: preserving an
+# old state description there is useful evidence, not stale front-page policy.
+PUBLIC_ENTRY_FILES = (
+    "README.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    "SUPPORT.md",
+    ".github/ISSUE_TEMPLATE/bug_report.yml",
+    ".github/ISSUE_TEMPLATE/change_proposal.yml",
+    ".github/ISSUE_TEMPLATE/question.yml",
+    ".github/pull_request_template.md",
+    "docs/API.md",
+    "docs/AI_INFRA_SCOPE.md",
+    "docs/DELIVERY_STATUS.md",
+    "docs/INDEX.md",
+    "docs/NEXT_STEPS.md",
+    "docs/PROJECT_PLAN.md",
+    "docs/PUBLIC_RELEASE_CHECKLIST.md",
+    "docs/ROADMAP.md",
+    "docs/compatibility.md",
+    "docs/design.md",
+    "docs/performance_report.md",
+    "docs/reproducibility.md",
+)
+
+PERSONAL_PATH_PATTERNS = (
+    re.compile(r"/(?:Users|home)/(?P<account>[^/\s`\"']+)/"),
+    re.compile(r"[A-Za-z]:\\Users\\(?P<account>[^\\\s`\"']+)\\"),
+)
+LAN_IP = re.compile(
+    r"(?<![\d.])(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|"
+    r"172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})(?!\d|\.\d)"
+)
+PLACEHOLDER_ACCOUNTS = {
+    "$USER",
+    "${USER}",
+    "<user>",
+    "<username>",
+}
+STALE_CURRENT_STATE_PATTERNS = (
+    re.compile(r"\bprivate(?:-only)? maintenance\b", re.IGNORECASE),
+    re.compile(r"\bprivate\s+`?0\.0\.0`?\s+development candidate\b", re.IGNORECASE),
+    re.compile(
+        r"\bpublic (?:repository |source )?release (?:is|remains) paused\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"仓库当前为\s*private", re.IGNORECASE),
+    re.compile(
+        r"仓库[^。\n]{0,80}(?:仍为|仍是|目前为|当前为)\s*private",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\brepository\b[^.\n]{0,80}\b(?:is|remains|still)\s+private\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:可见性|visibility)[^。\n]{0,60}(?:切换|change)[^。\n]{0,60}"
+        r"(?:前|before)[^。\n]{0,30}\bprivate\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"公开设置和\s*tag\s*暂停", re.IGNORECASE),
+    re.compile(r"公开(?:和|与)\s*(?:release\s*)?tag\s*按所有者要求暂停", re.IGNORECASE),
 )
 
 
@@ -115,9 +188,52 @@ def portfolio_wording_problems(root: Path):
     return problems
 
 
+def public_safety_problems(root: Path):
+    """Return machine-specific data and stale state in current entry points.
+
+    This intentionally checks a small allowlist instead of every document. Terms
+    such as ``request-private``, ``private tail``, and historical private-state
+    notes are valid technical or provenance language and must remain untouched.
+    """
+    root = root.resolve()
+    problems = []
+    for relative in PUBLIC_ENTRY_FILES:
+        document = root / relative
+        if not document.is_file():
+            continue
+        for line_number, line in enumerate(
+            document.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            for pattern in PERSONAL_PATH_PATTERNS:
+                for match in pattern.finditer(line):
+                    if match.group("account") in PLACEHOLDER_ACCOUNTS:
+                        continue
+                    problems.append(
+                        f"{relative}:{line_number}: personal absolute path in "
+                        "public entry point"
+                    )
+            if LAN_IP.search(line):
+                problems.append(
+                    f"{relative}:{line_number}: private-network IP in public entry point"
+                )
+            for pattern in STALE_CURRENT_STATE_PATTERNS:
+                if pattern.search(line):
+                    problems.append(
+                        f"{relative}:{line_number}: stale private-repository status in "
+                        "public entry point"
+                    )
+                    break
+    return problems
+
+
 def documentation_problems(root: Path):
     """Return all repository documentation quality problems."""
-    return local_link_problems(root) + portfolio_wording_problems(root)
+    return (
+        local_link_problems(root)
+        + portfolio_wording_problems(root)
+        + public_safety_problems(root)
+    )
 
 
 def parse_args():

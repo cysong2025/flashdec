@@ -8,10 +8,10 @@
 
 - R1–R5 研究与工程交付均已完成，默认实现和正式证据已经冻结。
 - 当前默认路径是 token-major KV、block size 32、2 warps、implicit stages、fused CUDA append、Triton decode、lifetime FIFO + aging scheduler，以及 R4-A materialized trusted transaction。
-- 仓库保持 private `0.0.0` development candidate，不代表已经发布 `v0.1.0`。
-- 项目整理只统一文档、索引、证据入口和结构门禁，不修改 kernel/runtime 行为，也不重新解释历史数据。
-- GitHub landing page、issue forms 和 PR template 已对齐 R1–R5 的 correctness/evidence-first 边界；它们不改变版本、可见性或 release 状态。
-- 所有者已明确暂缓新环境复现；fresh virtualenv、版本升级、公开设置和 tag 均不在本轮范围内。
+- 源码仓库以 public `0.0.0` research preview 提供，而不是宣称已发布 `v0.1.0`。
+- 本轮公开准备统一文档、治理材料、证据入口、实验图表和结构门禁，不修改冻结的 kernel/runtime 行为，也不重新解释历史数据。
+- GitHub landing page、协作入口、安全边界和结果可视化已按 R1–R5 的 correctness/evidence-first 范围整理。
+- fresh-environment 复现继续暂缓；clean virtualenv、`v0.1.0` 版本与 tag 属于尚未验证的独立稳定发布门，不是本次 `0.0.0` 源码公开的承诺。
 
 ## 可交付成果
 
@@ -51,17 +51,18 @@
 
 - 最新 GPU 证据代码 commit `d7d4feb`：post-schema focused `93 passed, 37 subtests passed`，full `453 passed, 94 subtests passed`，R5 formal 72 rows/3 trials。
 - canonical evidence commit `01d8c7c`：`python scripts/check_release.py --require-clean --require-evidence` 为 `PASS`。
-- 本轮项目整理只变更文档、GitHub collaboration surface、索引、release artifact coverage 和对应 dependency-free tests；documentation/release/compile/diff/YAML checks 通过，dependency-free suite 为 `147 passed, 94 subtests passed`，不需要重跑 GPU 性能矩阵。
+- 本轮项目整理只变更文档、GitHub collaboration surface、索引、release artifact coverage 和对应 dependency-free tests；documentation/release/compile/diff checks 通过，19-module dependency-free CI-equivalent suite 为 `177 passed`，不需要重跑 GPU 性能矩阵。
 - 本轮验证结果记录在 [Stage 18 状态](weekly/week_18_status.md)。
 
-## 暂缓的 release 工作
+## 公开与稳定发布边界
 
-以下内容尚未完成，因此项目不能称为已发布版本：
+`0.0.0` public-source gate 包含根许可证/metadata 一致性、公开内容与历史安全审查、GitHub visibility/settings 复核以及 clean commit 上的项目检查；这些条件不升级软件版本，也不创建 release tag。
+
+本次目标是公开 `0.0.0` research preview 源码，不把以下尚未完成的工作包装成安装或稳定发布保证：
 
 1. fresh WSL virtualenv editable install 与新环境 correctness/quick workload；
 2. 审核 fresh-environment `pip freeze`；
 3. `0.0.0 -> 0.1.0` 版本更新；
-4. repository visibility/license 的最终决定；
-5. `v0.1.0` tag 与 GitHub release。
+4. `v0.1.0` tag 与 GitHub release。
 
-这些步骤只有在所有者明确恢复 release gate 后执行。当前后续状态见[下一步](NEXT_STEPS.md)。
+这些稳定发布步骤保持暂缓。当前执行顺序见[下一步](NEXT_STEPS.md)，公开检查项见[公开发布清单](PUBLIC_RELEASE_CHECKLIST.md)。

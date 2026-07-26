@@ -195,7 +195,7 @@ commit `1d5d8d0` 的 RTX 5070 正式矩阵覆盖 4 hit rates、2 dtypes、3 tria
 | 50% | 15/16 | 36/64 | 43.8% | 52 | 35.0% | 3.500 |
 | 75% | 16/16 | 20/64 | 68.8% | 36 | 55.0% | 5.500 |
 
-context saving 只计算重复 prefix；peak blocks 还包含每个请求不可共享的 private decode tail，因此 75% 的 context saving 是 68.8%，完整 peak reduction 是 55.0%。prefix attach p50 在所有非零 hit-rate case 中低于 `0.8 us`，相对约 `1.6-2.0 ms` 的 complete step 很小。
+context saving 只计算重复 prefix；peak blocks 还包含每个请求不可共享的 private decode tail，因此 75% 的 context saving 是 68.8%，完整 peak reduction 是 55.0%。prefix attach p50 在所有非零 hit-rate case 中为亚微秒，观测中位数范围是 `0.385–0.841 us`；相对约 `1.6–2.0 ms` 的 complete step 很小。
 
 paired trial 结果进一步限定 latency 结论：
 

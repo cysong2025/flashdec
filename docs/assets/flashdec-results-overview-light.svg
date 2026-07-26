@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1080" viewBox="0 0 1500 1080" role="img" aria-labelledby="chart-title chart-description" data-theme="light">
+  <title id="chart-title">FlashDec R1-R5 auditable evidence overview</title>
+  <desc id="chart-description">Four panels summarize R1 scheduler progress, R3 shared-prefix KV-pool capacity, R2 and R4 outcomes including the rejected R4-B result and passed R4-C lifecycle, and the R5 FlashInfer kernel-only p50 comparison. Data was derived from validated canonical Markdown summaries on an NVIDIA GeForce RTX 5070 and is not a raw dataset.</desc>
+  <metadata id="evidence-metadata">{&quot;device&quot;:&quot;NVIDIA GeForce RTX 5070&quot;,&quot;evidence&quot;:[{&quot;commit&quot;:&quot;16de9d4&quot;,&quot;rows&quot;:36,&quot;stage&quot;:&quot;R1&quot;,&quot;trials&quot;:3},{&quot;commit&quot;:&quot;fa0f89a&quot;,&quot;rows&quot;:144,&quot;stage&quot;:&quot;R2&quot;,&quot;trials&quot;:3},{&quot;commit&quot;:&quot;fe72e27&quot;,&quot;rows&quot;:64,&quot;stage&quot;:&quot;R3&quot;,&quot;trials&quot;:8},{&quot;commit&quot;:&quot;4018449&quot;,&quot;rows&quot;:160,&quot;stage&quot;:&quot;R4-A&quot;,&quot;trials&quot;:5},{&quot;commit&quot;:&quot;8047a9c&quot;,&quot;rows&quot;:160,&quot;stage&quot;:&quot;R4-B&quot;,&quot;trials&quot;:5},{&quot;commit&quot;:&quot;6912894&quot;,&quot;rows&quot;:24,&quot;stage&quot;:&quot;R4-C&quot;,&quot;trials&quot;:3},{&quot;commit&quot;:&quot;d7d4feb&quot;,&quot;rows&quot;:72,&quot;stage&quot;:&quot;R5&quot;,&quot;trials&quot;:3}],&quot;snapshot&quot;:&quot;benchmarks/results/public_results_snapshot.json&quot;,&quot;sources&quot;:[&quot;benchmarks/results/r1_scheduler_workload_trials3_summary.md&quot;,&quot;benchmarks/results/r2_multi_layer_engine_trials3_summary.md&quot;,&quot;benchmarks/results/r3_shared_prefix_workload_trials8_summary.md&quot;,&quot;benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md&quot;,&quot;benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md&quot;,&quot;benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md&quot;,&quot;benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md&quot;]}</metadata>
+  <defs>
+    <linearGradient id="header-glow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1E40AF" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#8250DF" stop-opacity="0.03"/>
+    </linearGradient>
+    <linearGradient id="panel-shadow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1F29370F" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#1F29370F" stop-opacity="1"/>
+    </linearGradient>
+    <pattern id="cancel-pattern" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="8" height="8" fill="#FFF3C4"/>
+      <line x1="0" y1="0" x2="0" y2="8" stroke="#9A6700" stroke-width="3" stroke-opacity="0.45"/>
+    </pattern>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Arial, sans-serif; }
+      .eyebrow { fill: #1E40AF; font-size: 17px; font-weight: 750; letter-spacing: 1.6px; }
+      .title { fill: #172033; font-size: 42px; font-weight: 760; letter-spacing: -0.8px; }
+      .subtitle { fill: #5C6B7A; font-size: 19px; font-weight: 450; }
+      .panel-title { fill: #172033; font-size: 24px; font-weight: 730; }
+      .panel-subtitle { fill: #5C6B7A; font-size: 16px; font-weight: 450; }
+      .label { fill: #172033; font-size: 17px; font-weight: 650; }
+      .small { fill: #5C6B7A; font-size: 17px; font-weight: 500; }
+      .tiny { fill: #5C6B7A; font-size: 16px; font-weight: 500; }
+      .value { fill: #172033; font-size: 20px; font-weight: 760; font-variant-numeric: tabular-nums; }
+      .value-green { fill: #065F46; font-size: 20px; font-weight: 760; font-variant-numeric: tabular-nums; }
+      .value-red { fill: #CF222E; font-size: 18px; font-weight: 780; }
+      .bar-label { fill: #172033; font-size: 15px; font-weight: 750; text-anchor: middle; }
+      .footer { fill: #5C6B7A; font-size: 16px; font-weight: 500; text-anchor: middle; }
+      .panel { fill: #FFFFFF; stroke: #D8E0EA; stroke-width: 1; }
+      .row { fill: #F8FAFC; stroke: #D8E0EA; stroke-width: 1; }
+      .grid { stroke: #E7ECF2; stroke-width: 1; }
+      .axis { stroke: #8B98A7; stroke-width: 1; }
+      .complete { fill: #DDF7EB; stroke: #065F46; stroke-width: 1.5; }
+      .cancelled { fill: url(#cancel-pattern); stroke: #9A6700; stroke-width: 1.5; }
+      .deadlock { fill: #FFEBE9; stroke: #CF222E; stroke-width: 2; }
+      .context-bar { fill: #DBEAFE; stroke: #1E40AF; stroke-width: 1.5; }
+      .admission-line { fill: none; stroke: #065F46; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .admission-dot { fill: #FFFFFF; stroke: #065F46; stroke-width: 3; }
+      .ratio-line { stroke: #8250DF; stroke-width: 7; stroke-linecap: round; }
+      .ratio-dot { fill: #FFFFFF; stroke: #8250DF; stroke-width: 5; }
+    </style>
+  </defs>
+  <rect width="1500" height="1080" fill="#F6F8FA"/>
+  <ellipse cx="1270" cy="20" rx="370" ry="215" fill="url(#header-glow)" aria-hidden="true"/>
+  <rect x="64" y="48" width="308" height="31" rx="15.5" fill="#DBEAFE" stroke="#1E40AF" aria-hidden="true"/>
+  <text x="218" y="69" class="eyebrow" text-anchor="middle">AUDITABLE EVIDENCE SNAPSHOT</text>
+  <text x="64" y="126" class="title">FlashDec R1-R5 Evidence Overview</text>
+  <text x="64" y="157" class="subtitle">RTX 5070 · derived from validated canonical summaries · processed snapshot, not a raw dataset</text>
+  <g id="r1-panel" role="group" aria-label="R1 scheduler progress outcomes">
+    <rect x="64" y="185" width="674" height="382" rx="20" fill="url(#panel-shadow)"/>
+    <rect class="panel" x="64" y="178" width="674" height="382" rx="20"/>
+    <text x="94" y="221" class="panel-title">R1 · Scheduler progress</text>
+    <text x="94" y="247" class="panel-subtitle">Boundary-pressure case · 2 requests · FP16/BF16 agree</text>
+    <text x="94" y="308" class="label">Lifetime FIFO + aging</text>
+    <rect class="complete" x="330" y="290" width="90" height="30" rx="8"/>
+    <text x="375" y="310" class="bar-label">✓ complete</text>
+    <rect class="complete" x="427" y="290" width="90" height="30" rx="8"/>
+    <text x="472" y="310" class="bar-label">✓ complete</text>
+    <text x="708" y="310" class="value-green" text-anchor="end">2/2 COMPLETE</text>
+    <text x="94" y="384" class="label">Cancel on backpressure</text>
+    <rect class="complete" x="330" y="366" width="90" height="30" rx="8"/>
+    <text x="375" y="386" class="bar-label">✓ complete</text>
+    <rect class="cancelled" x="427" y="366" width="90" height="30" rx="8"/>
+    <text x="472" y="386" class="bar-label">× cancelled</text>
+    <text x="708" y="386" class="label" text-anchor="end">1/2 COMPLETE</text>
+    <text x="94" y="460" class="label">Greedy step-only</text>
+    <rect class="deadlock" x="330" y="442" width="90" height="30" rx="8"/>
+    <text x="375" y="462" class="bar-label">! blocked</text>
+    <rect class="deadlock" x="427" y="442" width="90" height="30" rx="8"/>
+    <text x="472" y="462" class="bar-label">! blocked</text>
+    <text x="708" y="462" class="value-red" text-anchor="end">DEADLOCK</text>
+    <circle cx="97" cy="524" r="5" fill="#065F46"/>
+    <text x="109" y="528" class="tiny">completed</text>
+    <circle cx="196" cy="524" r="5" fill="#9A6700"/>
+    <text x="208" y="528" class="tiny">cancelled</text>
+    <circle cx="296" cy="524" r="5" fill="#CF222E"/>
+    <text x="308" y="528" class="tiny">deadlock</text>
+    <text x="708" y="528" class="tiny" text-anchor="end">Correctness/progress evidence — not latency</text>
+  </g>
+  <g id="r3-panel" role="group" aria-label="R3 shared-prefix capacity and admission">
+    <rect x="762" y="185" width="674" height="382" rx="20" fill="url(#panel-shadow)"/>
+    <rect class="panel" x="762" y="178" width="674" height="382" rx="20"/>
+    <text x="792" y="221" class="panel-title">R3 · Shared-prefix capacity</text>
+    <text x="792" y="247" class="panel-subtitle">48-block admission pool · 64 logical context blocks</text>
+    <rect class="context-bar" x="793" y="267" width="17" height="12" rx="3"/>
+    <text x="818" y="279" class="tiny">physical context blocks</text>
+    <line class="admission-line" x1="1000" y1="273" x2="1032" y2="273"/>
+    <circle class="admission-dot" cx="1016" cy="273" r="5"/>
+    <text x="1042" y="279" class="tiny">admitted requests / 16</text>
+    <text x="1406" y="279" class="tiny" text-anchor="end">saved KV-pool MiB below</text>
+    <line class="grid" x1="832" y1="469" x2="1396" y2="469"/>
+    <text x="820" y="473" class="tiny" text-anchor="end">0</text>
+    <line class="grid" x1="832" y1="391" x2="1396" y2="391"/>
+    <text x="820" y="395" class="tiny" text-anchor="end">32</text>
+    <line class="grid" x1="832" y1="313" x2="1396" y2="313"/>
+    <text x="820" y="317" class="tiny" text-anchor="end">64</text>
+    <rect class="context-bar" x="856" y="313" width="56" height="156" rx="8"/>
+    <text x="868" y="304" class="bar-label">64</text>
+    <rect class="context-bar" x="988" y="342.25" width="56" height="126.75" rx="8"/>
+    <text x="1000" y="333.25" class="bar-label">52</text>
+    <rect class="context-bar" x="1120" y="381.25" width="56" height="87.75" rx="8"/>
+    <text x="1132" y="372.25" class="bar-label">36</text>
+    <rect class="context-bar" x="1252" y="420.25" width="56" height="48.75" rx="8"/>
+    <text x="1264" y="411.25" class="bar-label">20</text>
+    <polyline class="admission-line" points="884,381.25 1016,352 1148,322.75 1280,313"/>
+    <circle class="admission-dot" cx="884" cy="381.25" r="7"/>
+    <text x="907" y="368.25" class="bar-label">9/16</text>
+    <text x="884" y="491" class="small" text-anchor="middle">0% hit</text>
+    <text x="884" y="512" class="tiny" text-anchor="middle">+0.0 MiB</text>
+    <circle class="admission-dot" cx="1016" cy="352" r="7"/>
+    <text x="1039" y="339" class="bar-label">12/16</text>
+    <text x="1016" y="491" class="small" text-anchor="middle">25% hit</text>
+    <text x="1016" y="512" class="tiny" text-anchor="middle">+1.5 MiB</text>
+    <circle class="admission-dot" cx="1148" cy="322.75" r="7"/>
+    <text x="1171" y="309.75" class="bar-label">15/16</text>
+    <text x="1148" y="491" class="small" text-anchor="middle">50% hit</text>
+    <text x="1148" y="512" class="tiny" text-anchor="middle">+3.5 MiB</text>
+    <circle class="admission-dot" cx="1280" cy="313" r="7"/>
+    <text x="1303" y="300" class="bar-label">16/16</text>
+    <text x="1280" y="491" class="small" text-anchor="middle">75% hit</text>
+    <text x="1280" y="512" class="tiny" text-anchor="middle">+5.5 MiB</text>
+    <text x="1099" y="541" class="tiny" text-anchor="middle">KV-pool capacity—not process VRAM · 75% hit: 20/64 blocks, 16/16 admitted</text>
+  </g>
+  <g id="scorecard-panel" role="group" aria-label="R2 and R4 evidence outcomes">
+    <rect x="64" y="591" width="674" height="416" rx="20" fill="url(#panel-shadow)"/>
+    <rect class="panel" x="64" y="584" width="674" height="416" rx="20"/>
+    <text x="94" y="627" class="panel-title">R2 / R4 · Recorded outcomes</text>
+    <text x="94" y="653" class="panel-subtitle">p50 ratio · stable groups · evidence disposition</text>
+    <text x="95" y="688" class="tiny">PATH / STAGE</text>
+    <text x="456" y="688" class="tiny" text-anchor="end">P50</text>
+    <text x="539" y="688" class="tiny" text-anchor="middle">STABLE</text>
+    <text x="707" y="688" class="tiny" text-anchor="end">OUTCOME</text>
+    <rect class="row" x="86" y="706" width="630" height="68" rx="13"/>
+    <text x="102" y="731" class="label">R2 · Fused append path</text>
+    <text x="102" y="753" class="tiny">torch / fused complete-token p50</text>
+    <text x="456" y="736" class="value" text-anchor="end">1.2101×</text>
+    <text x="539" y="735" class="value" text-anchor="middle">20/24</text>
+    <text x="539" y="754" class="tiny" text-anchor="middle">min &gt; 1</text>
+    <rect x="596" y="723" width="104" height="32" rx="16" fill="#DDF7EB" stroke="#065F46"/>
+    <text x="648" y="744" class="value-green" text-anchor="middle">OBSERVED</text>
+    <rect class="row" x="86" y="788" width="630" height="68" rx="13"/>
+    <text x="102" y="813" class="label">R4-A · Trusted transaction path</text>
+    <text x="102" y="835" class="tiny">checked / trusted complete-token p50</text>
+    <text x="456" y="818" class="value" text-anchor="end">1.7307×</text>
+    <text x="539" y="817" class="value" text-anchor="middle">16/16</text>
+    <text x="539" y="836" class="tiny" text-anchor="middle">min &gt; 1</text>
+    <rect x="596" y="805" width="104" height="32" rx="16" fill="#DDF7EB" stroke="#065F46"/>
+    <text x="648" y="826" class="value-green" text-anchor="middle">ACCEPTED</text>
+    <rect class="row" x="86" y="870" width="630" height="68" rx="13"/>
+    <text x="102" y="895" class="label">R4-B · Persistent metadata</text>
+    <text x="102" y="917" class="tiny">materialized / persistent complete-token p50</text>
+    <text x="456" y="900" class="value" text-anchor="end">1.2493×</text>
+    <text x="539" y="899" class="value" text-anchor="middle">13/16</text>
+    <text x="539" y="918" class="tiny" text-anchor="middle">min &gt; 1</text>
+    <rect x="588" y="887" width="112" height="32" rx="16" fill="#FFEBE9" stroke="#CF222E"/>
+    <text x="644" y="908" class="value-red" text-anchor="middle">REJECTED</text>
+    <text x="94" y="980" class="tiny">R4-C lifecycle PASS · 24 rows / 3 trials</text>
+    <text x="708" y="980" class="tiny" text-anchor="end">R4-B rolled back</text>
+  </g>
+  <g id="r5-panel" role="group" aria-label="R5 FlashInfer kernel-only baseline">
+    <rect x="762" y="591" width="674" height="416" rx="20" fill="url(#panel-shadow)"/>
+    <rect class="panel" x="762" y="584" width="674" height="416" rx="20"/>
+    <text x="792" y="627" class="panel-title">R5 · External kernel baseline</text>
+    <text x="792" y="653" class="panel-subtitle">Common-shape paged decode · geometric mean across 8 groups</text>
+    <line class="grid" x1="1016" y1="712" x2="1016" y2="859"/>
+    <text x="1016" y="703" class="tiny" text-anchor="middle">1.0×</text>
+    <line class="grid" x1="1137.333" y1="712" x2="1137.333" y2="859"/>
+    <text x="1137.333" y="703" class="tiny" text-anchor="middle">1.1×</text>
+    <line class="grid" x1="1258.667" y1="712" x2="1258.667" y2="859"/>
+    <text x="1258.667" y="703" class="tiny" text-anchor="middle">1.2×</text>
+    <line class="grid" x1="1380" y1="712" x2="1380" y2="859"/>
+    <text x="1380" y="703" class="tiny" text-anchor="middle">1.3×</text>
+    <text x="1380" y="680" class="tiny" text-anchor="end">higher → FlashInfer lower p50</text>
+    <text x="792" y="759" class="label">FA2 CUDA-core</text>
+    <text x="792" y="779" class="tiny">FlashDec / FlashInfer p50</text>
+    <line class="ratio-line" x1="1016" y1="754" x2="1259.031" y2="754"/>
+    <circle class="ratio-dot" cx="1259.031" cy="754" r="9"/>
+    <text x="1406" y="760" class="value" text-anchor="end">1.2003×</text>
+    <text x="792" y="841" class="label">FA2 tensor-core</text>
+    <text x="792" y="861" class="tiny">FlashDec / FlashInfer p50</text>
+    <line class="ratio-line" x1="1016" y1="836" x2="1293.125" y2="836"/>
+    <circle class="ratio-dot" cx="1293.125" cy="836" r="9"/>
+    <text x="1406" y="842" class="value" text-anchor="end">1.2284×</text>
+    <rect x="786" y="876" width="626" height="91" rx="14" fill="#EDE4FF" stroke="#8250DF"/>
+    <text x="803" y="903" class="label">&gt;1 favors FlashInfer · descriptive p50 evidence only</text>
+    <text x="803" y="927" class="small">16/16 observed three-trial ranges are above 1; R5 has no winner gate.</text>
+    <text x="803" y="950" class="tiny">KERNEL-ONLY · excludes scheduler, KV ownership and end-to-end serving</text>
+  </g>
+  <text x="750" y="1037" class="footer">Ratios retain each source&#x27;s direction and are not comparable across stages.</text>
+  <text x="750" y="1061" class="footer">Canonical Markdown remains authoritative · theme-specific SVGs are deterministic</text>
+</svg>

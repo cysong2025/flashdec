@@ -267,4 +267,4 @@ python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_de
 - R3 Shared Prefix Blocks 已完成 R3-A Cache core、R3-B scheduler integration、R3-C benchmark 与 R3-D metadata hot-path cache。commit `fe72e27` 的 RTX correctness 与 8-trial/64-row confirmation 已闭合；稳定结论是 physical KV 节省和 bounded-capacity admission 提升，性能近中性且无稳定方向。
 - R4-A trusted transaction 与 R4-C integrated workload 已完成；R4-B 未通过稳定性门并已回滚。调用方可原子导入多层 prompt/context K/V，但 FlashDec 不执行模型 prefill forward。
 - R5 已完成固定 `flashinfer-python==0.6.15.post1` 的 72-row/3-trial 共同 paged-decode kernel-only 基线；vLLM 完整 serving 不在第一版公平范围。
-- clean-install、新环境复现、版本升级、公开和 release tag 按所有者要求暂停。
+- 当前源码状态是 public `0.0.0` research preview。clean-install、新环境复现、`v0.1.0` 版本与 release tag 尚未验证，继续作为独立稳定发布门。

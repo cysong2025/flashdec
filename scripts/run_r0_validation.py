@@ -454,7 +454,10 @@ def parse_args():
     parser.add_argument("--continue-on-error", action="store_true")
     parser.add_argument(
         "--export-dir",
-        help="Optional host-visible result directory, e.g. /mnt/c/Users/user/flashdec_results.",
+        help=(
+            "Optional host-visible result directory, e.g. "
+            "/mnt/c/Users/<windows-user>/flashdec_results."
+        ),
     )
     return parser.parse_args()
 

@@ -2,7 +2,7 @@
 
 ## Validation
 
-- Input: `/home/user/flashdec_results/r4c_6912894_20260721_212333/r4_integrated_trials3.csv`.
+- Input artifact: `r4_integrated_trials3.csv` (local source path normalized for publication; raw CSV is not tracked).
 - Rows: 24; trials: 3.
 - Device: NVIDIA GeForce RTX 5070.
 - PyTorch/CUDA: 2.11.0+cu128 / 12.8.

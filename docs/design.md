@@ -120,4 +120,4 @@ Profiler 数据不与 release latency 混用。所有性能结论绑定硬件、
 - 支持 FP16/BF16 paged decode；append reference 另支持 FP32。
 - 支持调用方预构建的 immutable full-block shared prefix；不包含 multi-layer prompt prefill、prefix 内容构建/hash、admission-time prefix eviction、抢占、swap/offload 或生产级并发服务。
 - CUDA extension 使用 lazy JIT，首次运行含构建成本。
-- 当前版本为 private `0.0.0` development candidate；clean-install、版本、公开与 tag gate 按所有者要求暂停。
+- 当前版本是 public `0.0.0` research preview；clean-install、`v0.1.0` 版本与 tag 是尚未验证的独立稳定发布门。

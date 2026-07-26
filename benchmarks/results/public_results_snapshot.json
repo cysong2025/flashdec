@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "artifact": {
+    "title": "FlashDec R1-R5 Evidence Overview",
+    "device": "NVIDIA GeForce RTX 5070",
+    "provenance": "Derived from validated canonical Markdown summaries.",
+    "data_class": "Curated processed snapshot; not a raw benchmark dataset.",
+    "authority": "The canonical Markdown summaries remain authoritative.",
+    "ratio_boundary": "Every ratio preserves its source-specific direction; ratio magnitudes are not comparable across stages."
+  },
+  "r1_scheduler_progress": {
+    "source": "benchmarks/results/r1_scheduler_workload_trials3_summary.md",
+    "evidence_commit": "16de9d4",
+    "rows": 36,
+    "trials": 3,
+    "scope": "boundary_deadlock case; 2 requests; identical progress outcomes in float16 and bfloat16",
+    "kind": "correctness_and_progress",
+    "policies": [
+      {
+        "id": "lifetime_fifo_aging",
+        "label": "Lifetime FIFO + aging",
+        "completed": 2,
+        "cancelled": 0,
+        "deadlock": false
+      },
+      {
+        "id": "cancel_on_backpressure",
+        "label": "Cancel on backpressure",
+        "completed": 1,
+        "cancelled": 1,
+        "deadlock": false
+      },
+      {
+        "id": "greedy_step_only",
+        "label": "Greedy step-only",
+        "completed": 0,
+        "cancelled": 0,
+        "deadlock": true
+      }
+    ]
+  },
+  "r3_shared_prefix_capacity": {
+    "source": "benchmarks/results/r3_shared_prefix_workload_trials8_summary.md",
+    "evidence_commit": "fe72e27",
+    "rows": 64,
+    "trials": 8,
+    "scope": "fixed 48-block admission pool; capacity values are identical in float16 and bfloat16",
+    "kind": "kv_pool_capacity_not_process_vram",
+    "logical_context_blocks": 64,
+    "request_count": 16,
+    "points": [
+      {
+        "hit_rate_percent": 0,
+        "physical_context_blocks": 64,
+        "admitted_requests": 9,
+        "saved_kv_capacity_mib": 0.0
+      },
+      {
+        "hit_rate_percent": 25,
+        "physical_context_blocks": 52,
+        "admitted_requests": 12,
+        "saved_kv_capacity_mib": 1.5
+      },
+      {
+        "hit_rate_percent": 50,
+        "physical_context_blocks": 36,
+        "admitted_requests": 15,
+        "saved_kv_capacity_mib": 3.5
+      },
+      {
+        "hit_rate_percent": 75,
+        "physical_context_blocks": 20,
+        "admitted_requests": 16,
+        "saved_kv_capacity_mib": 5.5
+      }
+    ]
+  },
+  "optimization_outcomes": {
+    "scope_boundary": "The rows have different workloads and timing boundaries; R2 is an observed disposition, R4-A is a scoped acceptance, and only R4-B used a pre-registered keep gate.",
+    "entries": [
+      {
+        "stage": "R2",
+        "label": "Fused append path",
+        "source": "benchmarks/results/r2_multi_layer_engine_trials3_summary.md",
+        "evidence_commit": "fa0f89a",
+        "rows": 144,
+        "trials": 3,
+        "p50_ratio": 1.2101,
+        "ratio_direction": "torch / fused complete-token p50",
+        "stable_groups": 20,
+        "total_groups": 24,
+        "outcome": "observed",
+        "outcome_basis": "stability_observation"
+      },
+      {
+        "stage": "R4-A",
+        "label": "Trusted transaction path",
+        "source": "benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md",
+        "evidence_commit": "4018449",
+        "rows": 160,
+        "trials": 5,
+        "p50_ratio": 1.7307,
+        "ratio_direction": "checked / trusted complete-token p50",
+        "stable_groups": 16,
+        "total_groups": 16,
+        "outcome": "accepted",
+        "outcome_basis": "scoped_acceptance"
+      },
+      {
+        "stage": "R4-B",
+        "label": "Persistent metadata",
+        "source": "benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md",
+        "evidence_commit": "8047a9c",
+        "rows": 160,
+        "trials": 5,
+        "p50_ratio": 1.2493,
+        "ratio_direction": "materialized / persistent complete-token p50",
+        "stable_groups": 13,
+        "total_groups": 16,
+        "outcome": "rejected_and_rolled_back",
+        "outcome_basis": "pre_registered_keep_gate"
+      }
+    ]
+  },
+  "r4c_integrated_correctness": {
+    "source": "benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md",
+    "evidence_commit": "6912894",
+    "rows": 24,
+    "trials": 3,
+    "scope": "integrated scheduled multi-layer trajectory; correctness and lifecycle closure, not a relative latency comparison",
+    "kind": "integrated_correctness_and_lifecycle",
+    "status": "passed"
+  },
+  "r5_flashinfer_kernel_baseline": {
+    "source": "benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md",
+    "evidence_commit": "d7d4feb",
+    "rows": 72,
+    "trials": 3,
+    "scope": "common-shape paged single-token decode kernel only; 8 dtype/case groups per backend",
+    "kind": "descriptive_external_kernel_baseline",
+    "ratio_direction": "FlashDec / FlashInfer p50 latency; values above 1 favor FlashInfer",
+    "performance_gate": false,
+    "observed_p50_ranges_above_one": 16,
+    "total_p50_ranges": 16,
+    "backends": [
+      {
+        "id": "flashinfer_fa2_cuda_core",
+        "label": "FA2 CUDA-core",
+        "p50_ratio_geometric_mean": 1.2003
+      },
+      {
+        "id": "flashinfer_fa2_tensor_core",
+        "label": "FA2 tensor-core",
+        "p50_ratio_geometric_mean": 1.2284
+      }
+    ]
+  }
+}

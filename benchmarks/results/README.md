@@ -25,6 +25,16 @@
 
 `docs/performance_report.md` 也是 release evidence，用于把上述结果放回统一的计时和不可外推边界。
 
+## 公开结果概览
+
+README 中的 R1–R5 双主题图由受版本控制的 [`public_results_snapshot.json`](public_results_snapshot.json) 生成。该文件是从上表 canonical summaries 审核后提取的 processed snapshot，不是原始 benchmark dataset；canonical Markdown 仍是最终权威来源。
+
+```bash
+python scripts/generate_public_results_chart.py --check
+```
+
+生成器会解析来源文件中的 validation metadata、目标 Markdown 表格和 R4-B/R4-C outcome，再确定性生成 [light](../../docs/assets/flashdec-results-overview-light.svg) / [dark](../../docs/assets/flashdec-results-overview-dark.svg) SVG。图中 R1 是 progress/correctness、R3 是 KV-pool capacity、R2 是稳定性观察、R4-A 是限定范围 acceptance、R4-B 是预注册 keep gate 负结果、R4-C 是 lifecycle/correctness PASS，R5 是 kernel-only 外部基线；不同阶段的 ratio 方向和 workload 不同，不能合并成一个总加速结论。
+
 ## 历史与支撑结果
 
 以下 tracked summaries 用于追溯默认配置或阶段演进，但不是当前阶段结论的唯一入口：

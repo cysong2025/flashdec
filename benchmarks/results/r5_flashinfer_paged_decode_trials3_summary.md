@@ -2,7 +2,7 @@
 
 ## Validation
 
-- Input: `/home/user/flashdec_results/r5_d7d4feb_20260726_152519/r5_flashinfer_paged_decode_trials3.csv`.
+- Input artifact: `r5_flashinfer_paged_decode_trials3.csv` (local source path normalized for publication; raw CSV is not tracked).
 - Rows: 72; trials: 3.
 - Device: NVIDIA GeForce RTX 5070.
 - Run started: 2026-07-26T15:28:08+08:00.
@@ -14,7 +14,7 @@
 - FlashInfer workspace: 128 MiB per wrapper.
 - Git commit: `d7d4feb`.
 - Git worktree was clean when the runner started.
-- Runner command: `/home/user/.virtualenvs/flashdec-r5-20260726_004807/bin/python /home/user/work/flashdec/benchmarks/run_flashinfer_baseline.py --case all --dtype both --trials 3 --warmup 10 --repeat 50 --require-clean --output /home/user/flashdec_results/r5_d7d4feb_20260726_152519/r5_flashinfer_paged_decode_trials3.csv`.
+- Runner command (publication-normalized paths): `$PYTHON $REPO/benchmarks/run_flashinfer_baseline.py --case all --dtype both --trials 3 --warmup 10 --repeat 50 --require-clean --output $RESULT_DIR/r5_flashinfer_paged_decode_trials3.csv`.
 - Common operation: paged single-token decode with 32 query heads, 8 KV heads, head dimension 128, page size 32, and FP16/BF16.
 - FlashInfer consumes its documented `HND` paged layout; FlashDec consumes its physical `token_major` layout. Both views share the same logical pages and page table; no layout conversion is inside timing.
 - CUDA events cover `run` only. Input construction, reference validation, FlashInfer plan/JIT, and synchronization setup are excluded.

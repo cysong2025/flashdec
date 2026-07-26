@@ -2,14 +2,14 @@
 
 ## 目的与证据边界
 
-本文定义 FlashDec 证据复核与未来 `v0.1.0` 候选版本的复现流程。仓库当前保持 private，只有已有访问权限的审阅者可以直接使用；若未来公开，同一流程才成为第三方入口。复现分为四层，不能用后一层的成功替代前一层：
+本文定义 public FlashDec `0.0.0` research preview 的证据复核流程，以及未来 `v0.1.0` 候选版本所需的复现门。这些命令是无需私有仓库授权的第三方入口。复现分为四层，不能用后一层的成功替代前一层：
 
 1. environment/package：依赖、commit、CUDA Toolkit 和编译器可见。
 2. correctness：reference、runtime state machine、native extension 和 Triton 对齐。
 3. non-instrumented benchmark：CUDA-event 或完整 Engine wall-clock 性能。
 4. instrumented profiling：阶段归因和 Chrome trace，不作为 release latency。
 
-所有公开数字必须绑定 commit、命令、GPU、PyTorch/CUDA、shape、dtype、warmup/repeat/trial 和结果摘要。当前 macOS Codex 工作区没有项目 GPU 栈（Torch/CUDA）；dependency-free pytest 使用 Codex bundled runtime 执行，GPU 证据只来自个人 RTX 5070 WSL 环境。
+所有公开数字必须绑定 commit、命令、GPU、PyTorch/CUDA、shape、dtype、warmup/repeat/trial 和结果摘要。当前文档维护工作区没有项目 GPU 栈（Torch/CUDA）；dependency-free pytest 使用独立 Python runtime 执行，GPU 证据来自已记录的 RTX 5070 WSL 参考环境。
 
 ## 已验证参考环境
 
@@ -28,9 +28,11 @@ GCC/G++: 13.3.0
 
 驱动、`nvidia-smi` 和完整环境历史见 `docs/environment.md`。这里记录的是已验证参考环境，不表示项目只能在这些精确版本运行；其他组合必须重新执行 correctness，不得直接继承性能结论。
 
-正式 release 前需要在 clean WSL venv 生成并审核 `pip freeze`；当前不提交未在新环境验证的伪 lock file。按所有者要求，本轮项目整理不创建新目录/新 virtualenv，也不把历史环境重跑伪装成 clean-install 证据。
+未来稳定 release 前需要在 clean WSL venv 生成并审核 `pip freeze`；当前不提交未在新环境验证的伪 lock file。本次 `0.0.0` 源码公开不创建新目录/新 virtualenv，也不把历史环境重跑伪装成 clean-install 证据。
 
-## Fresh clone 与安装（当前暂停）
+## Fresh clone 与安装（开发入口；clean environment 尚未验证）
+
+仓库为 public，`git clone` 不需要私有仓库授权。以下命令是开发环境入口，不构成已经通过 fresh-environment gate 的安装保证。
 
 ```bash
 git clone https://github.com/cysong2025/flashdec.git
@@ -76,13 +78,17 @@ git rev-parse --short HEAD
 
 手工命令仍保留在后续章节作为唯一计时边界说明；实际执行时推荐由 dependency-free 编排器保证顺序、tracked-clean/CUDA 预检、产物存在性和 Windows 导出。
 
+```bash
+export FLASHDEC_EXPORT_DIR="/mnt/c/Users/<user>/flashdec_results"
+```
+
 先确认完整命令，不执行 GPU 工作：
 
 ```bash
 python scripts/run_r0_validation.py \
   --phase all \
   --dry-run \
-  --export-dir /mnt/c/Users/user/flashdec_results
+  --export-dir "$FLASHDEC_EXPORT_DIR"
 ```
 
 分阶段正式执行：
@@ -96,12 +102,12 @@ python scripts/run_r0_validation.py \
 python scripts/run_r0_validation.py \
   --phase trials-quick \
   --phase profile-quick \
-  --export-dir /mnt/c/Users/user/flashdec_results
+  --export-dir "$FLASHDEC_EXPORT_DIR"
 
 python scripts/run_r0_validation.py \
   --phase trials-formal \
   --phase profile-formal \
-  --export-dir /mnt/c/Users/user/flashdec_results
+  --export-dir "$FLASHDEC_EXPORT_DIR"
 ```
 
 `all` 等价于从 `local` 到 `profile-formal` 的全部 evidence phase，故意不包含 `release`。正式 summary 在 Mac 审核、提交并由 WSL 重新拉取后，才单独运行：
@@ -549,8 +555,9 @@ benchmarks/profiles/
 WSL 结果通过 Windows 目录中转：
 
 ```bash
-mkdir -p /mnt/c/Users/user/flashdec_results
-cp benchmarks/results/<result-files> /mnt/c/Users/user/flashdec_results/
+export FLASHDEC_EXPORT_DIR="/mnt/c/Users/<user>/flashdec_results"
+mkdir -p "$FLASHDEC_EXPORT_DIR"
+cp benchmarks/results/<result-files> "$FLASHDEC_EXPORT_DIR/"
 ```
 
 Mac 再通过 Windows OpenSSH 拉取；代码同步始终使用 GitHub，不用手工复制代码文件。
@@ -565,7 +572,7 @@ python scripts/check_release.py --require-clean
 
 该命令检查必需 artifact、`pyproject.toml`/`flashdec.__version__` 一致性和 clean Git worktree。该调用没有启用 `--require-tag`；当前仍为 `0.0.0` development candidate，因此此阶段也不应启用 tag gate。
 
-只有所有者明确启动 release 且完成所有 GPU/clean-install gate 后：
+只有未来明确启动稳定 release 且完成所有 GPU/clean-install gate 后：
 
 1. 将 `pyproject.toml` 和 `flashdec/__init__.py` 同步改为 `0.1.0`。
 2. 将 Changelog 的 Unreleased 内容整理为 `## [0.1.0] - YYYY-MM-DD`。
@@ -594,8 +601,9 @@ python scripts/check_release.py --require-clean
 | R4-C integrated workload | 已完成 | commit `6912894` 的 focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`、FP16 quick 与 [24-row/3-trial canonical summary](../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)；digest/rollback/prefix/reuse/cleanup 全部通过 |
 | R5 FlashInfer 有限基线 | 已完成 | commit `d7d4feb` 的 post-schema focused `93 passed, 37 subtests passed`、3-row quick、72-row/3-trial formal、full `453 passed, 94 subtests passed` 与 clean-tree release check `PASS`；[canonical summary](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md) 已纳入 evidence gate |
 | Project handoff | 已完成 | [交付状态](DELIVERY_STATUS.md)、[结果索引](../benchmarks/results/README.md)、一致性检查与扩展后的 release guard |
-| Clean WSL editable install | 暂停 | 所有者已明确本轮不做新环境复现；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
+| Public `0.0.0` research preview | 已完成 | 许可证、公开内容/安全审查、项目检查和 GitHub visibility/settings gate |
+| Clean WSL editable install | 暂停 | 不属于本次源码公开承诺；未来恢复稳定 release gate 后保存新 venv、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |
 
-当前是 private `0.0.0` development candidate，不能称为已发布版本。版本、公开与 tag 按所有者要求暂停。
+仓库当前是 public pre-release `0.0.0` research preview，而不是稳定安装或 `v0.1.0` 发布承诺。fresh-environment、版本升级与 tag 继续暂缓。

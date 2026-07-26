@@ -41,7 +41,7 @@ FlashDec 后续不再通过增加零散算子或重复参数 sweep 扩充内容�
 | 调度策略 | R1 lifetime commitment 已解决 boundary deadlock，并保留 cancel/greedy 负对照 | 后续重点是表达容量安全与公平性，不宣称所有普通 workload 更快 |
 | 多 layer fused host 同步 | R4-A 已用 Cache-owned trusted path 移除重复 device reduction + `.item()`；public raw op 继续保留完整检查 | R4-B persistent candidate 未过 16/16 keep gate，主线保持 R4-A/materialized，不继续同线调参 |
 | 系统能力组合 | R4-C 已用统一 trajectory 覆盖 scheduler、multi-layer transaction、shared-prefix hit/miss、rollback 与 churn | 24-row strict evidence 证明组合 correctness；有限 trace 的 p90/p99 不解释为稳态 decode tail |
-| 发布证据 | R1-R5 canonical summaries、CHANGELOG 与 release checker 已齐备；clean-install、版本和 tag 暂停 | 项目整理与 release gate 分离，未经所有者指令不升级 `0.0.0` 或创建 tag |
+| 发布证据 | R1-R5 canonical summaries、CHANGELOG 与 release checker 已齐备；源码为 public `0.0.0` preview，clean-install、版本和 tag 暂缓 | 源码公开与稳定发布分离；未完成 fresh-environment gate 前不升级到 `0.1.0` 或创建 tag |
 
 ## 3. 目标架构
 
@@ -124,7 +124,7 @@ Scheduler 只决定 request ids、顺序和资源预算，不生成 Q/K/V；Deco
 
 ### R0.3 v0.1.0 可复现发布
 
-当前状态：reproducibility guide、release checker、R0 phase orchestrator 与 R1-R5 正式证据均已完成；clean WSL venv、版本升级、公开和 tag 按所有者要求暂停。
+当前状态：reproducibility guide、release checker、R0 phase orchestrator 与 R1-R5 正式证据均已完成；源码以 public `0.0.0` research preview 提供。clean WSL venv、版本升级和 tag 仍然暂缓，因此本节的稳定发布验收尚未完成。
 
 交付物：
 
@@ -283,7 +283,7 @@ FP16/BF16 + GQA -> CPU/reference and RTX path aligned
 
 ## 7. 阶段 R3：Shared Prefix Blocks（已完成）
 
-优先级：P2。R3-A 至 R3-D 已完成；仓库继续保持 private，最终 clean install 与发布准备不自动启动。
+优先级：P2。R3-A 至 R3-D 已完成；该阶段结束时没有自动启动 clean install 或稳定发布。源码公开已由独立 public-source gate 完成。
 
 ### 目标
 
@@ -326,7 +326,7 @@ capacity failure -> refcount and ownership unchanged
 
 ## 8. 阶段 R4：Trusted Transaction Fast Path 与统一多层调度
 
-优先级：P1，private 优化阶段。先消除 cache-owned fused transaction 的确定性 host sync，再用组合 workload 验证 R1-R3 主链路；不重新 sweep 已冻结 kernel 参数。
+优先级：P1，受控优化阶段。先消除 cache-owned fused transaction 的确定性 host sync，再用组合 workload 验证 R1-R3 主链路；不重新 sweep 已冻结 kernel 参数。
 
 ### R4-A：Trusted CUDA Transaction Fast Path
 
@@ -399,10 +399,11 @@ dynamic arrivals
 | 系统扩展 | R3 Shared Prefix、R4 trusted/integrated workload | 已完成；R4-B 负结果与回滚保留 |
 | 外部基线 | 固定版本 FlashInfer 有限共同 kernel 对比 | 已完成 72-row/3-trial 正式矩阵 |
 | 项目交付 | 交付状态、结果索引、范围/复现/发布边界一致性 | 已完成整理；不改变冻结实现 |
-| Release-only | fresh environment、`0.1.0`、公开设置、tag | 按所有者要求暂停，不影响 R1–R5 工程完成 |
+| Public source preview | 许可证、治理/安全审查、结果展示、公开设置 | 已完成 public `0.0.0` research preview |
+| Stable release | fresh environment、`0.1.0`、tag 与 GitHub release | 暂缓，不影响 R1–R5 工程完成或 `0.0.0` 源码公开 |
 | 不做 | HTTP server、完整模型、sampling、TP/PP、多机、swap/offload | 不在当前交付范围 |
 
-技术深度的完成标准与 `v0.1.0` 发布门是两件事：前者由 R1–R5 的实现、correctness 和正式证据闭合；后者仍需要全新环境复现、版本与 tag，未经所有者指令不启动。
+技术深度、`0.0.0` 源码公开与 `v0.1.0` 稳定发布是三个不同层次：R1–R5 的实现、correctness 和正式证据已经闭合；源码以 public research preview 提供；未来稳定发布仍需要全新环境复现、版本与 tag。
 
 ## 11. 每阶段统一 Definition of Done
 
@@ -421,7 +422,7 @@ dynamic arrivals
 
 1. R1 Scheduler、R2 Multi-layer、R3 Shared Prefix、R4 trusted/integrated 与 R5 public baseline 的实现和正式证据均已完成。
 2. 项目整理已统一当前状态、结果索引、范围声明、仓库结构和可复现入口，没有新增功能或重新调参。
-3. 当前进入 private `0.0.0` 维护状态，只处理 correctness、回归、文档与证据问题。
-4. 收到所有者明确 release 指令后，才执行 clean-machine install、版本升级、公开设置与 tag。
+3. `0.0.0` public-source gate 已覆盖许可证、治理/安全、公开内容、结果展示与 GitHub settings。
+4. clean-machine install、`0.1.0` 版本与 tag 留给未来独立稳定发布 gate。
 
 这条顺序把研究阶段与发布阶段分离，避免在整理中改变已经冻结的实验边界。

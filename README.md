@@ -11,12 +11,12 @@
 ![CUDA](https://img.shields.io/badge/CUDA-validated%2012.8-76B900?logo=nvidia&logoColor=white)
 ![Triton](https://img.shields.io/badge/Triton-validated%203.6-654FF0)
 ![Milestone](https://img.shields.io/badge/R1--R5-complete-2EA44F)
-![Stage](https://img.shields.io/badge/stage-private%200.0.0-6E7781)
+![Stage](https://img.shields.io/badge/stage-public%20research%20preview%200.0.0-0A7BBC)
 
 </div>
 
 > [!IMPORTANT]
-> R1–R5 的研究与工程交付均已完成，默认实现和 canonical evidence 已冻结。仓库当前仍是 private `0.0.0` development candidate；新环境复现、版本升级、公开设置与 tag 尚未启动。完整边界见[交付状态](docs/DELIVERY_STATUS.md)。
+> R1–R5 的研究与工程交付均已完成，默认实现和 canonical evidence 已冻结。源码以 pre-release `0.0.0` public research preview 提供；全新环境认证、`v0.1.0`、稳定 API 承诺与 release tag 仍是独立的后续 gate。完整边界见[交付状态](docs/DELIVERY_STATUS.md)。
 
 ## 🧭 项目概览
 
@@ -29,7 +29,7 @@ FlashDec 研究在请求长度、batch 和 KV 容量持续变化时，如何把 
 | 🧠 **正确性锚点** | PyTorch dense/paged reference + dependency-free state-machine reference |
 | 🧱 **运行时状态** | Paged KV lifecycle、block ownership、transaction、shared prefix、scheduler |
 | 🧪 **验证环境** | NVIDIA GeForce RTX 5070 · PyTorch `2.11.0+cu128` · CUDA 12.8 · Triton 3.6 |
-| 📦 **当前阶段** | R1–R5 complete；release gate 暂停 |
+| 📦 **当前阶段** | R1–R5 complete；public research preview `0.0.0` |
 
 ### 为什么做 FlashDec？
 
@@ -63,12 +63,26 @@ Scheduler 只输出版本化容量决策；DecodeEngine 组织执行；PagedKVCa
 > [!NOTE]
 > Ratio 的方向、绝对值、range 与不可比边界以各 strict summary 为准。R3 的稳定收益是 KV capacity/admission；R5 只比较共同 kernel scope。完整解释见[性能报告](docs/performance_report.md)。
 
+## 📊 实验结果概览
+
+<p align="center">
+  <a href="docs/assets/flashdec-results-overview-light.svg">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/flashdec-results-overview-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="docs/assets/flashdec-results-overview-light.svg">
+      <img src="docs/assets/flashdec-results-overview-light.svg" width="100%" alt="FlashDec R1–R5 evidence overview: scheduler progress, shared-prefix capacity, recorded optimization outcomes, integrated lifecycle validation, and the FlashInfer kernel-only comparison.">
+    </picture>
+  </a>
+</p>
+
+图中数据由仓库内已验证的 canonical Markdown summaries 派生，而不是原始 benchmark dataset。R1 展示进展保证；R3 展示固定 48-block pool 的 KV capacity/admission；R2 展示稳定性观察，R4-A 展示限定范围内的 accepted outcome，只有 R4-B 使用预注册 keep gate 并因 13/16 未达 16/16 而回滚，R4-C 展示 24-row lifecycle/correctness gate 通过；R5 展示共同 shape 的 kernel-only p50 对比，`FlashDec/FlashInfer > 1` 表示 FlashInfer 更低延迟。不同阶段的 ratio 不可合并为一个“总加速”。可审计输入含 evidence commit、rows/trials 与来源表格校验，见[图表数据](benchmarks/results/public_results_snapshot.json)和[结果索引](benchmarks/results/README.md)；点击图可查看原始尺寸。
+
 ## 🚀 快速开始
 
 推荐 Linux/WSL、Python 3.10+。CUDA extension 需要与 PyTorch CUDA build 匹配的 Toolkit、NVCC 和 Ninja。
 
 > [!CAUTION]
-> 当前 fresh-environment release gate 已暂停。以下命令是开发环境入口，不代表已经验证的全新环境安装保证；private 仓库 clone 需要 GitHub 访问权限。
+> 以下命令是 source/development 环境入口，不是已经认证的全新环境安装保证。fresh-environment gate 尚未执行；安装前请核对 Python、PyTorch CUDA build、Toolkit/NVCC 和 GPU 架构，不能用当前开发机的通过结果外推任意系统。
 
 ```bash
 git clone https://github.com/cysong2025/flashdec.git
@@ -87,7 +101,7 @@ python -m pytest -q -ra
 
 ```bash
 python scripts/check_docs.py
-python scripts/check_release.py --require-evidence
+python scripts/check_release.py --require-evidence --require-public
 python -m compileall -q flashdec tests benchmarks scripts
 ```
 
@@ -164,4 +178,8 @@ result = engine.commit_step(tx)
 - TP/PP、多机、swap/offload 或自动 prefix content hashing/admission-time online prefix eviction。
 - 与不同 shape、layout、scheduler 或计时边界的工业 serving 系统做直接 speedup 声明。
 
-FlashDec 是研究型 runtime 原型，不应被解释为生产 serving framework。贡献前请阅读[贡献指南](CONTRIBUTING.md)；当前维护范围限于 correctness、回归、文档与证据可追溯性改进。
+FlashDec 是研究型 runtime 原型，不应被解释为生产 serving framework。贡献前请阅读[贡献指南](CONTRIBUTING.md)与[行为准则](CODE_OF_CONDUCT.md)；使用问题见[支持说明](SUPPORT.md)，安全问题见[安全政策](SECURITY.md)，研究引用信息见[`CITATION.cff`](CITATION.cff)。公开状态与稳定发布边界记录在[公开仓库清单](docs/PUBLIC_RELEASE_CHECKLIST.md)。
+
+## License
+
+FlashDec 采用 [Apache License 2.0](LICENSE) 开源。

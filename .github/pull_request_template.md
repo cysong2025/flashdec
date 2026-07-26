@@ -15,7 +15,7 @@
 ## ✅ Validation
 
 - [ ] `python scripts/check_docs.py`
-- [ ] `python scripts/check_release.py --require-evidence`
+- [ ] `python scripts/check_release.py --require-evidence --require-public`
 - [ ] `python -m compileall -q flashdec tests benchmarks scripts`
 - [ ] Relevant targeted tests
 - [ ] Full pytest, or a documented reason it is not applicable/available
@@ -51,4 +51,6 @@ Exact commands and results:
 - [ ] The diff is focused and contains no unrelated files.
 - [ ] Reference/parity and applicable error paths are covered.
 - [ ] Performance and release claims stay within the measured scope.
+- [ ] I have the right to contribute these changes and license them under the repository `LICENSE`.
+- [ ] Third-party code, data, or benchmark material is absent, or its source and compatible license are documented.
 - [ ] No version, tag, visibility, license, or release change is included without separate owner authorization.

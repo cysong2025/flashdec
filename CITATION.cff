@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use FlashDec in research or benchmarking, cite the repository and the exact commit used."
+title: "FlashDec: An evidence-driven single-GPU LLM decode runtime"
+type: software
+authors:
+  - name: "FlashDec contributors"
+repository-code: "https://github.com/cysong2025/flashdec"
+url: "https://github.com/cysong2025/flashdec"
+version: "0.0.0"
+license: Apache-2.0
+keywords:
+  - LLM inference
+  - paged attention
+  - KV cache
+  - Triton
+  - CUDA
+  - request scheduling
+  - shared prefix

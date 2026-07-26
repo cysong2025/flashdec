@@ -2,12 +2,12 @@
 
 ## 推荐入口
 
-- [当前交付状态](DELIVERY_STATUS.md)：R1–R5 能力、canonical evidence、限制和暂停项的唯一总览。
-- [当前状态与后续目标](NEXT_STEPS.md)：当前维护范围与已暂停的 `v0.1.0` release gate。
+- [当前交付状态](DELIVERY_STATUS.md)：R1–R5 能力、canonical evidence、限制和发布边界的唯一总览。
+- [当前状态与后续目标](NEXT_STEPS.md)：public `0.0.0` research preview 与独立的 `v0.1.0` release gate。
 - [Benchmark 结果索引](../benchmarks/results/README.md)：正式摘要、历史结果和本地产物边界。
 - [复现指南](reproducibility.md)：已验证环境、证据命令和 release-only clean-install 流程。
 
-仓库当前为 private `0.0.0` development candidate；R1–R5 技术交付已完成，新环境复现、版本升级、公开设置和 tag 暂停。
+仓库以 public `0.0.0` research preview 提供源码。R1–R5 技术交付已完成；fresh-environment 复现、`v0.1.0` 版本与 tag 尚未验证，也不属于本次公开源码的承诺。
 
 ## 系统概览
 

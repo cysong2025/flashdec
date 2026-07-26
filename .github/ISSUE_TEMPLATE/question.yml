@@ -1,0 +1,49 @@
+name: "Usage / environment question"
+description: "Ask about the documented API, development environment, or reproduction workflow."
+title: "[Question]: "
+labels:
+  - "question"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        FlashDec is a research prototype. Please check the README, compatibility notes, and reproduction guide first. Remove credentials, private paths, and unrelated logs.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I read the README, compatibility notes, and reproduction guide.
+          required: true
+        - label: I removed credentials, private paths, and unrelated logs.
+          required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: State the exact behavior or concept you are trying to understand.
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Intended use
+      description: Describe the workload, API, or evidence workflow you are trying to run.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include commit, OS/WSL, Python, PyTorch, Triton, CUDA, NVCC, and GPU when relevant.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What you already tried
+      description: Include the smallest relevant command and concise output.
+      render: text
+    validations:
+      required: true

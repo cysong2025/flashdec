@@ -118,24 +118,25 @@ python benchmarks/run_num_stages_sweep.py \
 WSL 先复制到 Windows 用户目录：
 
 ```bash
-mkdir -p /mnt/c/Users/user/flashdec_results
+export RESULT_DIR="/mnt/c/Users/<user>/flashdec_results"
+mkdir -p "$RESULT_DIR"
 cp \
   benchmarks/results/week10_num_stages_quick.csv \
   benchmarks/results/week10_num_stages_quick.log \
   benchmarks/results/week10_num_stages.csv \
   benchmarks/results/week10_num_stages.log \
-  /mnt/c/Users/user/flashdec_results/
+  "$RESULT_DIR/"
 ```
 
 然后在 Mac 执行：
 
 ```bash
-cd /Users/songchuangye/Documents/ai_infra
+cd "<repo>"
 scp \
-  user@192.168.71.95:flashdec_results/week10_num_stages_quick.csv \
-  user@192.168.71.95:flashdec_results/week10_num_stages_quick.log \
-  user@192.168.71.95:flashdec_results/week10_num_stages.csv \
-  user@192.168.71.95:flashdec_results/week10_num_stages.log \
+  user@"<wsl-host>":flashdec_results/week10_num_stages_quick.csv \
+  user@"<wsl-host>":flashdec_results/week10_num_stages_quick.log \
+  user@"<wsl-host>":flashdec_results/week10_num_stages.csv \
+  user@"<wsl-host>":flashdec_results/week10_num_stages.log \
   benchmarks/results/
 ```
 
