@@ -1,6 +1,6 @@
 # Contributing to FlashDec
 
-FlashDec 是一个以 correctness、状态所有权和可复现实验为优先级的研究型 runtime。Issue、bug report、文档修正和范围明确的实现建议都欢迎；较大的功能改动应先说明语义边界和验证方案。R1–R5 已完成并冻结，当前能力、证据与限制以[交付状态](docs/DELIVERY_STATUS.md)为准。
+FlashDec 是一个以 correctness、状态所有权和可复现实验为优先级的研究型 runtime。Issue、bug report、文档修正和范围明确的实现建议都欢迎；较大的功能改动应先说明要回答的[研究问题](docs/research_questions.md)、语义边界和验证方案。
 
 ## Issue 与变更提案
 
@@ -49,10 +49,10 @@ GPU 结果必须记录 device、PyTorch/CUDA、commit、shape、seed、warmup/re
 - 性能改动同时保留绝对延迟、ratio 和负结果，不只报告最佳 case。
 - 不把不同 shape、layout、硬件或计时范围的数字直接比较。
 - 更新行为或公开结论时，同步更新相关设计、兼容性和复现文档。
-- 当前 `0.0.0` 是 public research preview，不自动扩大功能范围；fresh-environment 认证、`v0.1.0` 与 release tag 仍是独立 gate。
+- `0.0.0` 表示研究型 API；兼容性声明必须绑定[兼容性矩阵](docs/compatibility.md)与对应 correctness 证据。
 
 ## Contribution licensing and provenance
 
 提交代码、文档、数据或实验材料前，请确认你有权贡献这些内容。提交 pull request 即表示你同意按仓库根目录 `LICENSE` 的相同条款授权该贡献。不得提交来源不明、许可证不兼容、受雇主或第三方保密义务约束的代码、数据或 benchmark 输出；确需引入第三方内容时，必须在 PR 中标明来源、许可证和兼容性依据。
 
-参与项目即表示同意遵守[行为准则](CODE_OF_CONDUCT.md)。仓库的系统边界和非目标见[总体设计](docs/design.md)与[AI Infra 范围](docs/AI_INFRA_SCOPE.md)，正式结果入口见[benchmark 结果索引](benchmarks/results/README.md)，安全报告与一般支持分别见[安全政策](SECURITY.md)和[支持说明](SUPPORT.md)。
+参与项目即表示同意遵守[行为准则](CODE_OF_CONDUCT.md)。仓库的系统边界和非目标见[研究问题](docs/research_questions.md)与[总体设计](docs/design.md)，正式结果入口见[benchmark 结果索引](benchmarks/results/README.md)，安全报告与一般支持分别见[安全政策](SECURITY.md)和[支持说明](SUPPORT.md)。

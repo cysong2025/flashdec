@@ -1,4 +1,4 @@
-"""Run Week 2 Triton matmul benchmarks."""
+"""Run Triton matmul benchmarks."""
 
 from __future__ import annotations
 
@@ -150,7 +150,7 @@ def parse_args():
     parser.add_argument("--num-warps", type=int, default=4)
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--repeat", type=int, default=100)
-    parser.add_argument("--output", default="benchmarks/results/week2_matmul.csv")
+    parser.add_argument("--output", default="benchmarks/results/matmul_benchmark.csv")
     return parser.parse_args()
 
 

@@ -28,7 +28,7 @@ REQUIRED_PATHS = (
     ".github/ISSUE_TEMPLATE/config.yml",
     ".github/pull_request_template.md",
     "pyproject.toml",
-    "constraints/r5-cu128.txt",
+    "constraints/flashinfer-cu128.txt",
     "flashdec/__init__.py",
     "flashdec/cache.py",
     "flashdec/engine.py",
@@ -36,24 +36,30 @@ REQUIRED_PATHS = (
     "flashdec/scheduled_workload.py",
     "flashdec/scheduler.py",
     "flashdec/workload.py",
-    "docs/AI_INFRA_SCOPE.md",
     "docs/API.md",
-    "docs/DELIVERY_STATUS.md",
     "docs/INDEX.md",
-    "docs/NEXT_STEPS.md",
-    "docs/PROJECT_PLAN.md",
-    "docs/PUBLIC_RELEASE_CHECKLIST.md",
-    "docs/ROADMAP.md",
     "docs/compatibility.md",
+    "docs/concepts/online_softmax.md",
+    "docs/design.md",
+    "docs/design_paged_kv.md",
+    "docs/design_rope_kv_append.md",
+    "docs/design_cuda_kv_append.md",
+    "docs/design_fused_rope_kv_append.md",
+    "docs/design_dynamic_workload.md",
     "docs/design_multi_layer_kv_transaction.md",
     "docs/design_shared_prefix_blocks.md",
     "docs/design_integrated_scheduled_multi_layer.md",
     "docs/design_flashinfer_baseline.md",
     "docs/design_decode_engine.md",
+    "docs/assets/flashdec-architecture-dark.svg",
+    "docs/assets/flashdec-architecture-light.svg",
     "docs/assets/flashdec-results-overview-dark.svg",
     "docs/assets/flashdec-results-overview-light.svg",
-    "docs/notes/from_paged_attention_to_decode_runtime.md",
     "docs/design_scheduler.md",
+    "docs/kernel_experiments.md",
+    "docs/performance_report.md",
+    "docs/references.md",
+    "docs/research_questions.md",
     "docs/reproducibility.md",
     "benchmarks/run_decode_engine_workload.py",
     "benchmarks/README.md",
@@ -78,7 +84,7 @@ REQUIRED_PATHS = (
     "scripts/check_release.py",
     "scripts/generate_public_results_chart.py",
     "scripts/README.md",
-    "scripts/run_r0_validation.py",
+    "scripts/run_validation.py",
     "tests/test_paged_cache.py",
     "tests/test_docs_check.py",
     "tests/test_decode_engine.py",
@@ -87,7 +93,7 @@ REQUIRED_PATHS = (
     "tests/test_scheduled_workload.py",
     "tests/test_scheduled_workload_config.py",
     "tests/test_scheduler_workload_benchmark.py",
-    "tests/test_r0_validation.py",
+    "tests/test_validation_orchestrator.py",
     "tests/test_release_check.py",
     "tests/test_scheduler_workload_summary.py",
     "tests/test_multi_layer_transaction.py",
@@ -162,33 +168,46 @@ GOVERNANCE_MARKERS = {
         "body:",
         "Remove credentials, private paths, and unrelated logs.",
     ),
-    "docs/PUBLIC_RELEASE_CHECKLIST.md": (
-        "# Public Repository Readiness",
-        "## Public research-preview gates",
-        "Root license",
-        "## Stable `v0.1.0` release gates",
-    ),
 }
 
 RELEASE_EVIDENCE_PATHS = (
-    "benchmarks/results/week8_block_size_summary.md",
-    "benchmarks/results/week8_layout_summary.md",
-    "benchmarks/results/week9_final_default_summary.md",
-    "benchmarks/results/week10_num_stages_summary.md",
-    "benchmarks/results/week11_rope_kv_append_summary.md",
-    "benchmarks/results/week12_decode_engine_workload_trials3_summary.md",
-    "benchmarks/results/week12_decode_engine_profile_summary.md",
-    "benchmarks/results/r1_scheduler_workload_trials3_summary.md",
-    "benchmarks/results/r2_multi_layer_engine_trials3_summary.md",
-    "benchmarks/results/r3_shared_prefix_workload_trials8_summary.md",
-    "benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md",
-    "benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md",
-    "benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md",
-    "benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md",
+    "benchmarks/results/paged_decode_warp_selection_summary.md",
+    "benchmarks/results/paged_decode_block_size_summary.md",
+    "benchmarks/results/paged_decode_kv_layout_summary.md",
+    "benchmarks/results/paged_decode_default_profile_summary.md",
+    "benchmarks/results/paged_decode_staging_summary.md",
+    "benchmarks/results/rope_kv_append_backends_summary.md",
+    "benchmarks/results/decode_engine_workload_trials3_summary.md",
+    "benchmarks/results/decode_engine_stage_profile_summary.md",
+    "benchmarks/results/scheduler_capacity_progress_summary.md",
+    "benchmarks/results/multi_layer_transaction_summary.md",
+    "benchmarks/results/shared_prefix_capacity_summary.md",
+    "benchmarks/results/trusted_transaction_summary.md",
+    "benchmarks/results/persistent_metadata_candidate_summary.md",
+    "benchmarks/results/integrated_runtime_lifecycle_summary.md",
+    "benchmarks/results/flashinfer_paged_decode_baseline_summary.md",
     "docs/performance_report.md",
 )
 
-R5_CONSTRAINT_PINS = {
+WARP_SELECTION_EVIDENCE_PATH = (
+    "benchmarks/results/paged_decode_warp_selection_summary.md"
+)
+WARP_SELECTION_EVIDENCE_SHA256 = (
+    "58bae4f421c127b3c994eda8871efa418fae8b245b5d144955a48197d98a585d"
+)
+WARP_SELECTION_EVIDENCE_MARKERS = (
+    "# Paged Decode Warp Selection Summary",
+    "Recorded experiment commit: `aa81af8`",
+    "2.11.0+cu128 / 3.6.0 / 12.8",
+    "--block-size 16",
+    "seed 87, warmup 5, repeat 30",
+    "84 Triton rows across 28 dtype/case groups",
+    "`num_warps=2` p50 wins | 28",
+    "best effective total GB/s at p50",
+    "raw CSV was intentionally not tracked",
+)
+
+FLASHINFER_CONSTRAINT_PINS = {
     "torch": "2.11.0+cu128",
     "triton": "3.6.0",
     "flashinfer-python": "0.6.15.post1",
@@ -241,15 +260,15 @@ def _read_constraint_pins(path):
             continue
         if line.count("==") != 1:
             raise ValueError(
-                f"R5 constraints line {line_number} must be an exact == pin"
+                f"FlashInfer constraints line {line_number} must be an exact == pin"
             )
         name, version = (part.strip() for part in line.split("==", 1))
         if not name or not version:
             raise ValueError(
-                f"R5 constraints line {line_number} must include name and version"
+                f"FlashInfer constraints line {line_number} must include name and version"
             )
         if name in pins:
-            raise ValueError(f"duplicate R5 constraint: {name}")
+            raise ValueError(f"duplicate FlashInfer constraint: {name}")
         pins[name] = version
     return pins
 
@@ -620,6 +639,20 @@ def validate_release_tree(root, require_evidence=False, require_public=False):
         for relative in RELEASE_EVIDENCE_PATHS:
             if not (root / relative).is_file():
                 problems.append(f"missing release evidence: {relative}")
+        warp_summary = root / WARP_SELECTION_EVIDENCE_PATH
+        if warp_summary.is_file():
+            warp_text = warp_summary.read_text()
+            for marker in WARP_SELECTION_EVIDENCE_MARKERS:
+                if marker not in warp_text:
+                    problems.append(
+                        f"warp selection evidence missing marker: {marker}"
+                    )
+            warp_digest = hashlib.sha256(warp_summary.read_bytes()).hexdigest()
+            if warp_digest != WARP_SELECTION_EVIDENCE_SHA256:
+                problems.append(
+                    "warp selection evidence content digest mismatch: "
+                    f"{warp_digest}"
+                )
 
     pyproject = root / "pyproject.toml"
     package_init = root / "flashdec/__init__.py"
@@ -644,24 +677,27 @@ def validate_release_tree(root, require_evidence=False, require_public=False):
     if changelog.is_file() and "## [Unreleased]" not in changelog.read_text():
         problems.append("CHANGELOG.md must contain an [Unreleased] section")
     reproducibility = root / "docs/reproducibility.md"
-    if reproducibility.is_file() and "## Release gate status" not in reproducibility.read_text():
-        problems.append("docs/reproducibility.md must contain Release gate status")
-    constraints = root / "constraints/r5-cu128.txt"
+    limitations_heading = "## 已知安装与版本限制"
+    if reproducibility.is_file() and limitations_heading not in reproducibility.read_text():
+        problems.append(
+            "docs/reproducibility.md must contain known installation and version limitations"
+        )
+    constraints = root / "constraints/flashinfer-cu128.txt"
     if constraints.is_file():
         try:
             pins = _read_constraint_pins(constraints)
         except (OSError, ValueError) as exc:
             problems.append(str(exc))
         else:
-            for name, expected in R5_CONSTRAINT_PINS.items():
+            for name, expected in FLASHINFER_CONSTRAINT_PINS.items():
                 actual = pins.get(name)
                 if actual != expected:
                     problems.append(
-                        f"R5 constraint mismatch: {name}={actual!r}, expected {expected!r}"
+                        f"FlashInfer constraint mismatch: {name}={actual!r}, expected {expected!r}"
                     )
-            unexpected = sorted(set(pins) - set(R5_CONSTRAINT_PINS))
+            unexpected = sorted(set(pins) - set(FLASHINFER_CONSTRAINT_PINS))
             if unexpected:
-                problems.append(f"unexpected R5 constraints: {unexpected}")
+                problems.append(f"unexpected FlashInfer constraints: {unexpected}")
     return problems
 
 

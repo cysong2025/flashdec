@@ -336,7 +336,7 @@ def render_markdown(input_path, pairs, aggregates, overall):
     pairs = list(pairs)
     first = pairs[0].torch_row
     lines = [
-        "# DecodeEngine Multi-trial Stability Summary",
+        "# DecodeEngine Workload Multi-trial Summary",
         "",
         "## Validation",
         "",
@@ -413,7 +413,7 @@ def parse_args():
     parser.add_argument("--input", required=True)
     parser.add_argument(
         "--output",
-        default="benchmarks/results/week12_decode_engine_workload_trials3_summary.md",
+        default="benchmarks/results/decode_engine_workload_trials3_summary.md",
     )
     parser.add_argument("--expected-trials", type=int, default=3)
     parser.add_argument("--expected-workloads", nargs="+", default=list(DEFAULT_WORKLOADS))

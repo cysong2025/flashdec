@@ -108,6 +108,7 @@ def test_validate_and_aggregate_complete_trial_matrix():
     aggregates, overall = aggregate_trials(pairs)
     markdown = render_markdown("trials.csv", pairs, aggregates, overall)
 
+    assert markdown.startswith("# DecodeEngine Workload Multi-trial Summary\n")
     assert len(pairs) == 18
     assert len(aggregates) == 6
     assert overall["p50"] == pytest.approx(1.25)

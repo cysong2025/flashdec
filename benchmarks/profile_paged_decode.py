@@ -343,7 +343,7 @@ def _profile_one_impl(torch, args, case_name, shape, dtype_name, tensors, cache,
 
 def _write_summary(path, rows):
     lines = [
-        "# Week 9 Paged Decode Profiling Summary",
+        "# Paged Decode Default Configuration Profile Summary",
         "",
         "Shape order: `num_seqs x num_q_heads x num_kv_heads x head_dim x max_seq_len`.",
         "",
@@ -396,8 +396,14 @@ def parse_args():
     parser.add_argument("--skip-torch-profiler", action="store_true")
     parser.add_argument("--profile-memory", action="store_true")
     parser.add_argument("--export-trace", action="store_true")
-    parser.add_argument("--output-dir", default="benchmarks/profiles/week9_paged_decode")
-    parser.add_argument("--summary-output", default="benchmarks/results/week9_summary.md")
+    parser.add_argument(
+        "--output-dir",
+        default="benchmarks/profiles/paged_decode_default",
+    )
+    parser.add_argument(
+        "--summary-output",
+        default="benchmarks/results/paged_decode_default_profile_summary.md",
+    )
     return parser.parse_args()
 
 

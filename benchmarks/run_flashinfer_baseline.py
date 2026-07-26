@@ -1,4 +1,4 @@
-"""Run the R5 FlashDec vs FlashInfer paged-decode baseline matrix."""
+"""Run the FlashDec vs FlashInfer paged-decode baseline matrix."""
 
 from __future__ import annotations
 
@@ -57,6 +57,8 @@ FORMAL_REPEATS = 50
 QUICK_TRIALS = 1
 QUICK_WARMUP = 2
 QUICK_REPEATS = 10
+FLASHINFER_BASELINE_NAME = "flashinfer_paged_decode_baseline"
+LEGACY_FLASHINFER_BASELINE_NAMES = ("r5_flashinfer_paged_decode",)
 
 BACKENDS = (
     "flashdec_triton",
@@ -188,7 +190,7 @@ def _probe_cuda_toolkit(cuda_home):
     }
 
 
-def _validate_r5_environment(
+def _validate_flashinfer_environment(
     torch,
     *,
     environ=None,
@@ -196,7 +198,7 @@ def _validate_r5_environment(
     python_version=None,
     cuda_probe=None,
 ):
-    """Return the frozen R5 environment or reject it before FlashInfer import/JIT."""
+    """Return the fixed baseline environment or reject it before FlashInfer JIT."""
 
     environ = os.environ if environ is None else environ
     python_version = (
@@ -271,7 +273,9 @@ def _validate_r5_environment(
             f"{EXPECTED_CUDA_HOME_BASENAME!r}, got {realpath!r}"
         )
     if mismatches:
-        raise RuntimeError("R5 environment mismatch; " + "; ".join(mismatches))
+        raise RuntimeError(
+            "FlashInfer baseline environment mismatch; " + "; ".join(mismatches)
+        )
     return actual
 
 
@@ -596,7 +600,7 @@ def _run_case(
             "flashinfer_fa2_tensor_core": "True",
         }[backend]
         row = {
-            "name": "r5_flashinfer_paged_decode",
+            "name": FLASHINFER_BASELINE_NAME,
             "op": "paged_decode_attention",
             "date": run_started_at,
             "device": torch.cuda.get_device_name(torch.cuda.current_device()),
@@ -716,7 +720,7 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--output",
-        default="benchmarks/results/r5_flashinfer_paged_decode_trials3.csv",
+        default="benchmarks/results/flashinfer_paged_decode_baseline_trials3.csv",
     )
     args = parser.parse_args(argv)
     if args.trials <= 0:
@@ -744,18 +748,19 @@ def main(argv=None):
     worktree_clean = _git_worktree_clean(PROJECT_ROOT)
     if args.require_clean and not worktree_clean:
         raise SystemExit(
-            "R5 evidence requires a clean Git worktree; commit or stash source changes"
+            "FlashInfer baseline evidence requires a clean Git worktree; "
+            "commit or stash source changes"
         )
 
     import torch
 
     try:
-        environment = _validate_r5_environment(torch)
+        environment = _validate_flashinfer_environment(torch)
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
 
     if not torch.cuda.is_available():
-        raise SystemExit("CUDA is required for the R5 FlashInfer baseline")
+        raise SystemExit("CUDA is required for the FlashInfer baseline")
     if args.dtype in ("bfloat16", "both") and not torch.cuda.is_bf16_supported():
         raise SystemExit("the selected matrix requires CUDA BF16 support")
 

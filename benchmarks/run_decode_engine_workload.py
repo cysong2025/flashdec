@@ -292,7 +292,10 @@ def parse_args():
     parser.add_argument("--trials", type=int, default=1, help="Repeat each paired workload; adjacent trials reverse backend order.")
     parser.add_argument("--seed", type=int, default=431)
     parser.add_argument("--quick", action="store_true", help="Shorten every workload while preserving pressure boundaries.")
-    parser.add_argument("--output", default="benchmarks/results/week12_decode_engine_workload.csv")
+    parser.add_argument(
+        "--output",
+        default="benchmarks/results/decode_engine_workload.csv",
+    )
     return parser.parse_args()
 
 

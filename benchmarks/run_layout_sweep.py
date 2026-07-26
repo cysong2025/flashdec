@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from flashdec.benchmark import write_csv
 
-from benchmarks.run_week8_paged_decode import (
+from benchmarks.run_paged_decode_warp_sweep import (
     _dtype_from_name,
     _make_shape_matrix,
     run_shape,
@@ -36,7 +36,10 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=131)
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--skip-validate", action="store_true")
-    parser.add_argument("--output", default="benchmarks/results/week8_paged_decode_layout.csv")
+    parser.add_argument(
+        "--output",
+        default="benchmarks/results/paged_decode_kv_layout_sweep.csv",
+    )
     args = parser.parse_args()
     if args.num_q_heads <= 0 or args.num_kv_heads <= 0:
         parser.error("num_q_heads and num_kv_heads must be positive")

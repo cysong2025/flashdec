@@ -39,7 +39,8 @@ jobs:
           tests/test_docs_check.py
           tests/test_profile_decode_engine.py
           tests/test_profile_paged_decode.py
-          tests/test_r0_validation.py
+          tests/test_decode_engine_trial_summary.py
+          tests/test_validation_orchestrator.py
           tests/test_release_check.py
           tests/test_scheduled_workload_config.py
           tests/test_scheduler.py
@@ -53,6 +54,7 @@ jobs:
           tests/test_integrated_workload_summary.py
           tests/test_flashinfer_baseline_benchmark.py
           tests/test_flashinfer_baseline_summary.py
+          tests/test_summary_default_paths.py
           tests/test_public_results_chart.py
 
   python-310-compat:

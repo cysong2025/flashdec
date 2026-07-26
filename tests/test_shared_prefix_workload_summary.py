@@ -1,4 +1,4 @@
-"""Dependency-free strict validation coverage for R3-C evidence."""
+"""Dependency-free strict validation coverage for shared-prefix evidence."""
 
 import unittest
 from pathlib import Path
@@ -154,6 +154,7 @@ class SharedPrefixWorkloadSummaryTests(unittest.TestCase):
             output = Path(directory) / "summary.md"
             write_summary(_rows(), output, "input.csv")
             text = output.read_text()
+        self.assertTrue(text.startswith("# Shared-prefix Pre-metadata-cache Summary\n"))
         self.assertIn("Rows: 24", text)
         self.assertIn("context physical/logical blocks", text)
         self.assertIn("saved KV-capacity MiB", text)
@@ -176,6 +177,9 @@ class SharedPrefixWorkloadSummaryTests(unittest.TestCase):
                 expected_trials=8,
             )
             text = output.read_text()
+        self.assertTrue(
+            text.startswith("# Shared-prefix Capacity and Admission Summary\n")
+        )
         self.assertIn("Rows: 64; trials: 8.", text)
 
 

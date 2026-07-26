@@ -2,42 +2,36 @@
 
 # ⚡ FlashDec
 
-**从 PagedAttention kernel 到可验证的单 GPU LLM Decode Runtime**
+**从 PagedAttention kernel 到可验证的单 GPU LLM decode runtime**
 
-*A correctness-first, evidence-driven decode runtime built with PyTorch, Triton and CUDA.*
+*A correctness-first decode runtime built with PyTorch, Triton and CUDA.*
 
 [![Repository checks](https://github.com/cysong2025/flashdec/actions/workflows/quality.yml/badge.svg)](https://github.com/cysong2025/flashdec/actions/workflows/quality.yml)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![CUDA](https://img.shields.io/badge/CUDA-validated%2012.8-76B900?logo=nvidia&logoColor=white)
 ![Triton](https://img.shields.io/badge/Triton-validated%203.6-654FF0)
-![Milestone](https://img.shields.io/badge/R1--R5-complete-2EA44F)
-![Stage](https://img.shields.io/badge/stage-public%20research%20preview%200.0.0-0A7BBC)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 </div>
 
-> [!IMPORTANT]
-> R1–R5 的研究与工程交付均已完成，默认实现和 canonical evidence 已冻结。源码以 pre-release `0.0.0` public research preview 提供；全新环境认证、`v0.1.0`、稳定 API 承诺与 release tag 仍是独立的后续 gate。完整边界见[交付状态](docs/DELIVERY_STATUS.md)。
+FlashDec 用一条可审计的数据路径研究单 token decode：请求如何拥有 paged KV block，调度器如何在容量压力下保证进展，多层 K/V 写入如何原子提交，以及 kernel 优化能否穿过 runtime 开销形成完整 step 收益。
 
-## 🧭 项目概览
+项目面向单 GPU、caller-provided Q/K/V，不实现完整模型或 serving 服务。PyTorch reference 定义数值语义；PagedKVCache 独占 block、`seq_len` 与事务状态；Triton/CUDA 负责受这些状态约束的数据路径。
 
-FlashDec 研究在请求长度、batch 和 KV 容量持续变化时，如何把 **Paged KV ownership、动态调度、多层 token 事务和 GPU kernel** 组织为一条可验证的数据路径，并量化 kernel 优化能否传递到完整 decode step。
+## 研究问题
 
-| | |
-| --- | --- |
-| 🎯 **范围** | 单 GPU、每个 request 每 step 一个 decode token |
-| 🧩 **核心栈** | Python · PyTorch · Triton · C++/CUDA extension |
-| 🧠 **正确性锚点** | PyTorch dense/paged reference + dependency-free state-machine reference |
-| 🧱 **运行时状态** | Paged KV lifecycle、block ownership、transaction、shared prefix、scheduler |
-| 🧪 **验证环境** | NVIDIA GeForce RTX 5070 · PyTorch `2.11.0+cu128` · CUDA 12.8 · Triton 3.6 |
-| 📦 **当前阶段** | R1–R5 complete；public research preview `0.0.0` |
+| 问题 | FlashDec 的回答 | 主要证据 |
+| --- | --- | --- |
+| logical token 如何映射到非连续 physical KV blocks？ | 独立 dense/paged reference、token-major cache、显式 block table 与 masked online softmax | [warp selection](benchmarks/results/paged_decode_warp_selection_summary.md) · [block-size](benchmarks/results/paged_decode_block_size_summary.md) · [layout](benchmarks/results/paged_decode_kv_layout_summary.md) · [default profile](benchmarks/results/paged_decode_default_profile_summary.md) |
+| 谁拥有 block、`seq_len` 和 request lifecycle？ | PagedKVCache 是唯一权威状态源；kernel 和 benchmark 不推进 lifecycle | [Paged KV 设计](docs/design_paged_kv.md) · [DecodeEngine 设计](docs/design_decode_engine.md) |
+| KV 容量不足时如何避免 boundary deadlock 与 starvation？ | lifetime block commitment、FIFO + aging、公平 runnable subset、stale decision 拒绝 | [scheduler matrix](benchmarks/results/scheduler_capacity_progress_summary.md) |
+| 多层 token 如何只提交一次并支持整体回滚？ | 所有 layer 共享预留位置，按序写入，batch 原子 commit/abort | [multi-layer matrix](benchmarks/results/multi_layer_transaction_summary.md) · [transaction design](docs/design_multi_layer_kv_transaction.md) |
+| shared prefix 的收益究竟来自哪里？ | 只共享 immutable full blocks，以 refcount/LRU 管理；容量与 admission 收益和 latency 分开报告 | [8-trial confirmation](benchmarks/results/shared_prefix_capacity_summary.md) |
+| kernel 优化如何传播到系统，又如何公平比较外部实现？ | 分离 append-only、complete-step、profiler 和共同 kernel scope；保留负结果与不可比边界 | [性能报告](docs/performance_report.md) · [FlashInfer baseline](benchmarks/results/flashinfer_paged_decode_baseline_summary.md) |
 
-### 为什么做 FlashDec？
+完整的问题定义、假设和证据链见[研究问题](docs/research_questions.md)。
 
-| ✅ Correctness first | 🧱 Ownership first | ⚡ Kernel → System | 🔬 Evidence first |
-| --- | --- | --- | --- |
-| 先定义 reference，再实现 Triton/CUDA 路径 | Cache 独占 block、lifecycle 与事务状态 | 同时测 kernel、完整 step 和 host/runtime 开销 | 固定 commit、shape、seed、trial 与计时边界 |
-
-## 🏗️ 架构
+## 架构
 
 <p align="center">
   <picture>
@@ -47,42 +41,52 @@ FlashDec 研究在请求长度、batch 和 KV 容量持续变化时，如何把 
   </picture>
 </p>
 
-Scheduler 只输出版本化容量决策；DecodeEngine 组织执行；PagedKVCache 是 block ownership、事务、`seq_len` 和 lifecycle 的唯一权威来源。RoPE/append 产生 rotated Q 并写入 K/V，paged attention 再读取 Cache-owned paged K/V；Kernel 不推进 request 状态，benchmark 也不拥有运行时对象。完整语义见[总体设计](docs/design.md)。
+```text
+RequestSpec / caller-provided Q,K,V
+                 │
+                 ▼
+       Block-aware Scheduler
+                 │ versioned decision
+                 ▼
+            DecodeEngine
+                 │ token transaction
+                 ▼
+          PagedKVCache runtime
+       ownership / refcount / rollback
+                 │
+       ┌─────────┴─────────┐
+       ▼                   ▼
+Fused RoPE + KV append   Triton paged decode
+       └─────────┬─────────┘
+                 ▼
+      correctness + benchmark evidence
+```
 
-## ✨ R1–R5 交付矩阵
+Scheduler 只产生版本化容量决策；DecodeEngine 编排执行；PagedKVCache 管理 ownership、事务、`seq_len` 和 shared-prefix lifetime。完整不变量见[总体设计](docs/design.md)。
 
-| 阶段 | 交付能力 | 正式证据 | 冻结结论 |
-| --- | --- | --- | --- |
-| **Core / R0** | dense/paged reference、Triton decode、Paged KV lifecycle、CUDA/fused append、动态 Engine | [Week 8–12 evidence](benchmarks/results/README.md) | token-major、block 32、2 warps、implicit stages、fused append |
-| **R1 Scheduler** | lifetime commitment、FIFO + aging、公平 runnable subset、stale decision 拒绝 | [36-row matrix](benchmarks/results/r1_scheduler_workload_trials3_summary.md) | boundary case completion：lifetime 100%、cancel 50%、greedy 0% |
-| **R2 Multi-layer** | 多层共享 token 位置、顺序写入、单次 seq_len commit、失败 rollback | [144-row matrix](benchmarks/results/r2_multi_layer_engine_trials3_summary.md) | torch/fused p50/p90 `1.2101x/1.3826x`；fused/torch TPS `1.2800x` |
-| **R3 Shared Prefix** | immutable full-block 共享、refcount、private tail、inactive LRU、shared-aware admission | [64-row confirmation](benchmarks/results/r3_shared_prefix_workload_trials8_summary.md) | 75% hit 节省 `68.8%`/`5.5 MiB` KV-pool capacity，admission `9/16 → 16/16`；latency 无稳定方向 |
-| **R4 Trusted / Integrated** | Cache-owned trusted validation、正式 candidate gate、统一 scheduled multi-layer trajectory | [R4-A](benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md) · [R4-B negative](benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md) · [R4-C](benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md) | R4-A checked/trusted p50 `1.7307x`、trusted/checked TPS `1.7131x`；R4-B 仅 13/16 稳定，已回滚；R4-C lifecycle 全通过 |
-| **R5 External Baseline** | 固定 FlashInfer `0.6.15.post1` 的共同 paged-decode kernel-only 对比 | [72-row matrix](benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md) | FlashDec/FlashInfer p50 latency `1.2003x/1.2284x`，>1 有利 FlashInfer；16/16 p50 range 高于 1，绝对 p99 有 7/16 range 重叠 |
-
-> [!NOTE]
-> Ratio 的方向、绝对值、range 与不可比边界以各 strict summary 为准。R3 的稳定收益是 KV capacity/admission；R5 只比较共同 kernel scope。完整解释见[性能报告](docs/performance_report.md)。
-
-## 📊 实验结果概览
+## 主要发现
 
 <p align="center">
   <a href="docs/assets/flashdec-results-overview-light.svg">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/assets/flashdec-results-overview-dark.svg">
       <source media="(prefers-color-scheme: light)" srcset="docs/assets/flashdec-results-overview-light.svg">
-      <img src="docs/assets/flashdec-results-overview-light.svg" width="100%" alt="FlashDec R1–R5 evidence overview: scheduler progress, shared-prefix capacity, recorded optimization outcomes, integrated lifecycle validation, and the FlashInfer kernel-only comparison.">
+      <img src="docs/assets/flashdec-results-overview-light.svg" width="100%" alt="Selected FlashDec evidence for scheduler progress, shared-prefix capacity, transaction optimization, integrated lifecycle validation, and the FlashInfer kernel comparison.">
     </picture>
   </a>
 </p>
 
-图中数据由仓库内已验证的 canonical Markdown summaries 派生，而不是原始 benchmark dataset。R1 展示进展保证；R3 展示固定 48-block pool 的 KV capacity/admission；R2 展示稳定性观察，R4-A 展示限定范围内的 accepted outcome，只有 R4-B 使用预注册 keep gate 并因 13/16 未达 16/16 而回滚，R4-C 展示 24-row lifecycle/correctness gate 通过；R5 展示共同 shape 的 kernel-only p50 对比，`FlashDec/FlashInfer > 1` 表示 FlashInfer 更低延迟。不同阶段的 ratio 不可合并为一个“总加速”。可审计输入含 evidence commit、rows/trials 与来源表格校验，见[图表数据](benchmarks/results/public_results_snapshot.json)和[结果索引](benchmarks/results/README.md)；点击图可查看原始尺寸。
+- Scheduler 的主要价值是容量安全和进展保证：boundary case 中 lifetime policy 完成率为 `100%`，cancel baseline 为 `50%`，greedy baseline 为 `0%`。
+- 75% shared-prefix hit 将 context physical blocks 从 `64/64` 降至 `20/64`，节省 `68.8%`（`5.5 MiB`）容量，并把固定池 admission 从 `9/16` 提高到 `16/16`；latency 没有稳定方向。
+- Cache-owned trusted transaction 移除了每 layer 的重复 device reduction 与 host scalar sync；persistent-metadata 候选仅 `13/16` 组稳定，未采用。
+- 固定 FlashInfer `0.6.15.post1` 的共同 paged-decode kernel 对比中，FlashDec/FlashInfer p50 latency ratio 为 `1.2003x`（CUDA core）和 `1.2284x`（tensor core）；比值大于 1 表示 FlashInfer 更低延迟。该结论不外推到完整 runtime。
+- 外部基线证据提交 `d7d4feb` 的 GPU full regression 为 `453 passed, 94 subtests passed`；GitHub Actions 运行不依赖 GPU 的仓库检查子集。测试计数绑定具体 commit 和环境，不作为滚动徽章。
 
-## 🚀 快速开始
+图中数据由受版本控制的 Markdown summaries 派生。来源、trial 范围、ratio 方向和负结果见[结果索引](benchmarks/results/README.md)与[数据快照](benchmarks/results/public_results_snapshot.json)。
 
-推荐 Linux/WSL、Python 3.10+。CUDA extension 需要与 PyTorch CUDA build 匹配的 Toolkit、NVCC 和 Ninja。
+## 快速开始
 
-> [!CAUTION]
-> 以下命令是 source/development 环境入口，不是已经认证的全新环境安装保证。fresh-environment gate 尚未执行；安装前请核对 Python、PyTorch CUDA build、Toolkit/NVCC 和 GPU 架构，不能用当前开发机的通过结果外推任意系统。
+推荐 Linux/WSL 与 Python 3.10+。CUDA extension 需要与 PyTorch CUDA build 匹配的 Toolkit、NVCC 和 Ninja。
 
 ```bash
 git clone https://github.com/cysong2025/flashdec.git
@@ -97,7 +101,9 @@ python scripts/check_env.py
 python -m pytest -q -ra
 ```
 
-文档、证据与源码编译门：
+这条开发安装路径只适用于满足支持矩阵的环境，不构成对任意 Python/CUDA 组合的兼容性保证。请先核对 Python、PyTorch CUDA build、Toolkit/NVCC 与 GPU 架构；已验证组合和分层命令见[兼容性说明](docs/compatibility.md)与[复现指南](docs/reproducibility.md)。FlashInfer 对比必须使用独立环境和 [`constraints/flashinfer-cu128.txt`](constraints/flashinfer-cu128.txt)。
+
+无需 GPU 的仓库检查：
 
 ```bash
 python scripts/check_docs.py
@@ -105,12 +111,7 @@ python scripts/check_release.py --require-evidence --require-public
 python -m compileall -q flashdec tests benchmarks scripts
 ```
 
-GitHub CI 还运行选定的 dependency-free pytest；完整列表见 [repository checks workflow](.github/workflows/quality.yml)。
-
-> [!WARNING]
-> R5 FlashInfer 基线必须使用独立 Python 3.12 virtualenv、[`constraints/r5-cu128.txt`](constraints/r5-cu128.txt) 和 `FLASHINFER_CUDA_ARCH_LIST=12.0a`。不要在既有 cu128 环境中直接让 `baseline` extra 重新解析 Torch/CUDA。完整流程见[R5 复现章节](docs/reproducibility.md#r5-flashinfer-有限公开基线证据)。
-
-## 🧩 API 速览
+## API 速览
 
 Paged decode：
 
@@ -138,47 +139,37 @@ for layer_idx, (q, k, v) in enumerate(zip(q_by_layer, k_by_layer, v_by_layer)):
 result = engine.commit_step(tx)
 ```
 
-任一 `step_layer()` 失败都会 abort 整个 token；调用方必须丢弃此前 layer outputs。完整接口见[公开 API](docs/API.md)和[DecodeEngine 设计](docs/design_decode_engine.md)。
+任一 `step_layer()` 失败都会 abort 整个 token；调用方必须丢弃此前 layer outputs。接口契约见[API 文档](docs/API.md)。
 
-## 🗂️ 仓库地图
+## 仓库结构
 
 | 路径 | 内容 |
 | --- | --- |
-| [`flashdec/`](flashdec) | Python package、Paged KV runtime、scheduler、workload 与 Triton kernels |
-| [`flashdec/csrc/`](flashdec/csrc) | C++/CUDA append extensions |
-| [`tests/`](tests) | reference、kernel、runtime、失败路径与 evidence-validator tests |
-| [`benchmarks/`](benchmarks) | benchmark runners、profilers 与 strict summaries |
-| [`benchmarks/results/`](benchmarks/results) | 审核后提交的 canonical Markdown evidence |
-| [`docs/`](docs) | 设计、性能、兼容性、复现、路线图与阶段历史 |
-| [`scripts/`](scripts) | 环境检查、文档检查、验证编排与 release gate |
+| [`flashdec/`](flashdec) | Paged KV runtime、scheduler、DecodeEngine 与 Triton/CUDA data path |
+| [`tests/`](tests) | reference、状态机、kernel、失败路径与证据校验 |
+| [`benchmarks/`](benchmarks) | benchmark runners、profilers 和 strict summarizers |
+| [`benchmarks/results/`](benchmarks/results) | 审核后提交的正式 Markdown 证据；原始 CSV/log 不进入 Git |
+| [`docs/`](docs) | 研究问题、设计、兼容性、性能方法和复现说明 |
+| [`scripts/`](scripts) | 环境、文档、证据与仓库一致性检查 |
 
-## 📚 文档导航
+推荐阅读顺序：
 
-| 从这里开始 | 深入设计 | 证据与复现 |
-| --- | --- | --- |
-| [交付状态](docs/DELIVERY_STATUS.md) | [Paged KV Cache](docs/design_paged_kv.md) | [结果索引](benchmarks/results/README.md) |
-| [公开 API](docs/API.md) | [DecodeEngine](docs/design_decode_engine.md) | [性能报告](docs/performance_report.md) |
-| [系统范围](docs/AI_INFRA_SCOPE.md) | [Scheduler](docs/design_scheduler.md) | [复现指南](docs/reproducibility.md) |
-| [文档索引](docs/INDEX.md) | [Multi-layer Transaction](docs/design_multi_layer_kv_transaction.md) | [兼容性矩阵](docs/compatibility.md) |
-| [当前状态与下一步](docs/NEXT_STEPS.md) | [Shared Prefix](docs/design_shared_prefix_blocks.md) | [阶段日志](docs/weekly/README.md) |
+1. [研究问题](docs/research_questions.md)
+2. [总体设计](docs/design.md)
+3. [API 文档](docs/API.md)
+4. [性能报告](docs/performance_report.md)
+5. [结果索引](benchmarks/results/README.md)
+6. [复现指南](docs/reproducibility.md)
 
-## 🎯 范围边界
+完整导航见[文档索引](docs/INDEX.md)。
 
-### 当前包含
+## 范围边界
 
-- 单 GPU single-token decode、FP16/BF16、MHA/GQA/MQA。
-- caller-provided Q/K/V 与 caller-built immutable shared-prefix blocks。
-- caller-provided multi-layer context K/V 的事务性导入。
-- PyTorch reference、Triton decode、CUDA/fused append 与 strict benchmark evidence。
+FlashDec 包含单 GPU single-token decode、FP16/BF16、MHA/GQA/MQA、caller-provided Q/K/V、transactional context import 和 caller-built immutable shared-prefix blocks。
 
-### 当前不包含
+FlashDec 不包含完整 Transformer/prefill forward、tokenizer、sampling、HTTP/RPC serving、生产级 continuous batching、TP/PP、多机、swap/offload 或自动 prefix content hashing。不同 shape、layout、scheduler 或计时边界的结果不能直接解释为工业 serving 系统的 speedup。
 
-- 完整 Transformer/prefill forward、tokenizer、sampling 或 logits processor。
-- HTTP/RPC serving、生产级 continuous batching 或抢占。
-- TP/PP、多机、swap/offload 或自动 prefix content hashing/admission-time online prefix eviction。
-- 与不同 shape、layout、scheduler 或计时边界的工业 serving 系统做直接 speedup 声明。
-
-FlashDec 是研究型 runtime 原型，不应被解释为生产 serving framework。贡献前请阅读[贡献指南](CONTRIBUTING.md)与[行为准则](CODE_OF_CONDUCT.md)；使用问题见[支持说明](SUPPORT.md)，安全问题见[安全政策](SECURITY.md)，研究引用信息见[`CITATION.cff`](CITATION.cff)。公开状态与稳定发布边界记录在[公开仓库清单](docs/PUBLIC_RELEASE_CHECKLIST.md)。
+贡献前请阅读[贡献指南](CONTRIBUTING.md)与[行为准则](CODE_OF_CONDUCT.md)；使用问题见[支持说明](SUPPORT.md)，安全问题见[安全政策](SECURITY.md)，引用信息见[`CITATION.cff`](CITATION.cff)。
 
 ## License
 

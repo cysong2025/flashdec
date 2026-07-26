@@ -16,5 +16,5 @@ updates:
       interval: "monthly"
     open-pull-requests-limit: 3
     ignore:
-      # R5 is a pinned evidence contract. Upgrade it only with a new baseline matrix.
+      # FlashInfer is a pinned evidence contract. Upgrade it only with a new baseline matrix.
       - dependency-name: "flashinfer-python"

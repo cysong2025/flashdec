@@ -34,8 +34,8 @@ DISALLOWED_PORTFOLIO_TERMS = (
 )
 
 # These files describe the repository's current public-facing state. Historical
-# weekly notes and benchmark summaries are deliberately excluded: preserving an
-# old state description there is useful evidence, not stale front-page policy.
+# notes and benchmark summaries are deliberately excluded: preserving an old
+# state description there is useful evidence, not stale front-page policy.
 PUBLIC_ENTRY_FILES = (
     "README.md",
     "CONTRIBUTING.md",
@@ -47,16 +47,13 @@ PUBLIC_ENTRY_FILES = (
     ".github/ISSUE_TEMPLATE/question.yml",
     ".github/pull_request_template.md",
     "docs/API.md",
-    "docs/AI_INFRA_SCOPE.md",
-    "docs/DELIVERY_STATUS.md",
     "docs/INDEX.md",
-    "docs/NEXT_STEPS.md",
-    "docs/PROJECT_PLAN.md",
-    "docs/PUBLIC_RELEASE_CHECKLIST.md",
-    "docs/ROADMAP.md",
     "docs/compatibility.md",
     "docs/design.md",
+    "docs/kernel_experiments.md",
     "docs/performance_report.md",
+    "docs/references.md",
+    "docs/research_questions.md",
     "docs/reproducibility.md",
 )
 

@@ -1,4 +1,4 @@
-"""Dependency-free strict tests for the R5 FlashInfer baseline summary."""
+"""Dependency-free strict tests for the FlashInfer baseline summary."""
 
 import csv
 import hashlib
@@ -20,6 +20,7 @@ from benchmarks.run_flashinfer_baseline import (
     EXPECTED_FLASHINFER_VERSION,
     EXPECTED_FLASHINFER_CUDA_ARCH_LIST,
     EXPECTED_NINJA_VERSION,
+    FLASHINFER_BASELINE_NAME,
     FORMAL_REPEATS,
     FORMAL_WARMUP,
     QUICK_REPEATS,
@@ -73,7 +74,7 @@ def _row(
     row = {field: "1" for field in REQUIRED_FIELDS}
     row.update(
         {
-            "name": "r5_flashinfer_paged_decode",
+            "name": FLASHINFER_BASELINE_NAME,
             "op": "paged_decode_attention",
             "date": "2026-07-23T12:00:00+08:00",
             "device": "NVIDIA GeForce RTX 5070",
@@ -273,6 +274,9 @@ class FlashInferBaselineSummaryTests(unittest.TestCase):
         self.assertEqual(tensor["p50_ratio"]["median"], 4.0)
 
         markdown = render_markdown("results.csv", rows, aggregates)
+        self.assertTrue(
+            markdown.startswith("# FlashInfer Paged-decode Baseline Summary\n")
+        )
         self.assertIn("Rows: 72; trials: 3", markdown)
         self.assertIn(f"`{EXPECTED_FLASHINFER_VERSION}`", markdown)
         self.assertIn("FlashInfer CUDA arch list: `12.0a`", markdown)
@@ -287,6 +291,12 @@ class FlashInferBaselineSummaryTests(unittest.TestCase):
         self.assertIn("FlashDec p99 ms", markdown)
         self.assertIn("Runner command", markdown)
         self.assertIn("no pass/fail performance or winner gate", markdown)
+
+    def test_validator_accepts_historical_baseline_identity(self):
+        rows = _rows()
+        for row in rows:
+            row["name"] = "r5_flashinfer_paged_decode"
+        self.assertEqual(validate_rows(rows), rows)
 
     def test_rejects_missing_unknown_or_duplicate_columns_and_rows(self):
         rows = _rows()

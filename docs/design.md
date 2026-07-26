@@ -1,6 +1,6 @@
 # FlashDec 总体设计
 
-本文描述 FlashDec 的稳定架构、核心语义和模块边界。各子系统的状态机、失败路径与实验协议见[文档索引](INDEX.md)中的专题设计。
+本文描述 FlashDec 的核心架构、执行语义和模块边界。各子系统的状态机、失败路径与实验协议见[文档索引](INDEX.md)中的专题设计。
 
 ## 1. 设计目标
 
@@ -100,11 +100,11 @@ Scheduler 根据 logical capacity、physical free blocks、request lifetime comm
 - 有限请求在边界容量场景中取得进展。
 - waiting request 不因持续新到达请求而永久饥饿。
 
-R1 的 boundary workload 用 cancel 和 greedy baseline 展示了仅看当前 step 空间时可能出现的零进展问题；它不是无条件吞吐加速结论。
+Boundary workload 使用 cancel 和 greedy baseline 展示了仅看当前 step 空间时可能出现的零进展问题；这项证据说明 lifetime commitment 的进展语义，不构成无条件吞吐加速结论。
 
 ## 7. Kernel 与性能边界
 
-Paged decode 默认配置冻结为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。Fused CUDA 路径把 RoPE、位置映射和 K/V 写入放在更少的 launch 中；attention 仍由相同的 Triton paged decode kernel 完成。
+Paged decode 的通用配置是 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`；该选择来自 block size、layout、warp 和 staging 的受控实验。Fused CUDA 路径把 RoPE、位置映射和 K/V 写入放在更少的 launch 中；attention 仍由相同的 Triton paged decode kernel 完成。
 
 因此性能证据分为三层：
 
@@ -114,10 +114,9 @@ Paged decode 默认配置冻结为 token-major、`block_size=32`、`num_warps=2`
 
 Profiler 数据不与 release latency 混用。所有性能结论绑定硬件、commit、seed、shape、trial 和 backend order，详见[性能报告](performance_report.md)与[复现指南](reproducibility.md)。
 
-## 8. 公开边界
+## 8. 范围边界
 
 - 支持单 GPU、单 token decode 和顺序 multi-layer transaction。
 - 支持 FP16/BF16 paged decode；append reference 另支持 FP32。
-- 支持调用方预构建的 immutable full-block shared prefix；不包含 multi-layer prompt prefill、prefix 内容构建/hash、admission-time prefix eviction、抢占、swap/offload 或生产级并发服务。
+- 支持调用方预构建的 immutable full-block shared prefix，以及调用方提供的 multi-layer prompt/context K/V 原子导入；不执行模型 prefill forward，也不包含 prefix 内容构建/hash、admission-time prefix eviction、抢占、swap/offload 或生产级并发服务。
 - CUDA extension 使用 lazy JIT，首次运行含构建成本。
-- 当前版本是 public `0.0.0` research preview；clean-install、`v0.1.0` 版本与 tag 是尚未验证的独立稳定发布门。

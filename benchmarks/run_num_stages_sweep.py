@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from flashdec.benchmark import write_csv
-from benchmarks.run_week8_paged_decode import _dtype_from_name, run_shape
+from benchmarks.run_paged_decode_warp_sweep import _dtype_from_name, run_shape
 
 
 CASES = {
@@ -62,7 +62,10 @@ def parse_args():
     parser.add_argument("--repeat", type=int, default=30)
     parser.add_argument("--seed", type=int, default=173)
     parser.add_argument("--skip-validate", action="store_true")
-    parser.add_argument("--output", default="benchmarks/results/week10_num_stages.csv")
+    parser.add_argument(
+        "--output",
+        default="benchmarks/results/paged_decode_staging_sweep.csv",
+    )
     return parser.parse_args()
 
 
@@ -89,7 +92,7 @@ def main():
     args.num_stages = None
     args.mode = "triton"
     args.experiment = "num_stages"
-    args.benchmark = "week10_num_stages"
+    args.benchmark = "paged_decode_staging_sweep"
     args.num_warps = [args.num_warps]
     results = []
     cases = _selected_cases(args.cases)

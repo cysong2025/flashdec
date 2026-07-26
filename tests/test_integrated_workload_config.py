@@ -1,4 +1,4 @@
-"""Dependency-free R4-C trace and reference-trajectory coverage."""
+"""Dependency-free integrated trace and reference-trajectory coverage."""
 
 import unittest
 
@@ -90,7 +90,7 @@ class IntegratedWorkloadConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     IntegratedWorkloadConfig(**values)
 
-    def test_public_api_exports_r4c_symbols(self):
+    def test_public_api_exports_integrated_workload_symbols(self):
         self.assertIs(flashdec.IntegratedWorkloadConfig, IntegratedWorkloadConfig)
         self.assertIs(flashdec.LayerFailure, LayerFailure)
         self.assertIs(flashdec.RequestCancellation, RequestCancellation)

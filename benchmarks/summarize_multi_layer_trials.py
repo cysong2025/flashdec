@@ -445,7 +445,7 @@ def render_markdown(input_path, pairs, aggregates, overall):
     pairs = list(pairs)
     first = pairs[0].torch_row
     lines = [
-        "# Multi-layer DecodeEngine Trial Summary",
+        "# Multi-layer Token Transaction Summary",
         "",
         "## Validation",
         "",
@@ -541,7 +541,7 @@ def parse_args():
     parser.add_argument("--input", required=True)
     parser.add_argument(
         "--output",
-        default="benchmarks/results/r2_multi_layer_engine_trials3_summary.md",
+        default="benchmarks/results/multi_layer_transaction_summary.md",
     )
     parser.add_argument("--expected-trials", type=int, default=3)
     parser.add_argument("--expected-cases", nargs="+", default=list(DEFAULT_CASES))

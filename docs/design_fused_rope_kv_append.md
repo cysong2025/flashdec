@@ -50,12 +50,12 @@ RoPE 采用既有 split-half convention。kernel 在 float 中计算 `sin/cos` �
 
 `PagedKVCache.append_fused_cuda()` 先检查 q/k/v/position/rotary 参数、加载 extension、执行 capacity preflight，之后才分配 block。因此参数、toolchain 或 capacity error 不会创建 request 或消费 block。和其他 CUDA path 一样，不为异步 CUDA runtime fault 实现 allocator rollback。
 
-## 当前验证状态
+## 验证与实验结论
 
-RTX 5070 已完成首次 JIT build 和 correctness：focused `66 passed in 44.35s`，完整回归 `214 passed in 4.52s`。首次 focused 时间包含 fused extension 编译，不能用作性能数字。测试覆盖：
+RTX 5070 correctness 覆盖：
 
 - raw fused op 的 GQA、非连续 physical block、partial rotary 和 FP16/BF16/FP32。
 - `fused_cuda` 与 PyTorch reference 的 rotated Q、cache、block table、seq_lens、request state 和 metrics 对齐。
 - fused capacity failure atomicity 与 CPU cache error path。
 
-三路径 CUDA-event 实验已完成，并将 JIT build 和 cache prefill 排除在计时外。`fused_cuda` 在 6/6 个 p50 case 胜出，p50 几何平均为 `1.2226x` vs torch；独立 CUDA append 为 `0.9840x`。该结果支持 GPU Engine 显式选择 fused 路径，公开 reference API 继续默认使用 torch。
+三路径 CUDA-event 实验将 JIT build 和 cache prefill 排除在计时外。`fused_cuda` 在 6/6 个 p50 case 胜出，p50 几何平均为 `1.2226x` vs torch；独立 CUDA append 为 `0.9840x`。该结果支持 GPU Engine 显式选择 fused 路径，公开 reference API 继续默认使用 torch。完整数据见[append backend summary](../benchmarks/results/rope_kv_append_backends_summary.md)。

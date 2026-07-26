@@ -28,107 +28,174 @@ class PublicResultsChartTests(unittest.TestCase):
         artifact = self.data["artifact"]
         self.assertEqual(artifact["device"], "NVIDIA GeForce RTX 5070")
         self.assertIn("not a raw benchmark dataset", artifact["data_class"])
-        self.assertIn("not comparable across stages", artifact["ratio_boundary"])
+        self.assertIn("not comparable across panels", artifact["ratio_boundary"])
 
         sources = {
-            self.data["r1_scheduler_progress"]["source"],
-            self.data["r3_shared_prefix_capacity"]["source"],
-            self.data["r4c_integrated_correctness"]["source"],
-            self.data["r5_flashinfer_kernel_baseline"]["source"],
+            self.data["scheduler_progress"]["source"],
+            self.data["shared_prefix_capacity"]["source"],
+            self.data["integrated_lifecycle"]["source"],
+            self.data["flashinfer_kernel_baseline"]["source"],
             *(
                 row["source"]
                 for row in self.data["optimization_outcomes"]["entries"]
             ),
         }
-        self.assertEqual(len(sources), 7)
+        self.assertEqual(
+            sources,
+            {
+                "benchmarks/results/scheduler_capacity_progress_summary.md",
+                "benchmarks/results/multi_layer_transaction_summary.md",
+                "benchmarks/results/shared_prefix_capacity_summary.md",
+                "benchmarks/results/trusted_transaction_summary.md",
+                "benchmarks/results/persistent_metadata_candidate_summary.md",
+                "benchmarks/results/integrated_runtime_lifecycle_summary.md",
+                "benchmarks/results/flashinfer_paged_decode_baseline_summary.md",
+            },
+        )
         self.assertTrue(all(ROOT.joinpath(source).is_file() for source in sources))
 
+        optimization = {
+            row["id"]: row for row in self.data["optimization_outcomes"]["entries"]
+        }
         provenance = {
-            "R1": self.data["r1_scheduler_progress"],
-            "R2": self.data["optimization_outcomes"]["entries"][0],
-            "R3": self.data["r3_shared_prefix_capacity"],
-            "R4-A": self.data["optimization_outcomes"]["entries"][1],
-            "R4-B": self.data["optimization_outcomes"]["entries"][2],
-            "R4-C": self.data["r4c_integrated_correctness"],
-            "R5": self.data["r5_flashinfer_kernel_baseline"],
+            "scheduler_progress": self.data["scheduler_progress"],
+            "fused_append": optimization["fused_append"],
+            "shared_prefix_capacity": self.data["shared_prefix_capacity"],
+            "trusted_transaction": optimization["trusted_transaction"],
+            "persistent_metadata": optimization["persistent_metadata"],
+            "integrated_lifecycle": self.data["integrated_lifecycle"],
+            "flashinfer_kernel_baseline": self.data[
+                "flashinfer_kernel_baseline"
+            ],
         }
         self.assertEqual(
             {
-                stage: (
+                evidence_id: (
                     section["evidence_commit"],
                     section["rows"],
                     section["trials"],
                 )
-                for stage, section in provenance.items()
+                for evidence_id, section in provenance.items()
             },
             {
-                "R1": ("16de9d4", 36, 3),
-                "R2": ("fa0f89a", 144, 3),
-                "R3": ("fe72e27", 64, 8),
-                "R4-A": ("4018449", 160, 5),
-                "R4-B": ("8047a9c", 160, 5),
-                "R4-C": ("6912894", 24, 3),
-                "R5": ("d7d4feb", 72, 3),
+                "scheduler_progress": ("16de9d4", 36, 3),
+                "fused_append": ("fa0f89a", 144, 3),
+                "shared_prefix_capacity": ("fe72e27", 64, 8),
+                "trusted_transaction": ("4018449", 160, 5),
+                "persistent_metadata": ("8047a9c", 160, 5),
+                "integrated_lifecycle": ("6912894", 24, 3),
+                "flashinfer_kernel_baseline": ("d7d4feb", 72, 3),
             },
         )
 
+    def test_snapshot_schema_uses_mechanism_names(self):
+        self.assertEqual(self.data["schema_version"], 2)
+        self.assertTrue(
+            {
+                "scheduler_progress",
+                "shared_prefix_capacity",
+                "optimization_outcomes",
+                "integrated_lifecycle",
+                "flashinfer_kernel_baseline",
+            }.issubset(self.data)
+        )
+        optimization = self.data["optimization_outcomes"]
+        self.assertNotIn("scope_boundary", optimization)
+        self.assertIn("different workloads and timing boundaries", optimization["technical_boundary"])
+        self.assertEqual(
+            [(row["id"], row["feature"]) for row in optimization["entries"]],
+            [
+                ("fused_append", "Fused append path"),
+                ("trusted_transaction", "Trusted transaction path"),
+                ("persistent_metadata", "Persistent metadata"),
+            ],
+        )
+
+        def mapping_keys(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    yield key
+                    yield from mapping_keys(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from mapping_keys(child)
+
+        self.assertNotIn("stage", set(mapping_keys(self.data)))
+
     def test_snapshot_preserves_required_results_and_boundaries(self):
-        r1 = self.data["r1_scheduler_progress"]
+        scheduler = self.data["scheduler_progress"]
         outcomes = {
             row["id"]: (row["completed"], row["cancelled"], row["deadlock"])
-            for row in r1["policies"]
+            for row in scheduler["policies"]
         }
         self.assertEqual(outcomes["lifetime_fifo_aging"], (2, 0, False))
         self.assertEqual(outcomes["cancel_on_backpressure"], (1, 1, False))
         self.assertEqual(outcomes["greedy_step_only"], (0, 0, True))
 
-        r3_points = self.data["r3_shared_prefix_capacity"]["points"]
+        shared_prefix_points = self.data["shared_prefix_capacity"]["points"]
         self.assertEqual(
-            [row["physical_context_blocks"] for row in r3_points],
+            [row["physical_context_blocks"] for row in shared_prefix_points],
             [64, 52, 36, 20],
         )
         self.assertEqual(
-            [row["admitted_requests"] for row in r3_points],
+            [row["admitted_requests"] for row in shared_prefix_points],
             [9, 12, 15, 16],
         )
         self.assertEqual(
-            [row["saved_kv_capacity_mib"] for row in r3_points],
+            [row["saved_kv_capacity_mib"] for row in shared_prefix_points],
             [0.0, 1.5, 3.5, 5.5],
         )
 
         scorecard = {
-            row["stage"]: row for row in self.data["optimization_outcomes"]["entries"]
+            row["id"]: row for row in self.data["optimization_outcomes"]["entries"]
         }
-        self.assertEqual(scorecard["R2"]["stable_groups"], 20)
-        self.assertEqual(scorecard["R2"]["outcome"], "observed")
-        self.assertEqual(scorecard["R4-A"]["stable_groups"], 16)
-        self.assertEqual(scorecard["R4-B"]["stable_groups"], 13)
-        self.assertEqual(scorecard["R4-B"]["outcome"], "rejected_and_rolled_back")
-
-        r4c = self.data["r4c_integrated_correctness"]
-        self.assertEqual((r4c["status"], r4c["rows"], r4c["trials"]), ("passed", 24, 3))
-
-        r5 = self.data["r5_flashinfer_kernel_baseline"]
-        self.assertIn("kernel only", r5["scope"])
-        self.assertIn("above 1 favor FlashInfer", r5["ratio_direction"])
+        self.assertEqual(scorecard["fused_append"]["stable_groups"], 20)
+        self.assertEqual(scorecard["fused_append"]["outcome"], "observed")
+        self.assertEqual(scorecard["trusted_transaction"]["stable_groups"], 16)
+        self.assertEqual(scorecard["persistent_metadata"]["stable_groups"], 13)
         self.assertEqual(
-            [row["p50_ratio_geometric_mean"] for row in r5["backends"]],
+            scorecard["persistent_metadata"]["outcome"],
+            "rejected_and_rolled_back",
+        )
+
+        integrated = self.data["integrated_lifecycle"]
+        self.assertEqual(
+            (integrated["status"], integrated["rows"], integrated["trials"]),
+            ("passed", 24, 3),
+        )
+
+        external_baseline = self.data["flashinfer_kernel_baseline"]
+        self.assertIn("kernel only", external_baseline["scope"])
+        self.assertIn(
+            "above 1 favor FlashInfer",
+            external_baseline["ratio_direction"],
+        )
+        self.assertEqual(
+            [
+                row["p50_ratio_geometric_mean"]
+                for row in external_baseline["backends"]
+            ],
             [1.2003, 1.2284],
         )
         self.assertEqual(
-            (r5["observed_p50_ranges_above_one"], r5["total_p50_ranges"]),
+            (
+                external_baseline["observed_p50_ranges_above_one"],
+                external_baseline["total_p50_ranges"],
+            ),
             (16, 16),
         )
 
-    def test_validate_snapshot_rejects_a_misrepresented_r4b_decision(self):
+    def test_validate_snapshot_rejects_a_misrepresented_metadata_decision(self):
         changed = json.loads(json.dumps(self.data))
         changed["optimization_outcomes"]["entries"][2]["outcome"] = "accepted"
         with self.assertRaisesRegex(ValueError, "scorecard"):
             validate_snapshot(changed)
 
-    def test_validate_snapshot_rejects_a_hard_coded_r5_range_count(self):
+    def test_validate_snapshot_rejects_a_hard_coded_external_range_count(self):
         changed = json.loads(json.dumps(self.data))
-        changed["r5_flashinfer_kernel_baseline"]["observed_p50_ranges_above_one"] = 15
+        changed["flashinfer_kernel_baseline"][
+            "observed_p50_ranges_above_one"
+        ] = 15
         with self.assertRaisesRegex(ValueError, "range counts"):
             validate_snapshot(changed)
 
@@ -154,19 +221,30 @@ class PublicResultsChartTests(unittest.TestCase):
             self.assertEqual(description.attrib["id"], "chart-description")
             embedded = json.loads(metadata.text)
             self.assertEqual(
-                [item["stage"] for item in embedded["evidence"]],
-                ["R1", "R2", "R3", "R4-A", "R4-B", "R4-C", "R5"],
+                [item["id"] for item in embedded["evidence"]],
+                [
+                    "scheduler_progress",
+                    "fused_append",
+                    "shared_prefix_capacity",
+                    "trusted_transaction",
+                    "persistent_metadata",
+                    "integrated_lifecycle",
+                    "flashinfer_kernel_baseline",
+                ],
+            )
+            self.assertTrue(
+                all("stage" not in item for item in embedded["evidence"])
             )
             self.assertNotIn("class-=", tracked)
             self.assertIn('class="panel"', tracked)
             visible_text = " ".join(document.itertext())
-            self.assertIn("R4-B rolled back", visible_text)
-            self.assertIn("R4-C lifecycle PASS", visible_text)
-            self.assertIn("REJECTED", visible_text)
+            self.assertIn("Persistent metadata was not adopted", visible_text)
+            self.assertIn("Integrated lifecycle", visible_text)
+            self.assertIn("NOT ADOPTED", visible_text)
             self.assertIn(">1 favors FlashInfer", visible_text)
             self.assertIn("KERNEL-ONLY", visible_text)
             self.assertIn("not a raw dataset", visible_text)
-            self.assertIn("not comparable across stages", visible_text)
+            self.assertIn("not comparable across panels", visible_text)
             for commit in (
                 "16de9d4",
                 "fa0f89a",

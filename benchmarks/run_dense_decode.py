@@ -1,4 +1,4 @@
-"""Run Week 4 dense decode attention Triton benchmarks."""
+"""Run dense decode attention Triton benchmarks."""
 
 from __future__ import annotations
 
@@ -180,7 +180,7 @@ def parse_args():
     parser.add_argument("--num-warps", type=int, default=4)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeat", type=int, default=30)
-    parser.add_argument("--output", default="benchmarks/results/week4_dense_decode.csv")
+    parser.add_argument("--output", default="benchmarks/results/dense_decode.csv")
     return parser.parse_args()
 
 

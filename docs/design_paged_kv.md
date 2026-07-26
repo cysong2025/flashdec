@@ -1,12 +1,12 @@
 # Paged KV Cache 设计说明
 
-本文记录 Paged KV Cache 的数据结构、paged PyTorch reference，以及 request 生命周期和 physical block allocator。它既是 paged decode Triton kernel 的正确性基准，也是后续 DecodeEngine 的内存管理基础。R3 的 immutable full-block 共享另见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
+本文记录 Paged KV Cache 的数据结构、paged PyTorch reference、request 生命周期和 physical block allocator。它既是 paged decode Triton kernel 的正确性基准，也是 DecodeEngine 的内存管理基础。Immutable full-block 共享的所有权扩展另见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
-## 1. 设计目标
+## 1. 研究问题
 
-decode 阶段每个 request 的上下文长度不同。如果继续使用 dense KV cache，短序列会浪费 padding 空间，动态 batch 也很难管理。Paged KV Cache 把每个 request 的逻辑 token 序列切成固定大小 block，再通过 block table 映射到物理 block。
+Paged KV Cache 回答的问题是：面对长度不同且持续变化的 request，如何把逻辑 token 序列映射到可分配、释放和复用的 physical blocks，同时保持 append、capacity failure 与 lifecycle 转换可验证且原子。Dense KV cache 会为短序列保留大量 padding，也难以表达动态 batch 的 block ownership；paged layout 则把每个逻辑序列切成固定大小 block，再通过 block table 映射到物理存储。
 
-Week 5 的目标不是优化性能，而是把语义定义清楚：
+Paged KV reference 的首要目标不是优化性能，而是把语义定义清楚：
 
 - 每个 request 维护自己的 logical block list。
 - 每个 logical block 指向一个 physical block。
@@ -23,7 +23,7 @@ k_cache / v_cache:
 [num_layers, max_blocks, num_kv_heads, block_size, head_dim]
 ```
 
-storage 保留 `num_layers` 维度。legacy runtime v2 append 为避免错误重复推进 seq_len，仍要求 `num_layers=1`；R2-A 允许通过 multi-layer token transaction 共享一次 block location，并在全部 layer 完成后只推进一次 seq_len。
+storage 保留 `num_layers` 维度。单层兼容 append 为避免逐层错误地重复推进 seq_len，要求 `num_layers=1`；multi-layer token transaction 则让所有 layer 共享一次 block location，并在全部 layer 完成后只推进一次 seq_len。
 
 paged reference 使用单层 cache：
 
@@ -88,7 +88,7 @@ k_cache[9, kv_head, 0, :]
 v_cache[9, kv_head, 0, :]
 ```
 
-## 4. 当前 API
+## 4. API
 
 创建 cache：
 
@@ -167,7 +167,7 @@ kv_head = q_head // (num_q_heads // num_kv_heads)
 
 ## 6. Correctness Anchor
 
-Week 5 的核心验证方式：
+Paged KV 的核心验证方式：
 
 ```text
 PagedKVCache append tokens
@@ -187,19 +187,19 @@ PagedKVCache append tokens
 - block table 映射正确。
 - paged reference 与 dense reference 的 attention 语义一致。
 
-## 7. 当前限制
+## 7. 机制边界
 
-- legacy runtime v2 append 当前只支持 `num_layers=1`；构造多 layer cache 后必须使用 R2 token transaction，不能逐层调用 legacy append。
-- finished/cancelled request id 不能重新激活；终态记录当前保留用于状态查询和 lifecycle 计数。
+- 单层兼容 append 只支持 `num_layers=1`；构造 multi-layer cache 后必须使用 token transaction，不能逐层调用兼容 append。
+- finished/cancelled request id 不能重新激活；终态记录用于状态查询和 lifecycle 计数。
 - 释放 physical block 时不会清零 K/V。正确性依赖 block ownership、block table 和 seq_len；新 request 的有效 token 不会读取旧尾部数据。
-- 当前 allocator 和 request scheduler 位于 Python 层，目标是先定义清楚语义，不代表最终高吞吐 serving 实现。
-- paged Triton kernel 已在 RTX 5070 验证 `head_dim=64/128`、FP16/BF16 和 `block_size=8/16/32`；当前通用配置为 block32。
-- 当前 reference 会显式 gather logical K/V，适合作 correctness，不适合当性能实现。
-- R3-A 只在 Cache 层提供 shared-prefix ownership core；DecodeEngine/scheduler commitment integration 在 R3-B 完成前保持禁用。
+- allocator 和 request scheduler 位于 Python 层，用于定义和验证状态语义，不代表生产级高吞吐 serving 实现。
+- paged Triton kernel 已在 RTX 5070 验证 `head_dim=64/128`、FP16/BF16 和 `block_size=8/16/32`；通用配置使用 block32。
+- reference 会显式 gather logical K/V，适合作 correctness anchor，不适合当性能实现。
+- Shared-prefix 只共享 immutable full blocks；private tail 仍由单个 request 独占，registry、refcount 与 admission 语义见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
-## 8. Runtime v2 状态机与 allocator
+## 8. Request 状态机与 allocator
 
-PagedKVCache v1 只验证 append 和 block table；v2 增加以下状态机：
+仅验证 append 和 block table 不足以回答动态请求何时拥有、释放和复用 physical blocks。Cache 因此显式维护以下状态机：
 
 ```text
 add/implicit append admission -> active -> finished
@@ -222,7 +222,7 @@ free list 的规则：
 3. 若容量不足，直接报错；不创建新 request，不分配 block，也不增长已有 seq_len。
 4. 容量足够后才按 batch row 写入 K/V 并提交状态。
 
-`metrics()` 当前报告：
+`metrics()` 报告：
 
 - used/free/max blocks 与 block utilization。
 - active/reserved tokens 与 internal fragmentation。
@@ -236,7 +236,7 @@ free list 的规则：
 - active request 的 block 数和 seq_len 一致。
 - finished/cancelled request 不再持有 block。
 
-v2 correctness 不只比较 attention 输出，还要覆盖请求状态机：
+Correctness 不只比较 attention 输出，还覆盖请求状态机：
 
 ```text
 add -> append -> finish -> block reuse
@@ -245,11 +245,11 @@ capacity exhausted -> append fails without partial mutation
 mixed active/finished requests -> block table and seq_lens remain correct
 ```
 
-上述代码已在 RTX 5070 完成验证：focused suite 为 `90 passed in 4.47s`，完整回归为 `170 passed in 4.66s`。这说明 lifecycle/free-list 改动没有破坏既有 paged reference、Triton kernel 和公共 API。
+RTX 5070 lifecycle/allocator 证据为 focused `90 passed in 4.47s`、完整回归 `170 passed in 4.66s`。该结果验证 free-list 与终态转换没有破坏 paged reference、Triton kernel 和公共 API。
 
-## 9. Week 6 接口衔接
+## 9. Paged-decode kernel 接口
 
-Week 6 paged decode kernel 应接收：
+Paged-decode kernel 接收：
 
 ```text
 q
@@ -258,9 +258,9 @@ block_tables
 seq_lens
 ```
 
-Week 6 v1 当前限制：
+接口约束：
 
-- `block_size = 8/16/32`，当前通用 benchmark 默认值为 32
+- `block_size = 8/16/32`，通用 benchmark 默认值为 32
 - `head_dim = 64/128`
 - FP16/BF16
 - 保留 GQA/MQA head 映射。

@@ -1,61 +1,53 @@
-# FlashDec 文档索引
+# FlashDec 文档导航
 
-## 推荐入口
+FlashDec 的文档按“研究问题 → 系统设计 → 实验方法 → 可复现证据”组织。若只阅读一篇技术总览，请从[研究问题](research_questions.md)开始；接口使用者可直接进入[公开 API](API.md)。
 
-- [当前交付状态](DELIVERY_STATUS.md)：R1–R5 能力、canonical evidence、限制和发布边界的唯一总览。
-- [当前状态与后续目标](NEXT_STEPS.md)：public `0.0.0` research preview 与独立的 `v0.1.0` release gate。
-- [Benchmark 结果索引](../benchmarks/results/README.md)：正式摘要、历史结果和本地产物边界。
-- [复现指南](reproducibility.md)：已验证环境、证据命令和 release-only clean-install 流程。
+## 推荐阅读顺序
 
-仓库以 public `0.0.0` research preview 提供源码。R1–R5 技术交付已完成；fresh-environment 复现、`v0.1.0` 版本与 tag 尚未验证，也不属于本次公开源码的承诺。
+1. [研究问题](research_questions.md)：六个核心问题、实现回答、正式证据与结论边界。
+2. [总体设计](design.md)：attention、Paged KV、事务、调度和 kernel 的分层关系。
+3. [公开 API](API.md)：张量约定、Cache、Engine、Scheduler 与 workload 接口。
+4. [性能报告](performance_report.md)：默认选择、正负实验结果和不可外推边界。
+5. [复现指南](reproducibility.md)：环境、correctness、benchmark 与严格摘要命令。
 
-## 系统概览
+## 研究问题与证据
 
-- [公开 API](API.md)
-- [项目范围与系统分层](AI_INFRA_SCOPE.md)
-- [项目演进与里程碑](PROJECT_PLAN.md)
-- [路线图](ROADMAP.md)
-- [当前状态与后续目标](NEXT_STEPS.md)
-- [兼容性矩阵](compatibility.md)
-- [Changelog](../CHANGELOG.md)
+| 问题 | 主要设计 | 正式实验 |
+| --- | --- | --- |
+| Paged decode 的语义、地址映射与 kernel 配置如何独立验证？ | [Decode attention](design.md) · [Paged KV](design_paged_kv.md) · [Online softmax](concepts/online_softmax.md) | [Warp selection](../benchmarks/results/paged_decode_warp_selection_summary.md) · [Block size](../benchmarks/results/paged_decode_block_size_summary.md) · [KV layout](../benchmarks/results/paged_decode_kv_layout_summary.md) · [默认配置](../benchmarks/results/paged_decode_default_profile_summary.md) · [Staging 负结果](../benchmarks/results/paged_decode_staging_summary.md) |
+| 动态请求下谁拥有 KV blocks、`seq_len` 与 lifecycle？ | [Paged KV](design_paged_kv.md) · [RoPE/KV append](design_rope_kv_append.md) · [DecodeEngine](design_decode_engine.md) | [Append backends](../benchmarks/results/rope_kv_append_backends_summary.md) · [Dynamic workload](../benchmarks/results/decode_engine_workload_trials3_summary.md) |
+| 有限 KV 容量下如何保证 admission 安全、进展和公平？ | [Scheduler](design_scheduler.md) | [Policy matrix](../benchmarks/results/scheduler_capacity_progress_summary.md) |
+| 多层 token 如何原子写入、提交或回滚？ | [Multi-layer transaction](design_multi_layer_kv_transaction.md) · [Integrated workload](design_integrated_scheduled_multi_layer.md) | [Multi-layer matrix](../benchmarks/results/multi_layer_transaction_summary.md) · [Trusted transaction](../benchmarks/results/trusted_transaction_summary.md) · [Persistent-metadata 负结果](../benchmarks/results/persistent_metadata_candidate_summary.md) · [Integrated lifecycle](../benchmarks/results/integrated_runtime_lifecycle_summary.md) |
+| Shared prefix 如何改变 ownership、capacity 与 admission？ | [Shared Prefix Blocks](design_shared_prefix_blocks.md) | [8-trial confirmation](../benchmarks/results/shared_prefix_capacity_summary.md) |
+| Kernel 优化能否传递到完整 step，外部基线如何公平比较？ | [Dynamic workload](design_dynamic_workload.md) · [FlashInfer baseline](design_flashinfer_baseline.md) | [Stage attribution](../benchmarks/results/decode_engine_stage_profile_summary.md) · [FlashInfer comparison](../benchmarks/results/flashinfer_paged_decode_baseline_summary.md) |
 
-## 核心设计
+## 系统与数据路径设计
 
-- [Decode attention 语义](design.md)
+- [总体设计](design.md)
 - [Paged KV Cache](design_paged_kv.md)
-- [RoPE + KV append](design_rope_kv_append.md)
-- [CUDA KV append](design_cuda_kv_append.md)
-- [Fused RoPE + KV append](design_fused_rope_kv_append.md)
+- [RoPE + Paged KV Append](design_rope_kv_append.md)
+- [CUDA KV Append](design_cuda_kv_append.md)
+- [Fused RoPE + Paged KV Append](design_fused_rope_kv_append.md)
 - [DecodeEngine](design_decode_engine.md)
 - [Block-aware Scheduler](design_scheduler.md)
 - [Multi-layer KV Token Transaction](design_multi_layer_kv_transaction.md)
 - [Shared Prefix Blocks](design_shared_prefix_blocks.md)
-- [R4-C Integrated Scheduled Multi-layer Workload](design_integrated_scheduled_multi_layer.md)
-- [R5 FlashInfer 有限公开基线](design_flashinfer_baseline.md)
-- [Dynamic workload](design_dynamic_workload.md)
+- [Integrated Scheduled Multi-layer Workload](design_integrated_scheduled_multi_layer.md)
 
-## 性能与复现
+## 实验、性能与复现
 
-- [性能实验记录](perf_experiments.md)
+- [Paged Decode Kernel 实验](kernel_experiments.md)
 - [性能报告](performance_report.md)
+- [Dynamic Workload 方法](design_dynamic_workload.md)
+- [FlashInfer 有限基线设计](design_flashinfer_baseline.md)
+- [兼容性](compatibility.md)
 - [复现指南](reproducibility.md)
-- [开发与验证清单](PREP_CHECKLIST.md)
 - [Benchmark 命令](../benchmarks/README.md)
-- [Benchmark 结果索引](../benchmarks/results/README.md)
-- [脚本说明](../scripts/README.md)
+- [审核后的结果索引](../benchmarks/results/README.md)
 
-## 技术背景
+## 概念与外部资料
 
-- [技术参考资料](CHINESE_RESOURCES.md)
-- [Triton 基础笔记](notes/triton_basics.md)
-- [GPU memory 基础](notes/gpu_memory_basics.md)
-- [Online softmax](notes/online_softmax.md)
-- [从 PagedAttention 到可解释 Decode Runtime](notes/from_paged_attention_to_decode_runtime.md)
+- [Online Softmax 与 Decode Attention](concepts/online_softmax.md)
+- [Primary references](references.md)
 
-## 工程历史
-
-- [贡献与本地验证](../CONTRIBUTING.md)
-- [阶段验证日志](weekly/README.md)
-- [环境记录](environment.md)
-
-历史日志用于追溯决策和实验，不代表当前 API 或默认配置；当前状态以[交付状态](DELIVERY_STATUS.md)为准。
+贡献、问题报告与安全边界分别见[贡献指南](../CONTRIBUTING.md)、[支持说明](../SUPPORT.md)和[安全政策](../SECURITY.md)。

@@ -1,4 +1,4 @@
-"""Dependency-free configuration coverage for the R3-C benchmark."""
+"""Dependency-free configuration coverage for the shared-prefix benchmark."""
 
 import unittest
 

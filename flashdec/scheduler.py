@@ -230,7 +230,7 @@ class SchedulingSnapshot:
                     )
                 if expected_prefix_tokens != item.spec.initial_context_tokens:
                     raise ValueError(
-                        "R3-B shared prefix must cover the full initial context"
+                        "shared-prefix metadata must cover the full initial context"
                     )
             elif expected_prefix_tokens:
                 raise ValueError("request without prefix_id cannot have shared prefix blocks")

@@ -16,11 +16,14 @@ from benchmarks.run_flashinfer_baseline import (
     EXPECTED_TORCH_VERSION,
     EXPECTED_TRITON_VERSION,
 )
+from scripts.check_docs import PUBLIC_ENTRY_FILES
 from scripts.check_release import (
     PUBLIC_RELEASE_REQUIRED_PATHS,
     RELEASE_EVIDENCE_PATHS,
     REQUIRED_PATHS,
-    R5_CONSTRAINT_PINS,
+    WARP_SELECTION_EVIDENCE_MARKERS,
+    WARP_SELECTION_EVIDENCE_PATH,
+    FLASHINFER_CONSTRAINT_PINS,
     _read_constraint_pins,
     _license_id_from_text,
     _read_package_version,
@@ -143,12 +146,12 @@ def _release_tree(tmp_path, project_version="0.1.0", package_version="0.1.0"):
     )
     (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n")
     (tmp_path / "docs/reproducibility.md").write_text(
-        "# Reproducibility\n\n## Release gate status\n"
+        "# Reproducibility\n\n## 已知安装与版本限制\n"
     )
-    (tmp_path / "constraints/r5-cu128.txt").write_text(
+    (tmp_path / "constraints/flashinfer-cu128.txt").write_text(
         "".join(
             f"{name}=={version}\n"
-            for name, version in R5_CONSTRAINT_PINS.items()
+            for name, version in FLASHINFER_CONSTRAINT_PINS.items()
         )
     )
     (tmp_path / "SECURITY.md").write_text(
@@ -190,12 +193,6 @@ def _release_tree(tmp_path, project_version="0.1.0", package_version="0.1.0"):
         "    attributes:\n"
         "      value: Remove credentials, private paths, and unrelated logs.\n"
     )
-    (tmp_path / "docs/PUBLIC_RELEASE_CHECKLIST.md").write_text(
-        "# Public Repository Readiness\n\n"
-        "## Public research-preview gates\n\n"
-        "- [ ] Root license is selected.\n\n"
-        "## Stable `v0.1.0` release gates\n"
-    )
     return tmp_path
 
 
@@ -232,8 +229,8 @@ def test_release_version_readers_support_pyproject_and_package(tmp_path):
     root = _release_tree(tmp_path)
     assert _read_project_version(root / "pyproject.toml") == "0.1.0"
     assert _read_package_version(root / "flashdec/__init__.py") == "0.1.0"
-    assert _read_constraint_pins(root / "constraints/r5-cu128.txt") == (
-        R5_CONSTRAINT_PINS
+    assert _read_constraint_pins(root / "constraints/flashinfer-cu128.txt") == (
+        FLASHINFER_CONSTRAINT_PINS
     )
 
 
@@ -466,19 +463,19 @@ def test_public_license_gate_rejects_metadata_cff_and_readme_mismatch(tmp_path):
     assert "license mismatch: README.md='Apache-2.0', LICENSE='MIT'" in problems
 
 
-def test_validate_release_tree_rejects_r5_constraint_drift(tmp_path):
+def test_validate_release_tree_rejects_flashinfer_constraint_drift(tmp_path):
     root = _release_tree(tmp_path)
-    constraints = root / "constraints/r5-cu128.txt"
+    constraints = root / "constraints/flashinfer-cu128.txt"
     constraints.write_text(constraints.read_text().replace("3.6.0", "3.7.1"))
 
     problems = validate_release_tree(root)
     assert (
-        "R5 constraint mismatch: triton='3.7.1', expected '3.6.0'" in problems
+        "FlashInfer constraint mismatch: triton='3.7.1', expected '3.6.0'" in problems
     )
 
 
-def test_r5_release_constraints_match_runner_environment_contract():
-    assert R5_CONSTRAINT_PINS == {
+def test_flashinfer_constraints_match_runner_environment_contract():
+    assert FLASHINFER_CONSTRAINT_PINS == {
         "torch": EXPECTED_TORCH_VERSION,
         "triton": EXPECTED_TRITON_VERSION,
         "flashinfer-python": EXPECTED_FLASHINFER_VERSION,
@@ -496,51 +493,111 @@ def test_validate_release_tree_requires_final_evidence_only_when_requested(tmp_p
 
     problems = validate_release_tree(root, require_evidence=True)
     assert problems == [
-        f"missing release evidence: {relative}" for relative in RELEASE_EVIDENCE_PATHS
+        f"missing release evidence: {relative}"
+        for relative in RELEASE_EVIDENCE_PATHS
+        if relative not in REQUIRED_PATHS
     ]
 
     for relative in RELEASE_EVIDENCE_PATHS:
         path = Path(root) / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("verified evidence\n")
+        if relative == WARP_SELECTION_EVIDENCE_PATH:
+            source = (
+                Path(__file__).resolve().parents[1]
+                / WARP_SELECTION_EVIDENCE_PATH
+            )
+            path.write_text(source.read_text())
+        else:
+            path.write_text("verified evidence\n")
     assert validate_release_tree(root, require_evidence=True) == []
 
 
 def test_release_evidence_includes_scheduler_multi_layer_and_shared_prefix_summaries():
     assert (
-        "benchmarks/results/r1_scheduler_workload_trials3_summary.md"
+        "benchmarks/results/scheduler_capacity_progress_summary.md"
         in RELEASE_EVIDENCE_PATHS
     )
     assert (
-        "benchmarks/results/r2_multi_layer_engine_trials3_summary.md"
+        "benchmarks/results/multi_layer_transaction_summary.md"
         in RELEASE_EVIDENCE_PATHS
     )
     assert (
-        "benchmarks/results/r3_shared_prefix_workload_trials8_summary.md"
+        "benchmarks/results/shared_prefix_capacity_summary.md"
         in RELEASE_EVIDENCE_PATHS
     )
     assert (
-        "benchmarks/results/r3_shared_prefix_workload_trials3_summary.md"
+        "benchmarks/results/shared_prefix_pre_metadata_cache_summary.md"
         not in RELEASE_EVIDENCE_PATHS
     )
 
 
-def test_release_evidence_covers_frozen_kernel_defaults():
+def test_release_evidence_covers_canonical_kernel_and_engine_results():
     for relative in (
-        "benchmarks/results/week8_block_size_summary.md",
-        "benchmarks/results/week8_layout_summary.md",
-        "benchmarks/results/week9_final_default_summary.md",
-        "benchmarks/results/week10_num_stages_summary.md",
+        "benchmarks/results/paged_decode_warp_selection_summary.md",
+        "benchmarks/results/paged_decode_block_size_summary.md",
+        "benchmarks/results/paged_decode_kv_layout_summary.md",
+        "benchmarks/results/paged_decode_default_profile_summary.md",
+        "benchmarks/results/paged_decode_staging_summary.md",
+        "benchmarks/results/rope_kv_append_backends_summary.md",
+        "benchmarks/results/decode_engine_workload_trials3_summary.md",
+        "benchmarks/results/decode_engine_stage_profile_summary.md",
     ):
         assert relative in RELEASE_EVIDENCE_PATHS
 
 
-def test_release_tree_requires_delivery_index_and_complete_r1_surface():
+def test_warp_selection_summary_preserves_historical_provenance_contract():
+    root = Path(__file__).resolve().parents[1]
+    text = (
+        root / "benchmarks/results/paged_decode_warp_selection_summary.md"
+    ).read_text()
+    for required in WARP_SELECTION_EVIDENCE_MARKERS:
+        assert required in text
+
+
+def test_release_gate_rejects_incomplete_warp_selection_evidence(tmp_path):
+    root = _release_tree(tmp_path)
+    for relative in RELEASE_EVIDENCE_PATHS:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("verified evidence\n")
+    problems = validate_release_tree(root, require_evidence=True)
+    assert any(
+        problem.startswith("warp selection evidence missing marker:")
+        for problem in problems
+    )
+
+
+def test_release_gate_rejects_warp_selection_digest_only_drift(tmp_path):
+    root = _release_tree(tmp_path)
+    canonical = (
+        Path(__file__).resolve().parents[1] / WARP_SELECTION_EVIDENCE_PATH
+    ).read_text()
+    for relative in RELEASE_EVIDENCE_PATHS:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            canonical + "\n" if relative == WARP_SELECTION_EVIDENCE_PATH
+            else "verified evidence\n"
+        )
+    problems = validate_release_tree(root, require_evidence=True)
+    assert not any("missing marker" in problem for problem in problems)
+    assert any(
+        problem.startswith("warp selection evidence content digest mismatch:")
+        for problem in problems
+    )
+
+
+def test_release_tree_requires_public_documentation_and_scheduler_surface():
     for relative in (
-        "docs/DELIVERY_STATUS.md",
-        "docs/NEXT_STEPS.md",
+        "docs/INDEX.md",
         "docs/compatibility.md",
+        "docs/concepts/online_softmax.md",
+        "docs/design.md",
         "docs/design_decode_engine.md",
+        "docs/performance_report.md",
+        "docs/references.md",
+        "docs/research_questions.md",
+        "docs/reproducibility.md",
         "benchmarks/README.md",
         "benchmarks/results/README.md",
         "scripts/README.md",
@@ -566,13 +623,29 @@ def test_release_tree_requires_github_collaboration_surface():
         ".github/ISSUE_TEMPLATE/question.yml",
         ".github/ISSUE_TEMPLATE/config.yml",
         ".github/pull_request_template.md",
-        "docs/PUBLIC_RELEASE_CHECKLIST.md",
     ):
         assert relative in REQUIRED_PATHS
     assert PUBLIC_RELEASE_REQUIRED_PATHS == ("LICENSE",)
 
 
-def test_release_tree_requires_r4_runner_validator_and_dependency_free_tests():
+def test_public_entry_files_exist_and_are_release_tracked():
+    root = Path(__file__).resolve().parents[1]
+    root_governance_files = {
+        "README.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "CODE_OF_CONDUCT.md",
+        "SUPPORT.md",
+    }
+
+    for relative in PUBLIC_ENTRY_FILES:
+        assert (root / relative).is_file(), relative
+        assert (
+            relative in REQUIRED_PATHS or relative in root_governance_files
+        ), relative
+
+
+def test_release_tree_requires_trusted_transaction_validation_surface():
     for relative in (
         "benchmarks/run_fused_transaction_fast_path.py",
         "benchmarks/summarize_fused_transaction_fast_path.py",
@@ -581,16 +654,16 @@ def test_release_tree_requires_r4_runner_validator_and_dependency_free_tests():
     ):
         assert relative in REQUIRED_PATHS
     assert (
-        "benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md"
+        "benchmarks/results/trusted_transaction_summary.md"
         in RELEASE_EVIDENCE_PATHS
     )
     assert (
-        "benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md"
+        "benchmarks/results/persistent_metadata_candidate_summary.md"
         in RELEASE_EVIDENCE_PATHS
     )
 
 
-def test_release_tree_requires_r4c_implementation_and_formal_evidence():
+def test_release_tree_requires_integrated_runtime_evidence():
     for relative in (
         "flashdec/integrated_workload.py",
         "docs/design_integrated_scheduled_multi_layer.md",
@@ -603,16 +676,16 @@ def test_release_tree_requires_r4c_implementation_and_formal_evidence():
     ):
         assert relative in REQUIRED_PATHS
     assert (
-        "benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md"
+        "benchmarks/results/integrated_runtime_lifecycle_summary.md"
         in RELEASE_EVIDENCE_PATHS
     )
 
 
-def test_release_tree_requires_r5_baseline_implementation_and_formal_evidence():
+def test_release_tree_requires_flashinfer_baseline_evidence():
     for relative in (
-        "constraints/r5-cu128.txt",
+        "constraints/flashinfer-cu128.txt",
         "docs/design_flashinfer_baseline.md",
-        "docs/notes/from_paged_attention_to_decode_runtime.md",
+        "docs/research_questions.md",
         "benchmarks/run_flashinfer_baseline.py",
         "benchmarks/summarize_flashinfer_baseline.py",
         "tests/test_flashinfer_baseline.py",
@@ -621,7 +694,7 @@ def test_release_tree_requires_r5_baseline_implementation_and_formal_evidence():
     ):
         assert relative in REQUIRED_PATHS
     assert (
-        "benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md"
+        "benchmarks/results/flashinfer_paged_decode_baseline_summary.md"
         in RELEASE_EVIDENCE_PATHS
     )
 

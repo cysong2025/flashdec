@@ -1,16 +1,16 @@
-# R4-C Integrated Scheduled Multi-layer Workload
+# Integrated Scheduled Multi-layer Workload
 
-## 1. 目标与基线
+## 1. 研究问题与范围
 
-R4-C 不再评估新的 kernel 微优化，而是在同一条 workload 中组合验证已经冻结的 R1 Scheduler、R2 Multi-layer Token Transaction、R3 Shared Prefix 和 R4-A trusted fused append。生产基线固定为：
+这项 workload 研究 scheduler、multi-layer token transaction、shared prefix 和 trusted fused append 在同一动态 request trajectory 中组合后，状态所有权、rollback 和 block reuse 是否仍能由独立 reference 完整验证。受测执行配置为：
 
 - `append_backend="fused_cuda"`；
 - `decode_backend="triton"`；
-- R4-A Cache-owned trusted dispatch；
-- `metadata_policy="materialized"`，不恢复 R4-B persistent candidate；
+- Cache-owned trusted dispatch；
+- `metadata_policy="materialized"`；persistent metadata candidate 未通过预注册稳定性门，不进入该组合路径；
 - token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
 
-第一版只使用运行前注册的固定 resident prefix。在线 prefix registration/eviction、CUDA Graph、kernel 参数 sweep、完整模型 forward、sampling 和网络服务都不在本阶段范围内。
+Workload 只使用运行前注册的固定 resident prefix。在线 prefix registration/eviction、CUDA Graph、kernel 参数 sweep、完整模型 forward、sampling 和网络服务都不在研究范围内。
 
 ## 2. 组合执行链
 
@@ -77,7 +77,7 @@ Engine layers = 9 * num_layers + 1 pre-failure layer
 
 Random prefix、prompt 和 decode tensor 在计时前构建。complete logical-step wall 是 scheduler、private context writes、fused transaction/decode 与 finish/cancel 的和；prefix registration 和最终 inactive-prefix eviction 不进入 latency，但都进入 correctness/accounting gate。
 
-## 5. CUDA 矩阵与验收
+## 5. CUDA 矩阵与验证规则
 
 正式矩阵为：
 
@@ -88,7 +88,7 @@ contexts: 64, 128
 dtypes: FP16, BF16
 ```
 
-每轮将四个 case 轮转一次，seed 连续。R4-C 主验收不设置 shared-prefix latency speedup 门，也不与 R4-B candidate 相除；必须满足：
+每轮将四个 case 轮转一次，seed 连续。该协议不设置 shared-prefix latency speedup 门，也不与 rejected persistent metadata candidate 相除；必须满足：
 
 1. focused/full correctness 无 failure；
 2. 24-row strict validator 完整通过；
@@ -106,11 +106,11 @@ python benchmarks/run_integrated_scheduled_multi_layer.py \
   --dtype float16 \
   --trials 1 \
   --quick \
-  --output benchmarks/results/r4_integrated_scheduled_multi_layer_quick.csv
+  --output benchmarks/results/integrated_runtime_lifecycle_quick.csv
 
 python benchmarks/summarize_integrated_scheduled_multi_layer.py \
-  --input benchmarks/results/r4_integrated_scheduled_multi_layer_quick.csv \
-  --output benchmarks/results/r4_integrated_scheduled_multi_layer_quick_summary.md \
+  --input benchmarks/results/integrated_runtime_lifecycle_quick.csv \
+  --output benchmarks/results/integrated_runtime_lifecycle_quick_summary.md \
   --expected-trials 1 \
   --expected-cases l2_c32 \
   --expected-dtypes float16
@@ -123,12 +123,12 @@ python benchmarks/run_integrated_scheduled_multi_layer.py \
   --case all \
   --dtype both \
   --trials 3 \
-  --output benchmarks/results/r4_integrated_scheduled_multi_layer_trials3.csv
+  --output benchmarks/results/integrated_runtime_lifecycle_trials3.csv
 
 python benchmarks/summarize_integrated_scheduled_multi_layer.py \
-  --input benchmarks/results/r4_integrated_scheduled_multi_layer_trials3.csv \
-  --output benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md \
+  --input benchmarks/results/integrated_runtime_lifecycle_trials3.csv \
+  --output benchmarks/results/integrated_runtime_lifecycle_summary.md \
   --expected-trials 3
 ```
 
-commit `6912894` 已在 RTX 5070 完成验证：focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`，FP16 quick 与预注册的 24-row/3-trial FP16/BF16 正式矩阵均通过 strict validator。canonical evidence 见[R4-C 正式摘要](../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)。
+Commit `6912894` 的 RTX 5070 证据包括 focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`，以及通过 strict validator 的 FP16 quick 和预注册 24-row/3-trial FP16/BF16 正式矩阵。Canonical evidence 见[Integrated workload 正式摘要](../benchmarks/results/integrated_runtime_lifecycle_summary.md)。

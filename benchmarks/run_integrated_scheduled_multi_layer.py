@@ -1,4 +1,4 @@
-"""Run the R4-C integrated scheduled multi-layer workload on CUDA."""
+"""Run the integrated scheduled multi-layer workload on CUDA."""
 
 from __future__ import annotations
 
@@ -247,7 +247,7 @@ def parse_args():
     parser.add_argument("--quick", action="store_true")
     parser.add_argument(
         "--output",
-        default="benchmarks/results/r4_integrated_scheduled_multi_layer.csv",
+        default="benchmarks/results/integrated_runtime_lifecycle.csv",
     )
     return parser.parse_args()
 
@@ -263,7 +263,7 @@ def main():
     import torch
 
     if not torch.cuda.is_available():
-        raise SystemExit("CUDA is required for the R4-C workload")
+        raise SystemExit("CUDA is required for the integrated workload")
     from flashdec import load_fused_rope_kv_append_extension
 
     load_fused_rope_kv_append_extension()

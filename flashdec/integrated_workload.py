@@ -1,4 +1,4 @@
-"""R4-C scheduled multi-layer workload with fixed shared-prefix residency."""
+"""Integrated scheduled multi-layer workload with fixed shared-prefix residency."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ class LayerFailure:
 
 @dataclass(frozen=True)
 class IntegratedWorkloadConfig:
-    """Finite R4-C trace and frozen runtime geometry."""
+    """Finite integrated-workload trace and fixed runtime geometry."""
 
     name: str
     num_layers: int
@@ -120,9 +120,13 @@ class IntegratedWorkloadConfig:
         if any(item.logical_step >= self.max_steps for item in failures):
             raise ValueError("failure steps must be smaller than max_steps")
         if not any(item.spec.prefix_id is None for item in arrivals):
-            raise ValueError("R4-C trace requires at least one private-prefix miss")
+            raise ValueError(
+                "integrated-workload trace requires at least one private-prefix miss"
+            )
         if not any(item.spec.prefix_id is not None for item in arrivals):
-            raise ValueError("R4-C trace requires at least one shared-prefix hit")
+            raise ValueError(
+                "integrated-workload trace requires at least one shared-prefix hit"
+            )
 
 
 @dataclass(frozen=True)
@@ -177,7 +181,7 @@ class IntegratedReferenceTrajectory:
 
 @dataclass(frozen=True)
 class IntegratedWorkloadResult:
-    """Measured R4-C execution plus audited lifecycle evidence."""
+    """Measured integrated-workload execution plus audited lifecycle evidence."""
 
     config: IntegratedWorkloadConfig
     reference: IntegratedReferenceTrajectory
@@ -220,7 +224,7 @@ class IntegratedWorkloadResult:
 
 
 def standard_integrated_arrivals(*, context_tokens, prefix_id="shared"):
-    """Return the frozen mixed hit/miss, staggered-arrival R4-C trace."""
+    """Return the fixed mixed hit/miss, staggered-arrival integrated trace."""
     from .scheduler import RequestSpec
 
     _require_int("context_tokens", context_tokens, minimum=1)
@@ -233,7 +237,7 @@ def standard_integrated_arrivals(*, context_tokens, prefix_id="shared"):
 
 
 def standard_integrated_config(*, num_layers, context_tokens):
-    """Build the pre-registered R4-C correctness/performance trace."""
+    """Build the pre-registered integrated-workload correctness/performance trace."""
     return IntegratedWorkloadConfig(
         name=f"l{int(num_layers)}_c{int(context_tokens)}",
         num_layers=int(num_layers),
@@ -254,7 +258,7 @@ def _trajectory_digest(steps):
 
 
 def build_integrated_reference(config, *, block_size, max_blocks, resident_prefix_blocks):
-    """Simulate the R4-C scheduler and lifecycle without importing torch."""
+    """Simulate the integrated-workload scheduler and lifecycle without torch."""
     if not isinstance(config, IntegratedWorkloadConfig):
         raise TypeError("config must be an IntegratedWorkloadConfig")
     _require_int("block_size", block_size, minimum=1)
@@ -444,7 +448,7 @@ def build_integrated_reference(config, *, block_size, max_blocks, resident_prefi
 
 
 def run_integrated_workload(engine, config, *, num_q_heads, seed=0):
-    """Execute and audit one dynamic R4-C trace on a fresh Engine."""
+    """Execute and audit one dynamic integrated-workload trace on a fresh Engine."""
     from .engine import DecodeEngine
 
     if not isinstance(engine, DecodeEngine):
@@ -465,9 +469,11 @@ def run_integrated_workload(engine, config, *, num_q_heads, seed=0):
     cache_metrics = metrics["cache"]
     resident_prefix_blocks = cache_metrics["resident_prefix_blocks"]
     if resident_prefix_blocks <= 0:
-        raise ValueError("R4-C requires a fixed resident shared prefix")
+        raise ValueError("integrated workload requires a fixed resident shared prefix")
     if cache_metrics["used_blocks"] != resident_prefix_blocks:
-        raise ValueError("fresh R4-C cache may only contain resident prefix blocks")
+        raise ValueError(
+            "fresh integrated-workload cache may only contain resident prefix blocks"
+        )
 
     prefix_ids = tuple(dict.fromkeys(
         item.spec.prefix_id
@@ -604,9 +610,13 @@ def run_integrated_workload(engine, config, *, num_q_heads, seed=0):
         engine.apply_scheduler_decision(decision)
         scheduler_ms = (time.perf_counter() - decision_start) * 1_000.0
         if tuple(decision.admit_ids) != expected.admitted_ids:
-            raise RuntimeError("Engine admission diverged from R4-C reference")
+            raise RuntimeError(
+                "Engine admission diverged from integrated-workload reference"
+            )
         if tuple(decision.rejected_ids) != expected.rejected_ids:
-            raise RuntimeError("Engine rejection diverged from R4-C reference")
+            raise RuntimeError(
+                "Engine rejection diverged from integrated-workload reference"
+            )
         for request_id in decision.admit_ids:
             wait_steps.pop(request_id)
             skip_counts.pop(request_id)
@@ -645,9 +655,13 @@ def run_integrated_workload(engine, config, *, num_q_heads, seed=0):
             engine.apply_scheduler_decision(execution_decision)
             scheduler_ms += (time.perf_counter() - decision_start) * 1_000.0
         if tuple(execution_decision.runnable_ids) != expected.runnable_ids:
-            raise RuntimeError("Engine runnable batch diverged from R4-C reference")
+            raise RuntimeError(
+                "Engine runnable batch diverged from integrated-workload reference"
+            )
         if tuple(execution_decision.deferred_ids) != expected.deferred_ids:
-            raise RuntimeError("Engine deferred batch diverged from R4-C reference")
+            raise RuntimeError(
+                "Engine deferred batch diverged from integrated-workload reference"
+            )
         for request_id in execution_decision.waiting_ids:
             wait_steps[request_id] += 1
             skip_counts[request_id] += 1
@@ -668,7 +682,9 @@ def run_integrated_workload(engine, config, *, num_q_heads, seed=0):
             transaction = engine.begin_step(expected.runnable_ids)
             observed_positions = tuple(transaction.positions.tolist())
             if observed_positions != expected.positions:
-                raise RuntimeError("transaction positions diverged from R4-C reference")
+                raise RuntimeError(
+                    "transaction positions diverged from integrated-workload reference"
+                )
             reused_blocks.update(
                 set(transaction.physical_block_ids.tolist()) & released_blocks
             )
@@ -684,13 +700,17 @@ def run_integrated_workload(engine, config, *, num_q_heads, seed=0):
                             raise
                         break
                 else:
-                    raise RuntimeError("R4-C rollback injection did not fail")
+                    raise RuntimeError(
+                        "integrated-workload rollback injection did not fail"
+                    )
                 for request_id, state in before.items():
                     if (
                         engine.cache.request_state(request_id)["seq_len"],
                         engine.cache.request_block_ids(request_id),
                     ) != state:
-                        raise RuntimeError("R4-C rollback changed visible request state")
+                        raise RuntimeError(
+                            "integrated-workload rollback changed visible request state"
+                        )
                 for request_id in (*expected.runnable_ids, *expected.deferred_ids):
                     service_wait[request_id] += 1
             else:
@@ -708,22 +728,31 @@ def run_integrated_workload(engine, config, *, num_q_heads, seed=0):
                     if decoded[request_id] == specs[request_id].max_new_tokens
                 )
                 if observed_completed_ids != expected.completed_ids:
-                    raise RuntimeError("completion trajectory diverged from R4-C reference")
+                    raise RuntimeError(
+                        "completion trajectory diverged from "
+                        "integrated-workload reference"
+                    )
                 for request_id in observed_completed_ids:
                     released_blocks.update(engine.finish_request(request_id))
                     service_wait.pop(request_id)
         elif failures_by_step.get(logical_step) is not None:
-            raise RuntimeError("R4-C failure step had no runnable batch")
+            raise RuntimeError("integrated-workload failure step had no runnable batch")
         synchronize()
         engine_ms = (time.perf_counter() - engine_start) * 1_000.0
 
         current = engine.metrics()
         if current["committed_blocks"] != expected.committed_blocks:
-            raise RuntimeError("committed-block trajectory diverged from R4-C reference")
+            raise RuntimeError(
+                "committed-block trajectory diverged from integrated-workload reference"
+            )
         if engine.cache.num_used_blocks != expected.used_blocks:
-            raise RuntimeError("physical-block trajectory diverged from R4-C reference")
+            raise RuntimeError(
+                "physical-block trajectory diverged from integrated-workload reference"
+            )
         if engine.cache.num_free_blocks != expected.free_blocks:
-            raise RuntimeError("free-block trajectory diverged from R4-C reference")
+            raise RuntimeError(
+                "free-block trajectory diverged from integrated-workload reference"
+            )
         engine.validate_invariants()
         observed_steps.append(
             IntegratedReferenceStep(
@@ -752,21 +781,33 @@ def run_integrated_workload(engine, config, *, num_q_heads, seed=0):
     terminal_metrics = engine.metrics()
     terminal_cache = terminal_metrics["cache"]
     if terminal_cache["active_prefix_references"] != 0:
-        raise RuntimeError("terminal R4-C state retained active prefix references")
+        raise RuntimeError(
+            "terminal integrated-workload state retained active prefix references"
+        )
     if terminal_cache["used_blocks"] != resident_prefix_blocks:
-        raise RuntimeError("terminal R4-C state retained request-private blocks")
+        raise RuntimeError(
+            "terminal integrated-workload state retained request-private blocks"
+        )
     if terminal_cache["open_transaction_count"] != 0:
-        raise RuntimeError("terminal R4-C state retained an open transaction")
+        raise RuntimeError(
+            "terminal integrated-workload state retained an open transaction"
+        )
     for prefix_id in prefix_ids:
         released_blocks.update(engine.evict_prefix(prefix_id))
     engine.validate_invariants()
     if engine.cache.num_free_blocks != engine.cache.max_blocks:
-        raise RuntimeError("R4-C terminal cleanup did not restore the full block pool")
+        raise RuntimeError(
+            "integrated-workload terminal cleanup did not restore the full block pool"
+        )
     if not reused_blocks:
-        raise RuntimeError("R4-C trace did not demonstrate released-block reuse")
+        raise RuntimeError(
+            "integrated-workload trace did not demonstrate released-block reuse"
+        )
     observed_digest = _trajectory_digest(observed_steps)
     if observed_digest != reference.digest:
-        raise RuntimeError("observed R4-C trajectory digest differs from reference")
+        raise RuntimeError(
+            "observed integrated-workload trajectory digest differs from reference"
+        )
 
     return IntegratedWorkloadResult(
         config=config,

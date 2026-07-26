@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1080" viewBox="0 0 1500 1080" role="img" aria-labelledby="chart-title chart-description" data-theme="dark">
-  <title id="chart-title">FlashDec R1-R5 auditable evidence overview</title>
-  <desc id="chart-description">Four panels summarize R1 scheduler progress, R3 shared-prefix KV-pool capacity, R2 and R4 outcomes including the rejected R4-B result and passed R4-C lifecycle, and the R5 FlashInfer kernel-only p50 comparison. Data was derived from validated canonical Markdown summaries on an NVIDIA GeForce RTX 5070 and is not a raw dataset.</desc>
-  <metadata id="evidence-metadata">{&quot;device&quot;:&quot;NVIDIA GeForce RTX 5070&quot;,&quot;evidence&quot;:[{&quot;commit&quot;:&quot;16de9d4&quot;,&quot;rows&quot;:36,&quot;stage&quot;:&quot;R1&quot;,&quot;trials&quot;:3},{&quot;commit&quot;:&quot;fa0f89a&quot;,&quot;rows&quot;:144,&quot;stage&quot;:&quot;R2&quot;,&quot;trials&quot;:3},{&quot;commit&quot;:&quot;fe72e27&quot;,&quot;rows&quot;:64,&quot;stage&quot;:&quot;R3&quot;,&quot;trials&quot;:8},{&quot;commit&quot;:&quot;4018449&quot;,&quot;rows&quot;:160,&quot;stage&quot;:&quot;R4-A&quot;,&quot;trials&quot;:5},{&quot;commit&quot;:&quot;8047a9c&quot;,&quot;rows&quot;:160,&quot;stage&quot;:&quot;R4-B&quot;,&quot;trials&quot;:5},{&quot;commit&quot;:&quot;6912894&quot;,&quot;rows&quot;:24,&quot;stage&quot;:&quot;R4-C&quot;,&quot;trials&quot;:3},{&quot;commit&quot;:&quot;d7d4feb&quot;,&quot;rows&quot;:72,&quot;stage&quot;:&quot;R5&quot;,&quot;trials&quot;:3}],&quot;snapshot&quot;:&quot;benchmarks/results/public_results_snapshot.json&quot;,&quot;sources&quot;:[&quot;benchmarks/results/r1_scheduler_workload_trials3_summary.md&quot;,&quot;benchmarks/results/r2_multi_layer_engine_trials3_summary.md&quot;,&quot;benchmarks/results/r3_shared_prefix_workload_trials8_summary.md&quot;,&quot;benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md&quot;,&quot;benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md&quot;,&quot;benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md&quot;,&quot;benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md&quot;]}</metadata>
+  <title id="chart-title">FlashDec auditable research evidence overview</title>
+  <desc id="chart-description">Four panels summarize scheduler progress, shared-prefix KV-pool capacity, transaction optimization outcomes including a negative result and integrated lifecycle validation, and the FlashInfer kernel-only p50 comparison. Data was derived from validated canonical Markdown summaries on an NVIDIA GeForce RTX 5070 and is not a raw dataset.</desc>
+  <metadata id="evidence-metadata">{&quot;device&quot;:&quot;NVIDIA GeForce RTX 5070&quot;,&quot;evidence&quot;:[{&quot;commit&quot;:&quot;16de9d4&quot;,&quot;id&quot;:&quot;scheduler_progress&quot;,&quot;rows&quot;:36,&quot;trials&quot;:3},{&quot;commit&quot;:&quot;fa0f89a&quot;,&quot;id&quot;:&quot;fused_append&quot;,&quot;rows&quot;:144,&quot;trials&quot;:3},{&quot;commit&quot;:&quot;fe72e27&quot;,&quot;id&quot;:&quot;shared_prefix_capacity&quot;,&quot;rows&quot;:64,&quot;trials&quot;:8},{&quot;commit&quot;:&quot;4018449&quot;,&quot;id&quot;:&quot;trusted_transaction&quot;,&quot;rows&quot;:160,&quot;trials&quot;:5},{&quot;commit&quot;:&quot;8047a9c&quot;,&quot;id&quot;:&quot;persistent_metadata&quot;,&quot;rows&quot;:160,&quot;trials&quot;:5},{&quot;commit&quot;:&quot;6912894&quot;,&quot;id&quot;:&quot;integrated_lifecycle&quot;,&quot;rows&quot;:24,&quot;trials&quot;:3},{&quot;commit&quot;:&quot;d7d4feb&quot;,&quot;id&quot;:&quot;flashinfer_kernel_baseline&quot;,&quot;rows&quot;:72,&quot;trials&quot;:3}],&quot;snapshot&quot;:&quot;benchmarks/results/public_results_snapshot.json&quot;,&quot;sources&quot;:[&quot;benchmarks/results/flashinfer_paged_decode_baseline_summary.md&quot;,&quot;benchmarks/results/integrated_runtime_lifecycle_summary.md&quot;,&quot;benchmarks/results/multi_layer_transaction_summary.md&quot;,&quot;benchmarks/results/persistent_metadata_candidate_summary.md&quot;,&quot;benchmarks/results/scheduler_capacity_progress_summary.md&quot;,&quot;benchmarks/results/shared_prefix_capacity_summary.md&quot;,&quot;benchmarks/results/trusted_transaction_summary.md&quot;]}</metadata>
   <defs>
     <linearGradient id="header-glow" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#58A6FF" stop-opacity="0.22"/>
@@ -49,12 +49,12 @@
   <ellipse cx="1270" cy="20" rx="370" ry="215" fill="url(#header-glow)" aria-hidden="true"/>
   <rect x="64" y="48" width="308" height="31" rx="15.5" fill="#152A45" stroke="#58A6FF" aria-hidden="true"/>
   <text x="218" y="69" class="eyebrow" text-anchor="middle">AUDITABLE EVIDENCE SNAPSHOT</text>
-  <text x="64" y="126" class="title">FlashDec R1-R5 Evidence Overview</text>
+  <text x="64" y="126" class="title">FlashDec Research Evidence Overview</text>
   <text x="64" y="157" class="subtitle">RTX 5070 · derived from validated canonical summaries · processed snapshot, not a raw dataset</text>
-  <g id="r1-panel" role="group" aria-label="R1 scheduler progress outcomes">
+  <g id="scheduler-progress-panel" role="group" aria-label="Scheduler progress outcomes">
     <rect x="64" y="185" width="674" height="382" rx="20" fill="url(#panel-shadow)"/>
     <rect class="panel" x="64" y="178" width="674" height="382" rx="20"/>
-    <text x="94" y="221" class="panel-title">R1 · Scheduler progress</text>
+    <text x="94" y="221" class="panel-title">Scheduler progress</text>
     <text x="94" y="247" class="panel-subtitle">Boundary-pressure case · 2 requests · FP16/BF16 agree</text>
     <text x="94" y="308" class="label">Lifetime FIFO + aging</text>
     <rect class="complete" x="330" y="290" width="90" height="30" rx="8"/>
@@ -82,10 +82,10 @@
     <text x="308" y="528" class="tiny">deadlock</text>
     <text x="708" y="528" class="tiny" text-anchor="end">Correctness/progress evidence — not latency</text>
   </g>
-  <g id="r3-panel" role="group" aria-label="R3 shared-prefix capacity and admission">
+  <g id="shared-prefix-capacity-panel" role="group" aria-label="Shared-prefix capacity and admission">
     <rect x="762" y="185" width="674" height="382" rx="20" fill="url(#panel-shadow)"/>
     <rect class="panel" x="762" y="178" width="674" height="382" rx="20"/>
-    <text x="792" y="221" class="panel-title">R3 · Shared-prefix capacity</text>
+    <text x="792" y="221" class="panel-title">Shared-prefix capacity</text>
     <text x="792" y="247" class="panel-subtitle">48-block admission pool · 64 logical context blocks</text>
     <rect class="context-bar" x="793" y="267" width="17" height="12" rx="3"/>
     <text x="818" y="279" class="tiny">physical context blocks</text>
@@ -126,17 +126,17 @@
     <text x="1280" y="512" class="tiny" text-anchor="middle">+5.5 MiB</text>
     <text x="1099" y="541" class="tiny" text-anchor="middle">KV-pool capacity—not process VRAM · 75% hit: 20/64 blocks, 16/16 admitted</text>
   </g>
-  <g id="scorecard-panel" role="group" aria-label="R2 and R4 evidence outcomes">
+  <g id="scorecard-panel" role="group" aria-label="Transaction optimization outcomes">
     <rect x="64" y="591" width="674" height="416" rx="20" fill="url(#panel-shadow)"/>
     <rect class="panel" x="64" y="584" width="674" height="416" rx="20"/>
-    <text x="94" y="627" class="panel-title">R2 / R4 · Recorded outcomes</text>
+    <text x="94" y="627" class="panel-title">Transaction optimization</text>
     <text x="94" y="653" class="panel-subtitle">p50 ratio · stable groups · evidence disposition</text>
-    <text x="95" y="688" class="tiny">PATH / STAGE</text>
+    <text x="95" y="688" class="tiny">PATH / FEATURE</text>
     <text x="456" y="688" class="tiny" text-anchor="end">P50</text>
     <text x="539" y="688" class="tiny" text-anchor="middle">STABLE</text>
     <text x="707" y="688" class="tiny" text-anchor="end">OUTCOME</text>
     <rect class="row" x="86" y="706" width="630" height="68" rx="13"/>
-    <text x="102" y="731" class="label">R2 · Fused append path</text>
+    <text x="102" y="731" class="label">Fused append path</text>
     <text x="102" y="753" class="tiny">torch / fused complete-token p50</text>
     <text x="456" y="736" class="value" text-anchor="end">1.2101×</text>
     <text x="539" y="735" class="value" text-anchor="middle">20/24</text>
@@ -144,28 +144,28 @@
     <rect x="596" y="723" width="104" height="32" rx="16" fill="#173D2B" stroke="#3FB950"/>
     <text x="648" y="744" class="value-green" text-anchor="middle">OBSERVED</text>
     <rect class="row" x="86" y="788" width="630" height="68" rx="13"/>
-    <text x="102" y="813" class="label">R4-A · Trusted transaction path</text>
+    <text x="102" y="813" class="label">Trusted transaction path</text>
     <text x="102" y="835" class="tiny">checked / trusted complete-token p50</text>
     <text x="456" y="818" class="value" text-anchor="end">1.7307×</text>
     <text x="539" y="817" class="value" text-anchor="middle">16/16</text>
     <text x="539" y="836" class="tiny" text-anchor="middle">min &gt; 1</text>
     <rect x="596" y="805" width="104" height="32" rx="16" fill="#173D2B" stroke="#3FB950"/>
-    <text x="648" y="826" class="value-green" text-anchor="middle">ACCEPTED</text>
+    <text x="648" y="826" class="value-green" text-anchor="middle">ADOPTED</text>
     <rect class="row" x="86" y="870" width="630" height="68" rx="13"/>
-    <text x="102" y="895" class="label">R4-B · Persistent metadata</text>
+    <text x="102" y="895" class="label">Persistent metadata</text>
     <text x="102" y="917" class="tiny">materialized / persistent complete-token p50</text>
     <text x="456" y="900" class="value" text-anchor="end">1.2493×</text>
     <text x="539" y="899" class="value" text-anchor="middle">13/16</text>
     <text x="539" y="918" class="tiny" text-anchor="middle">min &gt; 1</text>
     <rect x="588" y="887" width="112" height="32" rx="16" fill="#472025" stroke="#FF7B72"/>
-    <text x="644" y="908" class="value-red" text-anchor="middle">REJECTED</text>
-    <text x="94" y="980" class="tiny">R4-C lifecycle PASS · 24 rows / 3 trials</text>
-    <text x="708" y="980" class="tiny" text-anchor="end">R4-B rolled back</text>
+    <text x="644" y="908" class="value-red" text-anchor="middle">NOT ADOPTED</text>
+    <text x="94" y="980" class="tiny">Integrated lifecycle · 24 validated rows / 3 trials</text>
+    <text x="708" y="980" class="tiny" text-anchor="end">Persistent metadata was not adopted</text>
   </g>
-  <g id="r5-panel" role="group" aria-label="R5 FlashInfer kernel-only baseline">
+  <g id="flashinfer-kernel-baseline-panel" role="group" aria-label="FlashInfer kernel-only baseline">
     <rect x="762" y="591" width="674" height="416" rx="20" fill="url(#panel-shadow)"/>
     <rect class="panel" x="762" y="584" width="674" height="416" rx="20"/>
-    <text x="792" y="627" class="panel-title">R5 · External kernel baseline</text>
+    <text x="792" y="627" class="panel-title">External kernel baseline</text>
     <text x="792" y="653" class="panel-subtitle">Common-shape paged decode · geometric mean across 8 groups</text>
     <line class="grid" x1="1016" y1="712" x2="1016" y2="859"/>
     <text x="1016" y="703" class="tiny" text-anchor="middle">1.0×</text>
@@ -188,9 +188,9 @@
     <text x="1406" y="842" class="value" text-anchor="end">1.2284×</text>
     <rect x="786" y="876" width="626" height="91" rx="14" fill="#34234F" stroke="#BC8CFF"/>
     <text x="803" y="903" class="label">&gt;1 favors FlashInfer · descriptive p50 evidence only</text>
-    <text x="803" y="927" class="small">16/16 observed three-trial ranges are above 1; R5 has no winner gate.</text>
+    <text x="803" y="927" class="small">16/16 observed three-trial ranges are above 1; this is descriptive kernel evidence.</text>
     <text x="803" y="950" class="tiny">KERNEL-ONLY · excludes scheduler, KV ownership and end-to-end serving</text>
   </g>
-  <text x="750" y="1037" class="footer">Ratios retain each source&#x27;s direction and are not comparable across stages.</text>
+  <text x="750" y="1037" class="footer">Ratios retain each source&#x27;s direction and are not comparable across panels.</text>
   <text x="750" y="1061" class="footer">Canonical Markdown remains authoritative · theme-specific SVGs are deterministic</text>
 </svg>

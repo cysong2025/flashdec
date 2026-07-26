@@ -1,5 +1,5 @@
 name: "🐛 Correctness / regression"
-description: "Report incorrect behavior, a broken invariant, or a regression in the frozen R1–R5 baseline."
+description: "Report incorrect behavior, a broken invariant, or a regression in the documented runtime or evidence contract."
 title: "[Bug]: "
 labels: []
 assignees: []
@@ -96,7 +96,7 @@ body:
     attributes:
       label: Submission checklist
       options:
-        - label: I read `CONTRIBUTING.md` and `docs/DELIVERY_STATUS.md`.
+        - label: I read `CONTRIBUTING.md` and `docs/research_questions.md`.
           required: true
         - label: I removed credentials, private paths, and unrelated logs.
           required: true

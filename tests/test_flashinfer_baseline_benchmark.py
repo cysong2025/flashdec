@@ -1,4 +1,4 @@
-"""Dependency-free coverage for the R5 FlashInfer baseline runner."""
+"""Dependency-free coverage for the FlashInfer baseline runner."""
 
 import contextlib
 import io
@@ -39,7 +39,7 @@ from benchmarks.run_flashinfer_baseline import (
     _parse_nvcc_version,
     _selected_cases,
     _selected_dtypes,
-    _validate_r5_environment,
+    _validate_flashinfer_environment,
     main,
     parse_args,
 )
@@ -127,9 +127,9 @@ class FlashInferBaselineBenchmarkTests(unittest.TestCase):
         self.assertEqual(FLASHDEC_KV_LAYOUT, "token_major")
         self.assertEqual(FLASHINFER_KV_LAYOUT, "HND")
 
-    def test_canonical_r5_environment_is_returned_for_csv_evidence(self):
+    def test_canonical_flashinfer_environment_is_returned_for_csv_evidence(self):
         environ, versions, toolkit = _canonical_environment()
-        actual = _validate_r5_environment(
+        actual = _validate_flashinfer_environment(
             _FakeTorch,
             environ=environ,
             version_getter=versions.__getitem__,
@@ -149,7 +149,7 @@ class FlashInferBaselineBenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "cannot parse"):
             _parse_nvcc_version("Cuda compilation tools, unknown")
 
-    def test_r5_environment_rejects_version_arch_or_toolkit_path_drift(self):
+    def test_flashinfer_environment_rejects_version_arch_or_toolkit_path_drift(self):
         mutations = (
             ("environment", "FLASHINFER_CUDA_ARCH_LIST", "", "arch_list"),
             ("environment", "FLASHINFER_CUDA_ARCH_LIST", "12.0", "arch_list"),
@@ -174,7 +174,7 @@ class FlashInferBaselineBenchmarkTests(unittest.TestCase):
                 }[target]
                 selected[field] = value
                 with self.assertRaisesRegex(RuntimeError, message):
-                    _validate_r5_environment(
+                    _validate_flashinfer_environment(
                         _FakeTorch,
                         environ=environ,
                         version_getter=versions.__getitem__,
@@ -184,7 +184,7 @@ class FlashInferBaselineBenchmarkTests(unittest.TestCase):
 
         environ, versions, toolkit = _canonical_environment()
         with self.assertRaisesRegex(RuntimeError, "python"):
-            _validate_r5_environment(
+            _validate_flashinfer_environment(
                 _FakeTorch,
                 environ=environ,
                 version_getter=versions.__getitem__,

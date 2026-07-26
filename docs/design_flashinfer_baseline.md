@@ -1,8 +1,8 @@
-# R5 FlashInfer Paged Decode 有限公开基线设计
+# FlashInfer Paged Decode Baseline 设计
 
-## 1. 目标与验收边界
+## 1. 研究问题与边界
 
-R5 选择一个版本固定、可公开安装的 FlashInfer paged decode 实现，与 FlashDec Triton paged decode 做有限 kernel-only 对比。这一阶段的目标不是证明某个系统全面更快，而是建立可审核的公开基线：输入语义、数值正确性、计时边界、版本和 shape 必须同时可追溯。
+本设计选择一个版本固定、可公开安装的 FlashInfer paged decode 实现，与 FlashDec Triton paged decode 做有限 kernel-only 对比。目标不是证明某个系统全面更快，而是建立可审核的公开基线：输入语义、数值正确性、计时边界、版本和 shape 必须同时可追溯。
 
 对比只覆盖三个 backend：
 
@@ -10,12 +10,12 @@ R5 选择一个版本固定、可公开安装的 FlashInfer paged decode 实现�
 - FlashInfer FA2：官方 `BatchDecodeWithPagedKVCacheWrapper`，`backend="fa2"`、`use_tensor_cores=False`。
 - FlashInfer FA2 Tensor Core option：同一 decode wrapper 与 backend，设置公开的 `use_tensor_cores=True` dispatch 选项；它不是另一个包版本，也不宣称是独立命名的专用 decode kernel。
 
-正式性能结果已在 RTX 5070 完成：72-row 正式 CSV、strict summary 与 focused/full correctness 全部通过。结论仍严格限制在共同 kernel-only 边界；不声明端到端 runtime 胜负或稳定生产尾延迟。
+RTX 5070 canonical evidence 包含 72-row 正式 CSV、通过验证的 strict summary 与 focused/full correctness 记录。结论严格限制在共同 kernel-only 边界；不声明端到端 runtime 胜负或稳定生产尾延迟。
 
-## 2. 依赖与公开 API 冻结
+## 2. 依赖与 API 约束
 
-R5 canonical evidence 使用独立的 Linux/Python 3.12 virtualenv，并通过
-`constraints/r5-cu128.txt` 固定已经在 RTX 5070 验证可安装的核心栈：
+Canonical GPU evidence 使用独立的 Linux/Python 3.12 virtualenv，并通过
+`constraints/flashinfer-cu128.txt` 固定已经在 RTX 5070 验证可安装的核心栈：
 
 ```text
 torch==2.11.0+cu128
@@ -28,19 +28,19 @@ cuda-pathfinder==1.6.0
 ninja==1.13.0
 ```
 
-只使用该版本公开导出的 `BatchDecodeWithPagedKVCacheWrapper`，不复制 FlashInfer 内部 kernel，不调用非公开符号，不修改第三方源码。版本与支持环境以 [FlashInfer 安装文档](https://docs.flashinfer.ai/installation.html) 和 [PyPI 包记录](https://pypi.org/project/flashinfer-python/) 为准，wrapper 语义以 [BatchDecodeWithPagedKVCacheWrapper API](https://docs.flashinfer.ai/api/attention.html#flashinfer.decode.BatchDecodeWithPagedKVCacheWrapper) 为准。`baseline` extra 继续固定 FlashInfer 包；R5 constraints 只约束正式 GPU 证据环境，不把 CUDA wheel 版本写入 FlashDec 的通用 package metadata。
+只使用该版本公开导出的 `BatchDecodeWithPagedKVCacheWrapper`，不复制 FlashInfer 内部 kernel，不调用非公开符号，不修改第三方源码。版本与支持环境以 [FlashInfer 安装文档](https://docs.flashinfer.ai/installation.html) 和 [PyPI 包记录](https://pypi.org/project/flashinfer-python/) 为准，wrapper 语义以 [BatchDecodeWithPagedKVCacheWrapper API](https://docs.flashinfer.ai/api/attention.html#flashinfer.decode.BatchDecodeWithPagedKVCacheWrapper) 为准。`baseline` extra 继续固定 FlashInfer 包；`constraints/flashinfer-cu128.txt` 只约束正式 GPU 证据环境，不把 CUDA wheel 版本写入 FlashDec 的通用 package metadata。
 
 必须先从 PyTorch cu128 index 安装 torch/triton，再在 constraints 下解析 FlashInfer，最后以 `--no-deps` 安装本项目：
 
 ```bash
 python -m pip install \
-  -c constraints/r5-cu128.txt \
+  -c constraints/flashinfer-cu128.txt \
   "torch==2.11.0+cu128" "triton==3.6.0" \
   --index-url https://download.pytorch.org/whl/cu128 \
   --extra-index-url https://mirrors.aliyun.com/pypi/simple/
 
 python -m pip install \
-  -c constraints/r5-cu128.txt \
+  -c constraints/flashinfer-cu128.txt \
   "flashinfer-python==0.6.15.post1" \
   "cuda-python==12.9.1" \
   "cuda-bindings==12.9.7" \
@@ -76,7 +76,7 @@ FlashDec token-major page 的逻辑 shape 为：
 
 它直接对应 FlashInfer 的 `HND` page layout。FlashInfer wrapper 所需的 K/V 组合 view、CSR `indptr/indices` 和 `last_page_len` 只从同一 K/V pages、`block_tables` 与 `seq_lens` 确定性派生，不改变 page 顺序或 token 语义。这些 API 适配在计时前完成。
 
-## 4. 预注册 shape 与正式矩阵
+## 4. 固定 shape 与正式矩阵
 
 四个 case 沿用 FlashDec 已有 paged decode 证据的命名和 shape：
 
@@ -98,7 +98,7 @@ dtypes: float16, bfloat16
 
 ## 5. 正确性与计时边界
 
-所有 backend 的固定前 `min(2, batch)` 个 request 先与同一 PyTorch paged decode reference 比较，完整 batch 再与 FlashDec 输出做 cross-backend 比较。这使大 context 的 reference 开销受控，同时不放弃完整输出对齐。FP16/BF16 容差由 runner 固定并写入 CSV；runner 同时记录最大绝对误差和逐元素 `abs_error / (atol + rtol * abs(expected))` 的最大比值，strict summary 要求该比值不超过 1。任一 backend 不通过时整个 case 不能进入可比性能证据。summary 必须校验 72-row 矩阵完整性、配对 `page_table_digest`、seed、版本、shape、dtype、backend 和 trial 唯一性。
+所有 backend 的固定前 `min(2, batch)` 个 request 先与同一 PyTorch paged decode reference 比较，完整 batch 再与 FlashDec 输出做 cross-backend 比较。这使大 context 的 reference 开销受控，同时不放弃完整输出对齐。FP16/BF16 容差由 runner 固定并写入 CSV；runner 同时记录最大绝对误差和逐元素 `abs_error / (atol + rtol * abs(expected))` 的最大比值，strict summary 要求该比值不超过 1。任一 backend 不通过时，整个 case 不纳入可比性能证据。summary 必须校验 72-row 矩阵完整性、配对 `page_table_digest`、seed、版本、shape、dtype、backend 和 trial 唯一性。
 
 性能只用 CUDA event 计时下列边界：
 
@@ -117,7 +117,7 @@ FlashInfer FA2 + TC:   wrapper.run(...) / kernel dispatch
 - PyTorch reference 计算和 correctness 比较；
 - CUDA context 初始化、结果写盘与 summary。
 
-runner 会在计时前完成 JIT/plan 和 warmup，在每个 event 区间内只发起对应 run/kernel dispatch。summary 报告绝对 p50/p90/p99 与吞吐，并固定用 `FlashDec p50 / external p50` 与 `external TPS / FlashDec TPS` 表达比值；两者大于 1 都表示对应 FlashInfer backend 占优。另一个 `logical_workload_gbps_p50` 只把每个 Q/K/V/output 元素计一次，用于 shape-normalized workload rate；它排除 metadata、cache 行为和实现特有的重复读取，不是实测 DRAM bandwidth。R5 不设预先选定的胜负门。
+runner 会在计时前完成 JIT/plan 和 warmup，在每个 event 区间内只发起对应 run/kernel dispatch。summary 报告绝对 p50/p90/p99 与吞吐，并固定用 `FlashDec p50 / external p50` 与 `external TPS / FlashDec TPS` 表达比值；两者大于 1 都表示对应 FlashInfer backend 占优。另一个 `logical_workload_gbps_p50` 只把每个 Q/K/V/output 元素计一次，用于 shape-normalized workload rate；它排除 metadata、cache 行为和实现特有的重复读取，不是实测 DRAM bandwidth。该基线不设预先选定的胜负门。
 
 formal strict summary 默认且强制 `trials=3, warmup=10, repeats=50`；quick summary 必须显式声明 `trials=1, warmup=2, repeats=10`。runner 会把完整 argv 写入每一行，canonical summary 直接展示 runner command，避免只从外部文档猜测采样参数。
 
@@ -131,7 +131,7 @@ formal strict summary 默认且强制 `trials=3, warmup=10, repeats=50`；quick 
 - 两个项目不同的安装成本、编译缓存和 API 适配复杂度；
 - `use_tensor_cores=False/True` 之间的内部算法选择、workspace 需求或数值路径差异。
 
-如果某个预注册 shape/dtype/backend 在固定版本上不受支持，不删除该 row 以便得出更完整的性能表；应保留错误与环境记录，将正式验收标记为未通过，再决定是否修订整个预注册矩阵。
+如果某个预注册 shape/dtype/backend 在固定版本上不受支持，不得静默删除该 row 以得到更完整的性能表；应保留错误与环境记录，并将矩阵标记为不完整。修订预注册矩阵时必须另行记录理由和证据版本。
 
 ## 7. RTX 5070 执行命令
 
@@ -140,7 +140,7 @@ formal strict summary 默认且强制 `trials=3, warmup=10, repeats=50`；quick 
 ```bash
 set -o pipefail
 
-export RESULT_DIR="$HOME/flashdec_results/r5_$(git rev-parse --short HEAD)_$(date +%Y%m%d_%H%M%S)"
+export RESULT_DIR="$HOME/flashdec_results/flashinfer_$(git rev-parse --short HEAD)_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$RESULT_DIR"
 git status --short
 
@@ -189,12 +189,12 @@ python benchmarks/run_flashinfer_baseline.py \
   --warmup 2 \
   --repeat 10 \
   --require-clean \
-  --output "$RESULT_DIR/r5_flashinfer_paged_decode_quick.csv" \
+  --output "$RESULT_DIR/flashinfer_paged_decode_baseline_quick.csv" \
   2>&1 | tee "$RESULT_DIR/quick.log"
 
 python benchmarks/summarize_flashinfer_baseline.py \
-  --input "$RESULT_DIR/r5_flashinfer_paged_decode_quick.csv" \
-  --output "$RESULT_DIR/r5_flashinfer_paged_decode_quick_summary.md" \
+  --input "$RESULT_DIR/flashinfer_paged_decode_baseline_quick.csv" \
+  --output "$RESULT_DIR/flashinfer_paged_decode_baseline_quick_summary.md" \
   --expected-trials 1 \
   --expected-warmup 2 \
   --expected-repeats 10 \
@@ -213,12 +213,12 @@ python benchmarks/run_flashinfer_baseline.py \
   --warmup 10 \
   --repeat 50 \
   --require-clean \
-  --output "$RESULT_DIR/r5_flashinfer_paged_decode_trials3.csv" \
+  --output "$RESULT_DIR/flashinfer_paged_decode_baseline_trials3.csv" \
   2>&1 | tee "$RESULT_DIR/formal.log"
 
 python benchmarks/summarize_flashinfer_baseline.py \
-  --input "$RESULT_DIR/r5_flashinfer_paged_decode_trials3.csv" \
-  --output "$RESULT_DIR/r5_flashinfer_paged_decode_trials3_summary.md" \
+  --input "$RESULT_DIR/flashinfer_paged_decode_baseline_trials3.csv" \
+  --output "$RESULT_DIR/flashinfer_paged_decode_baseline_summary.md" \
   --expected-trials 3 \
   --expected-warmup 10 \
   --expected-repeats 50 \
@@ -235,9 +235,9 @@ python scripts/check_release.py --require-clean --require-evidence \
   2>&1 | tee "$RESULT_DIR/release_check.log"
 ```
 
-## 8. 正式验收
+## 8. Canonical evidence 与结果
 
-R5 有限基线只有在以下条件同时满足时才算完成：
+Canonical evidence 使用以下验证契约：
 
 1. focused/full correctness 无 failure；
 2. quick 覆盖三个 backend，每个 row 的 `reference_validated`、`cross_backend_validated` 与 `validated_invariants` 全部为 `True`；
@@ -247,6 +247,6 @@ R5 有限基线只有在以下条件同时满足时才算完成：
 6. canonical summary 绑定带时区的 run timestamp、FlashDec commit、Python/PyTorch/Triton/PyTorch CUDA、CUDA package versions、`CUDA_HOME`、FlashInfer `0.6.15.post1`、arch list、GPU、runner command 和计时边界，并展示绝对 p50/p90/p99；
 7. 结论同时记录胜出、持平、负结果与不可比项，不从单轮 p99 外推生产尾延迟。
 
-RTX 5070 已完成上述验收。commit `d7d4feb` 的 post-schema focused 为 `93 passed, 37 subtests passed`，quick 为 3 rows，formal 为 72 rows/3 trials，完整回归为 `453 passed, 94 subtests passed`，clean-tree release check 为 `PASS`。strict summary 验证所有 row 的 reference/cross-backend parity、page-table pairing、固定环境和 timing invariant；canonical evidence 见 [R5 正式摘要](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md)。
+RTX 5070 evidence 绑定 commit `d7d4feb`：post-schema focused 为 `93 passed, 37 subtests passed`，quick 为 3 rows，formal 为 72 rows/3 trials，完整回归为 `453 passed, 94 subtests passed`，clean-tree release check 为 `PASS`。strict summary 验证所有 row 的 reference/cross-backend parity、page-table pairing、固定环境和 timing invariant；canonical evidence 见 [FlashInfer baseline 正式摘要](../benchmarks/results/flashinfer_paged_decode_baseline_summary.md)。
 
-正式矩阵中，FlashInfer FA2 CUDA-core 与 tensor-core 的 8 个 dtype/case p50 ratio 几何平均分别为 `1.2003x` 与 `1.2284x`，16/16 个 backend/dtype/case 三轮范围严格高于 1。该范围是三轮观察到的 `[min,max]`，不是置信区间；FP16 small 的两条比较共用同一 FlashDec baseline，并同时出现明显上界扩张。绝对 p99 的 7/16 组范围重叠且有两组 tensor-core 中位数方向反转，因此 R5 不声明稳定尾延迟优势。以上结论只适用于本设计的共同 paged-decode kernel-only 边界，不比较 runtime 调度、KV ownership、transaction、planning/JIT 或服务吞吐。
+正式矩阵中，FlashInfer FA2 CUDA-core 与 tensor-core 的 8 个 dtype/case p50 ratio 几何平均分别为 `1.2003x` 与 `1.2284x`，16/16 个 backend/dtype/case 三轮范围严格高于 1。该范围是三轮观察到的 `[min,max]`，不是置信区间；FP16 small 的两条比较共用同一 FlashDec baseline，并同时出现明显上界扩张。绝对 p99 的 7/16 组范围重叠且有两组 tensor-core 中位数方向反转，因此本证据不声明稳定尾延迟优势。以上结论只适用于本设计的共同 paged-decode kernel-only 边界，不比较 runtime 调度、KV ownership、transaction、planning/JIT 或服务吞吐。

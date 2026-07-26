@@ -579,7 +579,7 @@ def render_markdown(input_path, pairs, aggregates, overall):
         for row in (pair.checked_row, pair.trusted_row)
     ]
     lines = [
-        "# Fused Transaction Fast-path Summary",
+        "# Trusted Transaction Validation Summary",
         "",
         "## Validation",
         "",
@@ -668,7 +668,7 @@ def parse_args():
     parser.add_argument("--input", required=True)
     parser.add_argument(
         "--output",
-        default="benchmarks/results/fused_transaction_fast_path_summary.md",
+        default="benchmarks/results/trusted_transaction_summary.md",
     )
     parser.add_argument("--expected-trials", type=int, default=3)
     parser.add_argument("--expected-cases", nargs="+", default=list(DEFAULT_CASES))

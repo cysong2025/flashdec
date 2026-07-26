@@ -125,6 +125,7 @@ class MultiLayerWorkloadSummaryTests(unittest.TestCase):
         )
         aggregates, overall = aggregate(pairs)
         markdown = render_markdown("results.csv", pairs, aggregates, overall)
+        self.assertTrue(markdown.startswith("# Multi-layer Token Transaction Summary\n"))
         self.assertEqual(len(pairs), 6)
         self.assertEqual(len(aggregates), 2)
         self.assertAlmostEqual(overall["p50"], 1.25)

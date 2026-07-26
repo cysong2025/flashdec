@@ -1,270 +1,114 @@
-# FlashDec 兼容性记录
+# FlashDec Compatibility
 
-本文记录当前 FlashDec 已支持和暂不支持的 shape / dtype / kernel 范围。结论只基于公开项目代码和个人 RTX 5070 验证结果。
+本文说明 FlashDec `0.0.0` 研究原型覆盖的环境、shape、dtype 和运行时语义。表中的“支持”表示仓库包含实现与 correctness coverage，不等于稳定 API 或生产部署承诺。
 
-## Paged KV Cache
+## 已验证参考环境
 
-`flashdec.cache.PagedKVCache` 当前支持：
-
-- 固定大小 physical block。
-- 每个 request 维护 logical block list。
-- append 单个 decode token。
-- 生成 padded `block_tables`。
-- 维护 `seq_lens`。
-- materialize dense KV cache 以对齐 reference。
-- active/finished/cancelled request lifecycle。
-- `finish_request()` / `cancel_request()` block release。
-- reuse-priority physical block free list。
-- block utilization、internal fragmentation 和 allocation/free/reuse metrics。
-- capacity preflight 和 allocator invariant validation。
-- R2-A multi-layer token transaction：shared location、sequential layer write、commit/abort rollback。
-- R3-A Cache ownership core：opaque prefix id、immutable multi-layer full blocks、active refcount、request-private tail 与 inactive LRU。
-- R3-B scheduler integration：`RequestSpec.prefix_id`、Cache-derived shared block metadata、global residency + private lifetime commitment、admission attach 与 stale external mutation rejection。
-- R3-D hot-path metadata cache：shared block 数只在 submission 时从 resident registry 派生，后续 snapshot/commitment 使用 immutable Engine metadata，并继续与 Cache authoritative request state/version 对齐。
-- R4-A trusted transaction boundary：`begin_token()` 在 host 上验证 reservation provenance；fused Cache transaction 根据 id 回查内部状态并跳过重复 device-value reductions，detached view 的位置 tensor 不参与真实写入。
-
-当前限制：
-
-- legacy `append()`、RoPE helper 和 `DecodeEngine.step()` compatibility wrapper 仍限制 `num_layers=1`；`num_layers>1` 使用 `begin_step()` / `step_layer()` / `commit_step()` sequential transaction API。
-- R4-A 仍会为 transaction view 重复 materialize CUDA metadata；R4-B 曾评估跨 layer 一次构建/复用并在 terminal 状态释放，但正式稳定性门失败后已恢复 R4-A/materialized 默认。
-- finished/cancelled request id 当前不能重新激活。
-- runtime v2 已通过 RTX 5070 focused/full correctness 验证。
-- R3-B prefix 必须覆盖完整 initial context，并在 request submission 前 resident；尚不包含模型 prefill、content hashing、admission-time prefix eviction、swap/offload 或生产级多线程 serving。
-
-## Paged Decode Triton Kernel
-
-`flashdec.kernels.paged_decode.paged_decode_attention` 当前支持：
-
-| 能力 | 当前状态 |
+| Component | Version / device |
 | --- | --- |
-| KV cache layout | token-major 为默认且已验证；dim-major 已通过 RTX 5070 correctness 与 quick benchmark |
-| block table layout | `[num_seqs, max_blocks_per_seq]` |
-| block size | `8`, `16`, `32`（均已通过 RTX 5070 correctness） |
-| head dim | `64`, `128` |
-| dtype | `float16`, `bfloat16` |
-| MHA | 支持 |
-| GQA | 支持 |
-| MQA | 支持 |
-| benchmark 默认 block size | `32` |
-| 默认 `num_warps` | `2` |
-| 默认 `num_stages` | `None`，使用 Triton implicit default |
-| variable seq lens | 支持 |
-| non-contiguous physical blocks | 支持 |
-| `seq_len == 0` | 输出 zero |
-
-当前限制：
-
-- `block_size=8/32` 已通过 RTX 5070 correctness；full sweep 后 32 是通用 benchmark 默认值。FP16 的极小 batch/短 context 可单独测试 16。
-- 暂不支持 `head_dim` 之外的 64/128。
-- 暂不支持 FP32 Triton paged decode kernel。
-- 已完成 `num_warps=2/4/8` 手动 sweep，但暂未做自动 autotune。
-- block size quick/full sweep 已完成，暂未做 block size autotune。
-- dim-major layout `[num_blocks, num_kv_heads, head_dim, block_size]` 已通过 RTX 5070 correctness、quick 和 full benchmark；full p50 几何平均约慢 31%，不是默认 runtime layout，也不做自动 layout dispatch。
-- `num_stages=default/1/2/3/4` full sweep 已完成，最佳候选仅约快 0.39%，因此不修改默认 staging。
-- R5 已完成与 `flashinfer-python==0.6.15.post1` 的有限 kernel-only 对比；Torch `2.11.0+cu128`、Triton `3.6.0`、CUDA Toolkit `12.8.1`、SM120a JIT、72-row/3-trial formal 与完整回归均已在 RTX 5070 验证。vLLM/TensorRT-LLM 完整 runtime 不与当前 FlashDec kernel-only timing 直接比较。
-
-## R5 FlashInfer Baseline
-
-- 外部依赖是可选 `baseline` extra，不进入 FlashDec 核心 runtime dependency。
-- R5 canonical environment 使用 `constraints/r5-cu128.txt`，并要求在 FlashInfer import/JIT 前设置 `CUDA_HOME=/usr/local/cuda-12.8` 与 `FLASHINFER_CUDA_ARCH_LIST=12.0a`；runner/summary 会验证 CUDA_HOME realpath、NVCC `12.8.93` 并拒绝版本或字段漂移。
-- 共同范围仅为 batch paged-decode attention：FP16/BF16、GQA `32/8` heads、head dim 128、page size 32、无 attention 内部 RoPE/ALiBi。
-- FlashDec `[page, head, token, dim]` 的 `token_major` physical tensor 对应 FlashInfer `HND`；两条路径直接共用 K/V tensor，不在计时区间做 permute/copy。
-- FlashInfer 固定 `backend="fa2"`，分别报告 `use_tensor_cores=False/True`；不使用运行后选择的单一“最佳”外部数字。
-- strict evidence 固定 cu128 dependency stack、formal `3/10/50` sampling 和每个 FlashInfer wrapper 128 MiB workspace，绑定 runner command，要求启动时 Git worktree clean，并验证 normalized tolerance ratio 不超过 1；逻辑 workload GB/s 是共同 payload proxy，不是 DRAM traffic 估计。
-- commit `d7d4feb` 的正式结果包含 72 rows；CUDA-core/tensor-core 的 8 组 p50 ratio 几何平均为 `1.2003x/1.2284x`，16/16 个三轮范围高于 1。p99 有 7/16 范围重叠，因此不声明稳定尾延迟优势；完整边界见 [canonical summary](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md)。
-- 不可比范围包括 FlashInfer planning/JIT/workspace lifecycle、FlashDec allocator/scheduler/transaction、模型 forward、sampling、CUDA Graph 和服务吞吐。
-
-## RoPE + Paged KV Append Reference
-
-当前代码支持：
-
-- split-half RoPE。
-- `rotary_dim` 为偶数前缀，允许小于 head_dim。
-- position 使用 append 前的 request seq_len。
-- FP16/BF16/FP32 输入，FP32 计算 cos/sin 和旋转。
-- Q 和 K 旋转，V 保持不变。
-- rotated K 写入 token-major paged cache，并返回 block tables/seq_lens。
-- block 边界分配、capacity failure 原子性和 terminal request 检查。
-- `rope_paged_kv_append(..., append_backend="torch" | "cuda")`：默认 `torch` 与 reference 一致；`cuda` 使用 PyTorch RoPE 加 `PagedKVCache.append_cuda()`。
-
-当前限制：
-
-- 独立 CUDA KV append extension 和 `PagedKVCache.append_cuda()` 已在 RTX 5070 通过 JIT build 与 correctness；focused 为 `34 passed in 3.59s`，完整回归为 `198 passed in 5.13s`。
-- 统一 RoPE helper 只走 legacy single-layer append；multi-layer Cache 由 DecodeEngine transaction 调用 location-only fused write，不通过该 helper 推进 seq_len。
-- 不包含 RoPE scaling、YaRN、NTK-aware scaling 或 interleaved-pair convention。
-- RTX 5070 focused 为 `38 passed in 3.60s`，完整回归为 `186 passed in 4.96s`。
-- native extension 当前要求 CUDA-resident、contiguous FP16/BF16/FP32 token-major cache 与 K/V；Toolkit 前置检查已通过 `nvcc 12.8.93`、`CUDA_HOME=/usr/local/cuda-12.8` 和 Ninja 1.13.0。
-- RoPE 的 `append_backend="cuda"` 集成已通过 RTX 5070 correctness（focused `56 passed in 3.85s`，full `204 passed in 4.47s`）；它不是 fused RoPE kernel，也没有性能结论。
-- `append_backend="fused_cuda"` 和低层 `flashdec.fused_rope_kv_append()` 已在 RTX 5070 通过 JIT/correctness（focused `66 passed in 44.35s`，full `214 passed in 4.52s`）；当前支持 token-major contiguous FP16/BF16/FP32。Week 11 append-only full benchmark 的 p50 几何平均为 1.2226x vs torch。R4-A Cache-owned trusted raw dispatch 已在 commit `4018449` 完成 focused/full correctness 与五轮 checked/trusted A/B；16/16 p50 分组稳定胜出，overall p50 为 `1.7307x`。7/16 p99 range 穿过 1，因此不声明稳定尾延迟收益。
-
-## DecodeEngine v1
-
-`flashdec.DecodeEngine` 当前支持：
-
-- waiting/active/finished/cancelled request lifecycle。
-- admission、deterministic active request row order、single-token `step()`。
-- `torch`/`cuda`/`fused_cuda` append backend，以及 reference/Triton paged decode backend。
-- capacity 不足时返回 `DecodeStepResult(status="backpressure")`，不改变 KV ownership 或 seq_len。
-- short-churn、mixed-steady、long-pressure synthetic workload 与完整 step p50/p90/p99/TPS/memory metrics。
-- 可选 `profile_ranges=True` 的 preflight/append/decode 归因；默认关闭。
-
-当前限制：DecodeEngine 的 multi-layer reference 与 fused CUDA sequential transaction API、rollback 路径和 R2 正式 workload 已在 RTX 5070 验证。R4-C 新增 caller-supplied multi-layer prompt K/V transaction，但仍不是完整模型执行器：不包含 prompt/model forward、sampling、prefix 内容构建或网络服务。R1 scheduler 36 行矩阵、R2 144 行矩阵与最终 `337 passed, 25 subtests passed` 回归均已完成；R3-D commit `fe72e27` 的 targeted `1 passed`、focused `61 passed, 8 subtests passed`、完整 `361 passed, 25 subtests passed` 与 64-row confirmation 也已完成。R4-A commit `4018449` 的 focused `73 passed, 23 subtests passed`、完整 `410 passed, 48 subtests passed` 与 160-row checked/trusted matrix 均已完成；R4-B 未通过 16/16 稳定性门并已回滚。R4-C commit `6912894` 的 focused `60 passed, 17 subtests passed`、完整 `425 passed, 57 subtests passed`、FP16 quick 与 24-row FP16/BF16 matrix 全部通过。
-
-### Week 11 Native CUDA KV Append
-
-focused 验证：
-
-```bash
-python -m pytest -vv \
-  tests/test_cuda_kv_append.py \
-  tests/test_paged_cache.py \
-  tests/test_public_api.py
-```
-
-结果：`34 passed in 3.59s`。
-
-完整回归结果：`198 passed in 5.13s`。
-
-覆盖 FP16/BF16/FP32 raw physical slot 写入、block id/offset 边界检查、`append_cuda()` 与 Python allocator/cache 对齐、capacity failure atomicity、non-contiguous 输入拒绝与公开 API lazy import。后续 Week 11 三路径 benchmark 已完成：独立 native CUDA append 没有形成跨 shape 稳定优势，因此 GPU Engine 默认保留 `fused_cuda`。
-
-## 已验证 Correctness
-
-### Week 5
-
-`tests/test_paged_cache.py` 在 RTX 5070 上通过：
-
-```text
-6 passed in 1.68s
-```
-
-覆盖：
-
-- Paged KV Cache append。
-- 非连续 physical block。
-- paged reference 与 dense reference 对齐。
-- FP16 CUDA 路径。
-- `seq_len == 0` 和错误输入。
-
-### Week 6
-
-`tests/test_paged_decode.py` 在 RTX 5070 上通过：
-
-```text
-6 passed in 3.79s
-```
-
-覆盖：
-
-- FP16。
-- `head_dim=64`。
-- MHA/GQA。
-- 非连续 physical block。
-- `seq_len == 0`。
-- 自定义 `sm_scale`。
-
-### Week 7
-
-`tests/test_paged_decode.py` 在 RTX 5070 上通过：
-
-```text
-14 passed in 4.48s
-```
-
-覆盖：
-
-- `head_dim=128`。
-- FP16/BF16。
-- `num_q_heads=32, num_kv_heads=2` 的 GQA。
-- `num_q_heads=16, num_kv_heads=1` 的 MQA。
-- `seq_len == 0`、自定义 `sm_scale` 和不支持 shape 的报错路径。
-
-### Block Size 扩展
-
-`tests/test_paged_decode.py tests/test_public_api.py` 在 RTX 5070 上通过：
-
-```text
-36 passed in 6.17s
-```
-
-覆盖 block size 8/16/32、head dim 64/128、FP16/BF16、MHA/GQA/MQA、错误输入和公共 decode API。
-
-### KV Layout 扩展
-
-`tests/test_paged_cache.py tests/test_paged_decode.py tests/test_public_api.py` 在 RTX 5070 上通过：
-
-```text
-73 passed in 9.40s
-```
-
-覆盖 token-major/dim-major KV cache、两种 layout 的 block-size 推断、variable sequence lengths、non-contiguous physical blocks、MHA/GQA/MQA 与 FP16/BF16。quick benchmark 的 20 条记录和 full benchmark 的 56 条记录均全部 `validated=True`；full 中 token-major 在 25/28 个 p50、25/28 个 p90 比较中更快，因此作为默认 layout。
-
-### Paged KV Runtime v2
-
-focused 验证：
-
-```bash
-python -m pytest -vv \
-  tests/test_paged_cache.py \
-  tests/test_paged_decode.py \
-  tests/test_public_api.py
-```
-
-结果：
-
-```text
-90 passed in 4.47s
-```
-
-完整回归：
-
-```bash
-python -m pytest -vv
-```
-
-结果：
-
-```text
-170 passed in 4.66s
-```
-
-覆盖 finish/cancel、block release/reuse、终态错误路径、容量失败无 partial request mutation、fragmentation/utilization metrics、active-only metadata、request churn 无 block 泄漏，以及既有 paged decode/kernel/public API 回归。
-
-## Benchmark 路径
-
-Week 6 默认 benchmark：
-
-```bash
-python benchmarks/run_paged_decode.py --output benchmarks/results/week6_paged_decode.csv
-```
-
-Week 7 shape sweep：
-
-```bash
-python benchmarks/run_week7_paged_decode.py --output benchmarks/results/week7_paged_decode.csv
-```
-
-快速冒烟 benchmark：
-
-```bash
-python benchmarks/run_week7_paged_decode.py --quick --mode triton --output benchmarks/results/week7_paged_decode_quick.csv
-```
-
-Week 8 `num_warps` sweep 与有效带宽估算：
-
-```bash
-python benchmarks/run_week8_paged_decode.py --quick --output benchmarks/results/week8_paged_decode_warps_quick.csv
-python benchmarks/run_week8_paged_decode.py --output benchmarks/results/week8_paged_decode_warps.csv
-python benchmarks/run_block_size_sweep.py --quick --output benchmarks/results/week8_paged_decode_block_size_quick.csv
-python benchmarks/run_block_size_sweep.py --output benchmarks/results/week8_paged_decode_block_size.csv
-python benchmarks/run_layout_sweep.py --quick --output benchmarks/results/week8_paged_decode_layout_quick.csv
-python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_decode_layout.csv
-```
-
-## 当前工程状态
-
-- kernel 配置已冻结为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
-- PagedKVCache runtime v2、RoPE/KV append、DecodeEngine、R1 Scheduler 与 R2 multi-layer transaction 均已完成 RTX 验证。
-- R3 Shared Prefix Blocks 已完成 R3-A Cache core、R3-B scheduler integration、R3-C benchmark 与 R3-D metadata hot-path cache。commit `fe72e27` 的 RTX correctness 与 8-trial/64-row confirmation 已闭合；稳定结论是 physical KV 节省和 bounded-capacity admission 提升，性能近中性且无稳定方向。
-- R4-A trusted transaction 与 R4-C integrated workload 已完成；R4-B 未通过稳定性门并已回滚。调用方可原子导入多层 prompt/context K/V，但 FlashDec 不执行模型 prefill forward。
-- R5 已完成固定 `flashinfer-python==0.6.15.post1` 的 72-row/3-trial 共同 paged-decode kernel-only 基线；vLLM 完整 serving 不在第一版公平范围。
-- 当前源码状态是 public `0.0.0` research preview。clean-install、新环境复现、`v0.1.0` 版本与 release tag 尚未验证，继续作为独立稳定发布门。
+| OS | WSL2 Ubuntu 24.04 |
+| GPU | NVIDIA GeForce RTX 5070, compute capability 12.0 |
+| Python | 3.12.3 |
+| PyTorch | `2.11.0+cu128` |
+| PyTorch CUDA | 12.8 |
+| Triton | 3.6.0 |
+| CUDA Toolkit / NVCC | 12.8 / 12.8.93 |
+| Ninja | 1.13.0 |
+| GCC/G++ | 13.3.0 |
+
+Python 3.10 和 3.12 均进入仓库级 dependency-free checks。GPU 数值与性能证据来自上表环境；其他组合需要重新运行 correctness，不能直接继承性能结论。
+
+## Paged-decode kernel
+
+| Capability | Supported range |
+| --- | --- |
+| Operation | single-token decode attention |
+| Q shape | `[batch, num_q_heads, head_dim]` |
+| KV physical layout | token-major `[page, kv_head, token, dim]` |
+| Page table | `[batch, max_pages_per_sequence]` |
+| Page size | 8, 16, 32；默认 32 |
+| Head dimension | 64, 128 |
+| Input/output dtype | FP16, BF16 |
+| Attention mapping | MHA, GQA, MQA |
+| Sequence lengths | per-row variable length，包含 zero length |
+| Physical pages | 允许非连续 pages |
+| Triton launch default | `num_warps=2`, implicit `num_stages` |
+
+限制：
+
+- 不支持 Triton FP32 paged decode 或任意 head dimension。
+- dim-major layout 只用于受控实验与 correctness 对照，不是 runtime 默认。
+- 没有自动 block-size/layout/staging autotune；默认值来自固定矩阵，详见[kernel experiments](kernel_experiments.md)。
+- 当前 kernel 不包含 attention 内部 RoPE、ALiBi、sliding window 或 speculative decode。
+
+## PagedKVCache
+
+`PagedKVCache` 支持：
+
+- request-scoped logical page list 与 physical page pool；
+- append、finish、cancel、free/reuse 和 capacity preflight；
+- padded block tables、committed `seq_len`、utilization/fragmentation metrics；
+- capacity failure 原子性和 allocator invariant validation；
+- multi-layer token transaction：shared location、sequential layer writes、single commit、batch abort；
+- caller-provided immutable full-page shared prefixes、active refcount、private tail、inactive LRU；
+- Cache-owned trusted transaction provenance。
+
+限制：
+
+- finished/cancelled request id 不能重新激活。
+- legacy `append()`、RoPE helper 和 `DecodeEngine.step()` 只适用于单层；多层使用 `begin_step()` / `step_layer()` / `commit_step()`。
+- shared prefix 必须在 request submission 前由调用方注册并覆盖完整 initial context。
+- 不包含 prefix content hashing、模型 prefill、swap/offload 或多进程 cache ownership。
+
+## RoPE 与 KV append
+
+| Path | Dtype | Scope |
+| --- | --- | --- |
+| PyTorch reference | FP16/BF16/FP32 | split-half RoPE + paged write |
+| Native CUDA append | FP16/BF16/FP32 | location-only K/V write；RoPE 在 PyTorch |
+| Fused CUDA | FP16/BF16/FP32 | split-half RoPE + paged K/V write |
+
+共同约束：token-major contiguous cache，偶数 `rotary_dim`，position 来自 append 前的 request length。当前不实现 RoPE scaling、YaRN、NTK-aware scaling 或 interleaved-pair convention。
+
+原生 extension 使用 lazy JIT，要求：
+
+- NVIDIA GPU 与 CUDA-compatible PyTorch；
+- 与 PyTorch CUDA build 匹配的 Toolkit/NVCC；
+- Ninja 与可用的 host compiler。
+
+## DecodeEngine 与 Scheduler
+
+DecodeEngine 支持 waiting/active/finished/cancelled lifecycle、deterministic row mapping、explicit backpressure、torch/native/fused append path、reference/Triton decode path，以及 multi-layer token transaction。
+
+Block-aware Scheduler 支持 lifetime block commitment、FIFO + aging、bounded runnable subset、deferred requests 和 versioned decision validation。它只返回 request ids，不持有 tensor 或 physical pages。
+
+不支持：
+
+- 完整 Transformer forward、prefill 或 logits/sampling；
+- HTTP/RPC serving 与 streaming；
+- priority API、生产级抢占、continuous batching service loop；
+- tensor/pipeline parallel、多 GPU 或多机；
+- CUDA Graph capture contract。
+
+## FlashInfer baseline environment
+
+FlashInfer 是可选实验依赖，不进入核心 runtime。可复现 baseline 使用：
+
+| Package / setting | Required value |
+| --- | --- |
+| `flashinfer-python` | `0.6.15.post1` |
+| Python | 3.12 |
+| PyTorch | `2.11.0+cu128` |
+| Triton | 3.6.0 |
+| CUDA Toolkit | 12.8.1 |
+| `FLASHINFER_CUDA_ARCH_LIST` | `12.0a` |
+| Constraints | [`constraints/flashinfer-cu128.txt`](../constraints/flashinfer-cu128.txt) |
+
+共同范围是 FP16/BF16、GQA 32/8 heads、head dimension 128、page size 32 的 batch paged decode。FlashDec token-major tensor 与 FlashInfer `HND` 共享逻辑数据，不在计时区间 permute/copy。FlashInfer planning/JIT/workspace lifecycle、FlashDec scheduler/transaction 和完整 serving 都不在比较范围内。方法与结果见[baseline design](design_flashinfer_baseline.md)和[canonical summary](../benchmarks/results/flashinfer_paged_decode_baseline_summary.md)。
+
+## 安装与版本边界
+
+- PyPI 默认解析出的 PyTorch/CUDA 组合不一定适配本机；必要时先安装匹配的 PyTorch，再用 `--no-deps` 安装 FlashDec extras。
+- `baseline` extra 必须放在独立 virtualenv，避免解析器替换既有 cu128 Torch/CUDA stack。
+- `0.0.0` 是研究原型版本；兼容性以本页矩阵和实际 correctness 复核为准，不承诺稳定 API 或通用二进制 wheel。
+- 完整安装、环境探针和分层测试命令见[复现指南](reproducibility.md)。

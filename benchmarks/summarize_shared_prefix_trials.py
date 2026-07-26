@@ -377,8 +377,13 @@ def write_summary(
         expected_dtypes=expected_dtypes,
     )
     first = rows[0]
+    title = (
+        "# Shared-prefix Capacity and Admission Summary"
+        if expected_trials >= 8
+        else "# Shared-prefix Pre-metadata-cache Summary"
+    )
     lines = [
-        "# Shared Prefix Workload Summary",
+        title,
         "",
         "## Validation",
         "",
@@ -545,11 +550,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--input",
-        default="benchmarks/results/r3_shared_prefix_workload_trials3.csv",
+        default="benchmarks/results/shared_prefix_workload_trials3.csv",
     )
     parser.add_argument(
         "--output",
-        default="benchmarks/results/r3_shared_prefix_workload_trials3_summary.md",
+        default="benchmarks/results/shared_prefix_pre_metadata_cache_summary.md",
     )
     parser.add_argument("--expected-trials", type=int, default=3)
     parser.add_argument(

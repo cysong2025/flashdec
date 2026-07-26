@@ -1,4 +1,4 @@
-"""Dependency-free correctness coverage for Block-aware Scheduler v2 R1-A."""
+"""Dependency-free correctness coverage for the block-aware scheduler."""
 
 import unittest
 

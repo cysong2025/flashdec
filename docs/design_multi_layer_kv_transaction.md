@@ -2,11 +2,9 @@
 
 ## 1. 目标
 
-R2 要把 FlashDec 从“存储张量带 layer 维度，但执行语义固定单层”推进为真正的 multi-layer decode token transaction。
-
 真实 Transformer 的一个 decode token 会依次经过所有 layer。每个 layer 都产生一组 K/V，并需要在本 layer attention 前把当前 token 写入 cache；但 request 的逻辑 `seq_len` 只能在整个 token 成功完成后增加一次。
 
-R2 要保证：
+Multi-layer KV token transaction 必须保证：
 
 ```text
 一个 token
@@ -18,15 +16,15 @@ R2 要保证：
 
 任一 layer 失败时，不能留下 partial `seq_len`、泄漏 block 或可见的半个 token。
 
-## 2. 当前实现为什么不能直接扩展
+## 2. 为什么单层 append 语义不能直接循环
 
-当前 storage 已经是：
+KV storage 带有显式 layer 维度：
 
 ```text
 [num_layers, max_blocks, num_kv_heads, block_size, head_dim]
 ```
 
-但 `PagedKVCache` 构造函数显式拒绝 `num_layers != 1`，而下面三条 append 路径都执行相同的生命周期：
+单层 append 的生命周期包含位置分配和长度推进：
 
 ```text
 preflight
@@ -35,11 +33,11 @@ preflight
 -> _advance_request_lengths(ids)
 ```
 
-- `append()`：PyTorch write 后增长 `seq_len`。
-- `append_cuda()`：native K/V write 后增长 `seq_len`。
-- `append_fused_cuda()`：RoPE + native K/V write 后增长 `seq_len`。
+- PyTorch write 后增长 `seq_len`。
+- native K/V write 后增长 `seq_len`。
+- fused RoPE + native K/V write 后增长 `seq_len`。
 
-如果对 `num_layers=4` 简单循环调用四次，request 会从 `L` 错误增长到 `L+4`，四层还会写入不同 token offset。删除构造检查不能解决这个问题。
+如果对 `num_layers=4` 简单重复这条生命周期，request 会从 `L` 错误增长到 `L+4`，四层还会写入不同 token offset。多层路径因此必须把“预留位置、逐层写入、发布长度”拆成显式 transaction。
 
 ## 3. 核心语义：committed 与 pending token
 
@@ -98,9 +96,9 @@ v_cache[layer_idx, physical_block, :, block_offset, :]
 - `OPEN -> ABORTED`
 - terminal transaction 不能再次 write、commit 或 abort。
 
-第一版整个 Cache 同时只允许一个 open batch transaction。这与当前单线程 `DecodeEngine.step()` 边界一致，避免在 R2 同时引入 overlapping transaction、stream ownership 和并发锁问题。
+整个 Cache 同时只允许一个 open batch transaction。这与单线程 `DecodeEngine.step()` 边界一致，不承诺 overlapping transaction、stream ownership 或并发锁语义。
 
-## 5. 建议数据模型
+## 5. 数据模型
 
 ```python
 @dataclass(frozen=True)
@@ -171,7 +169,7 @@ layer_result = engine.decode_transaction_layer(
 每次 layer write：
 
 1. transaction 必须是当前 Cache 的 OPEN transaction。
-2. 第一版强制 `layer_idx == tx.next_layer_idx`，按 0..N-1 顺序执行。
+2. 强制 `layer_idx == tx.next_layer_idx`，按 0..N-1 顺序执行。
 3. shape/dtype/device 在写入前完整校验。
 4. 使用 transaction 已有 block ids/offsets，不再 preflight、allocate 或增长 seq_len。
 5. 写入成功后才把 layer 标记为 written。
@@ -231,7 +229,7 @@ except Exception:
 规则：
 
 - open transaction 涉及的 request 不能 finish/cancel/再次 append。
-- 第一版其他 request 也不能启动第二个 transaction。
+- 其他 request 也不能启动第二个 transaction。
 - caller 必须丢弃 abort transaction 已产生的中间 layer output。
 - commit 缺少任一 layer 时明确失败，transaction 保持 OPEN，调用方随后 abort。
 - invalid shape、重复 layer、越序 layer、stale handle、double commit/abort 都必须显式报错。
@@ -239,7 +237,7 @@ except Exception:
 
 ## 8. Engine API 边界
 
-真实 layer 的 Q/K/V 是顺序产生的，不能要求调用方预先提供 `[num_layers, batch, ...]` 后一次性执行。因此 R2 的主 API 应是分层 transaction，而不是只提供一个 convenience tensor loop：
+真实 layer 的 Q/K/V 是顺序产生的，不能要求调用方预先提供 `[num_layers, batch, ...]` 后一次性执行。因此公开 multi-layer API 是分层 transaction，而不是只提供一个 convenience tensor loop：
 
 ```python
 tx = engine.begin_step(request_ids)
@@ -270,7 +268,7 @@ begin_step -> step_layer(layer 0) -> commit_step
 
 ## 9. CUDA 路径重构
 
-当前 native append API 同时做两件事：Python allocator mutation 和 CUDA write。R2 需要把它们拆开：
+Multi-layer 路径把 allocator mutation 与 CUDA write 分开：
 
 ```text
 Cache transaction:
@@ -282,7 +280,7 @@ Native write primitive:
   never changes request state or seq_len
 ```
 
-第一版允许每 layer 一个 fused CUDA launch。R2 的核心收益不是减少 layer launch，而是保证 allocator/preflight 只执行一次、所有 layer 使用同一 location，并获得失败原子性。
+每个 layer 使用一个 fused CUDA launch。这里的机制收益不是减少 layer launch，而是保证 allocator/preflight 只执行一次、所有 layer 使用同一 location，并获得失败原子性。
 
 PyTorch reference 与 fused CUDA 必须共享同一个 transaction allocator，不允许 native path 维护另一份 ownership 规则。
 
@@ -310,7 +308,7 @@ allocated_kv_bytes = used_blocks * bytes_per_block
 reserved_kv_bytes = reserved_blocks * bytes_per_block
 ```
 
-R1 scheduler snapshot 在 open token transaction 期间不能重新 plan；Engine 应显式拒绝构造可执行 snapshot，而不是把 reserved block 伪装成 committed physical ownership。`begin/commit/abort` 都改变 state version，避免 decision 与 reserved ownership 脱节。
+Scheduler snapshot 在 open token transaction 期间不能重新 plan；Engine 应显式拒绝构造可执行 snapshot，而不是把 reserved block 伪装成 committed physical ownership。`begin/commit/abort` 都改变 state version，避免 decision 与 reserved ownership 脱节。
 
 ## 11. Invariant
 
@@ -389,9 +387,9 @@ exception at layer k -> whole token state rolls back
 finish after commit -> releases block once for all layer storage
 ```
 
-### 13.3 RTX 5070
+### 13.3 GPU matrix
 
-- `num_layers=2` 必做，`num_layers=4` 建议。
+- `num_layers=2/4`。
 - FP16/BF16。
 - head_dim 64/128。
 - MHA/GQA，至少一个 MQA case。
@@ -401,9 +399,9 @@ finish after commit -> releases block once for all layer storage
 
 ## 14. Benchmark 设计
 
-固定 token-major、`block_size=32`、`num_warps=2`、implicit stages，不重新 sweep 已冻结 kernel 参数。
+Benchmark 固定 token-major、`block_size=32`、`num_warps=2` 和 implicit stages，使比较只改变 transaction append policy。
 
-建议矩阵：
+矩阵维度：
 
 | 维度 | 候选值 |
 | --- | --- |
@@ -425,29 +423,29 @@ finish after commit -> releases block once for all layer storage
 
 不能拿单层 latency 线性外推多层结果，也不能把预先生成所有 Q/K/V 的 synthetic convenience 成本混入正式 Engine transaction 计时。
 
-## 15. 实现阶段
+## 15. 实现组成
 
-### R2-A：Cache reference transaction
+### Cache reference transaction
 
-- 解除单层构造限制，但仅允许 transaction API 在 `num_layers > 1` 下写入。
-- 实现 begin/write/commit/abort 与 open-transaction invariant。
-- 保留单层 legacy append tests，新增 2/4-layer CPU tests。
+- `num_layers > 1` 只允许 transaction API 写入；单层 legacy append 保持兼容。
+- begin/write/commit/abort 与 open-transaction invariant。
+- 单层 legacy append tests 与 2/4-layer CPU tests。
 
-### R2-B：Engine sequential layer API
+### Engine sequential layer API
 
-- 实现 `begin_step()`、`step_layer()`、`commit_step()`、`abort_step()`。
-- 保留 `step()` 单层 compatibility wrapper。
-- 将 R1 state version 与 transaction lifecycle 对齐。
+- `begin_step()`、`step_layer()`、`commit_step()`、`abort_step()`。
+- `step()` 单层 compatibility wrapper。
+- Scheduler state version 与 transaction lifecycle 对齐。
 
-### R2-C：Fused CUDA location-only write
+### Fused CUDA location-only write
 
 - native kernel 接收 transaction block ids/offsets。
 - allocator、rollback 和 seq_len 只由 Python Cache transaction 管理。
-- RTX 5070 完成 2-layer FP16/BF16 correctness。
+- RTX 5070 验证覆盖 2-layer FP16/BF16 correctness。
 
-### R2-D：Workload 与报告
+### Workload 与报告
 
-- 已实现 12-case workload、torch/fused 配对和交替 trial 顺序。
+- 12-case workload、torch/fused 配对和交替 trial 顺序。
 - non-instrumented 路径分离完整 token wall/CUDA-event、per-layer device 与 begin/commit host time。
 - 独立 profiler probe 记录 append/decode device time 和 CUDA event count；独立 rollback probe 不混入正常吞吐。
 - 严格 summary 校验 matrix、shape、transaction、block、profile、rollback、seed/order。
@@ -457,7 +455,7 @@ finish after commit -> releases block once for all layer storage
 - BF16 `l4_b4_c128` 的 instrumented append ratio 为 `0.4980x`，但 complete-token p50 三轮均胜出，因此只记录为 profiler attribution anomaly。
 - 每轮只有 20 repeats，nearest-rank p99 接近该轮最大值；p99 必须与范围一起报告，不作为稳定生产长尾结论。
 
-## 16. 验收门槛
+## 16. 证据要求
 
 - `num_layers=2/4` CPU/reference transaction correctness 完整。
 - global `seq_len` 对每个成功 token 只增长一次。
@@ -467,15 +465,15 @@ finish after commit -> releases block once for all layer storage
 - benchmark 绑定 commit、设备、layer 数、KV bytes、launch 数和计时边界。
 - 文档与代码明确：这是 multi-layer decode transaction，不是完整 Transformer/model serving。
 
-## 17. 当前状态
+## 17. 正式证据与边界
 
-本文冻结 R2 的状态机、所有权、回滚、Engine API 与 benchmark 边界。R2-A/R2-B/R2-C correctness 与 R2-D 正式性能证据均已完成；稳定结论是 fused append/launch 优化能够转化为 multi-layer complete-token 收益，限制是小样本 p99 波动和少数 profiler attribution anomaly。证据提交 `67bee15` 已在 RTX 5070 通过 `337 passed, 25 subtests passed in 5.82s` 的无跳过完整回归，R2 项目闭环完成；clean-install、版本号与 tag 属于后续 release gate。
+状态机、所有权、回滚、Engine API 与 benchmark 边界由 CPU/GPU correctness 和 144-row 正式矩阵共同验证。证据提交 `67bee15` 在 RTX 5070 的无跳过完整回归为 `337 passed, 25 subtests passed in 5.82s`。fused append/launch 优化能转化为 multi-layer complete-token 收益；小样本 p99 波动和少数 profiler attribution anomaly 仍被保留。完整数据见[multi-layer summary](../benchmarks/results/multi_layer_transaction_summary.md)。
 
-## 18. R4-A：Trusted CUDA Transaction Fast Path
+## 18. Trusted CUDA Transaction Fast Path
 
 ### 18.1 动机
 
-R2 的 fused transaction 每个 layer 都调用公开 raw primitive。该入口必须防御调用方提供的非法 CUDA 索引，因此同步检查：
+fused transaction 每个 layer 都调用公开 raw primitive。该入口必须防御调用方提供的非法 CUDA 索引，因此同步检查：
 
 ```text
 block id lower/upper bound
@@ -495,7 +493,7 @@ position = committed_seq_len >= 0
 
 ### 18.2 信任边界
 
-R4-A 将 fused append 拆成 checked 与 trusted 两条入口：
+实现将 fused append 拆成 checked 与 trusted 两条入口：
 
 | 调用路径 | 结构检查 | device-value 检查 | 可见性 |
 | --- | --- | --- | --- |
@@ -517,7 +515,7 @@ trusted raw 路径仍检查 shape、dtype、device、contiguity、RoPE 参数，
 
 第一 slice 不同时修改 transaction metadata tensor materialization、output buffer、CUDA Graph、Scheduler 或 kernel launch geometry。每层 transaction view 仍可能产生 H2D materialization/copy，因此不能称为完全 sync/copy-free；这样 checked/trusted A/B 的差异可以收窄归因到 host-blocking device-value validation。
 
-### 18.4 验收边界
+### 18.4 Correctness 与测量边界
 
 - checked public primitive 对越界 block id/offset 与负 position 继续报错。
 - trusted primitive 不进入 `flashdec` public namespace。
@@ -525,25 +523,25 @@ trusted raw 路径仍检查 shape、dtype、device、contiguity、RoPE 参数，
 - checked/trusted 在 FP16/BF16、GQA、tail/boundary case 的 Q output 与 K/V cache 完全对齐。
 - layer failure 后仍无 visible token、block leak 或 open transaction。
 - 同 commit benchmark 交替 checked/trusted 顺序；正式 wall 仅使用 `synchronize + perf_counter + synchronize`，不在计时区间 record CUDA event。
-- profiler attribution 与正式 wall 分离；R4 strict probe 只报告 append inclusive CPU time与 scalar extraction，stage-device time留给独立 CUDA Event/Nsight probe。
+- profiler attribution 与正式 wall 分离；strict probe 只报告 append inclusive CPU time与 scalar extraction，stage-device time留给独立 CUDA Event/Nsight probe。
 - 每个 paired trial 先完成 checked/trusted 两侧正式 wall，再执行任一 profiler/rollback，避免一次 capture retry 改变另一侧 wall 的 GPU 热状态。
-- profiler 使用独立 CPU-only WARMUP→active schedule；warmup token abort，不进入 active evidence。每个 active layer 必须有精确一个 CPU user annotation，其 inclusive CPU time 保留 checked 路径子 `.item()` 等待。range/scalar 少记可重建整个 probe，最多三次并记录 attempt count，多记立即失败；不接受缺 range 或手工补值。CPU FunctionEvent correlated device time与 CUDA activity不属于 R4 strict evidence。
-- 只有 complete-token p50 总体至少 `1.05x`，且正式矩阵全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1，才冻结为性能收益；否则记录负结果并停止扩展到 CUDA Graph。
+- profiler 使用独立 CPU-only WARMUP→active schedule；warmup token abort，不进入 active evidence。每个 active layer 必须有精确一个 CPU user annotation，其 inclusive CPU time 保留 checked 路径子 `.item()` 等待。range/scalar 少记可重建整个 probe，最多三次并记录 attempt count，多记立即失败；不接受缺 range 或手工补值。CPU FunctionEvent correlated device time与 CUDA activity不属于 strict evidence。
+- complete-token 性能声明要求总体 p50 至少 `1.05x`，且正式矩阵全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1；否则只形成负结果，不构成扩展到 CUDA Graph 的依据。
 
-早期 profiler 负结果仍保留：同名 CUDA user annotation 不是 `record_function` CPU range 的强制一一 peer，CPU FunctionEvent 的 correlated device time 也可能合法为 0。因此 R4-A 最终 strict schema 只使用 CPU inclusive time 与 scalar extraction count 做归因；append/decode device time 和 CUDA activity 不进入发布证据，也不通过补值或增加 retry 次数修饰。
+Profiler 负结果同样保留：同名 CUDA user annotation 不是 `record_function` CPU range 的强制一一 peer，CPU FunctionEvent 的 correlated device time 也可能合法为 0。因此 strict schema 只使用 CPU inclusive time 与 scalar extraction count 做归因；append/decode device time 和 CUDA activity 不进入正式证据，也不通过补值或增加 retry 次数修饰。
 
-commit `4018449` 已在 RTX 5070、CUDA 12.8 完成 focused `73 passed, 23 subtests passed` 与完整 `410 passed, 48 subtests passed`。正式矩阵为 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`，共 80 个 paired trials；全部 16 个 `dtype x case` 分组均为 `trusted_faster`，且五轮 p50 最小值都大于 1。overall complete-token p50/p90/p99、TPS 和 append CPU/layer ratio 分别为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`，达到预设 p50 gate，R4-A 因此冻结。16 个分组中仍有 7 个 p99 `[min,max]` 穿过 1；overall p99 几何平均不能解释成稳定尾延迟收益。完整证据见[R4-A 五轮正式摘要](../benchmarks/results/r4_fused_transaction_fast_path_trials5_summary.md)。
+commit `4018449` 在 RTX 5070、CUDA 12.8 的 focused correctness 为 `73 passed, 23 subtests passed`，完整回归为 `410 passed, 48 subtests passed`。正式矩阵为 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`，共 80 个 paired trials；全部 16 个 `dtype x case` 分组均为 `trusted_faster`，且五轮 p50 最小值都大于 1。overall complete-token p50/p90/p99、TPS 和 append CPU/layer ratio 分别为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`，达到预设 p50 条件。16 个分组中仍有 7 个 p99 `[min,max]` 穿过 1；overall p99 几何平均不能解释成稳定尾延迟收益。完整证据见[trusted transaction summary](../benchmarks/results/trusted_transaction_summary.md)。
 
-## 19. R4-B：Persistent Transaction Metadata
+## 19. Persistent Transaction Metadata Candidate
 
-R4-A 只移除了 Cache-owned append 的重复 device-value validation；transaction view 仍会在 begin、逐层 write 和 commit/abort 边界重复 materialize CUDA metadata。R4-B 曾评估在 `begin_token()` host provenance 验证成功后一次性构建 Cache-owned device metadata bundle，并让同一 open transaction 的所有 layer 复用它。
+trusted path 只移除了 Cache-owned append 的重复 device-value validation；transaction view 仍会在 begin、逐层 write 和 commit/abort 边界重复 materialize CUDA metadata。Persistent candidate 评估在 `begin_token()` host provenance 验证成功后一次性构建 Cache-owned device metadata bundle，并让同一 open transaction 的所有 layer 复用它。
 
-R4-B 必须保持以下边界：
+candidate 必须保持以下边界：
 
 - internal bundle 至少覆盖 positions、physical block ids、block offsets、block tables 与 effective seq lens；同一 transaction 内 tensor identity 稳定。
 - public `KVTokenTransactionView` 和 Engine public handle 始终是 detached snapshot，不得与 internal bundle alias；调用方篡改公开 tensor 不能改变真实 append/decode。
 - commit/abort 必须释放 internal GPU metadata；terminal transaction 只保留足以区分 committed/aborted 和拒绝重复操作的 host tombstone，不因历史 transaction 累积显存。
 - metadata 构建失败必须与 reservation failure 一样原子 rollback，不留下 open marker、block leak 或 state-version 偏移。
-- persistent 路径继续使用 R4-A 已验证的 trusted raw launch，不修改 kernel math、Scheduler、shared-prefix ownership 或冻结参数。
+- persistent 路径继续使用已验证的 trusted raw launch，不修改 kernel math、Scheduler、shared-prefix ownership 或 kernel 参数。
 
-性能 A/B 只比较同 commit 的 `materialized` 与 `persistent` metadata policy；两侧均使用 trusted raw math，并保留相同 transaction/Engine trajectory、parity 与 rollback。正式 wall 和 CPU-only attribution继续分离，summary显式验证每 token materialization、reuse 与 terminal release计数。commit `8047a9c` 的 correctness和160-row/80-pair矩阵均通过完整性校验，overall p50/TPS/append CPU为`1.2493x/1.2392x/3.0366x`；但只有13/16分组五轮全部胜出，未达到预注册16/16 keep门。主线因此恢复R4-A/materialized默认，R4-B只作为已验证但未采用的设计保留。
+性能 A/B 只比较同 commit 的 `materialized` 与 `persistent` metadata policy；两侧均使用 trusted raw math，并保留相同 transaction/Engine trajectory、parity 与 rollback。正式 wall 和 CPU-only attribution 继续分离，summary 显式验证每-token materialization、reuse 与 terminal release 计数。commit `8047a9c` 的 correctness 与 160-row/80-pair 矩阵通过完整性校验，overall p50/TPS/append CPU 为 `1.2493x/1.2392x/3.0366x`；但只有 13/16 分组五轮全部胜出，未达到预设 16/16 条件，因此默认继续使用 materialized metadata。candidate 作为正式负结果保留。

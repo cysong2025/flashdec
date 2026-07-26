@@ -1,8 +1,8 @@
 # Dynamic Workload 与系统级指标设计
 
-## 目标
+## 研究问题
 
-Week 12 不再把一次 CUDA kernel launch 当作系统性能，而是验证单 GPU DecodeEngine 在动态请求下能否正确调度、回收 Paged KV block，并提供可追溯的端到端 decode-step 指标。
+Dynamic workload 回答的问题是：单算子优化进入动态 request lifecycle 后，能否在正确调度、Paged KV block 回收和不规则 active batch 的共同开销下，继续转化为可追溯的完整 decode-step 收益。
 
 它仍是单 layer、单 token decode 原型，不包含模型 forward、tokenizer、sampling、HTTP/RPC 或完整 prefill kernel。
 
@@ -37,7 +37,7 @@ included:  request submit/admit + allocator + RoPE/KV append
 excluded:  random Q/K/V generation + prompt prefill + warmup + JIT build
 ```
 
-这个边界故意不同于 Week 11 的 CUDA-event append microbenchmark：前者用于解释单条数据路径的 GPU 开销，后者用于观察优化是否在 runtime 调度、allocator 与不规则 active batch 下仍能传递为系统收益。两者不能直接横向比较毫秒数。
+这个边界故意不同于 CUDA-event append microbenchmark：后者解释单条数据路径的 GPU 开销，本 workload 观察优化是否在 runtime 调度、allocator 与不规则 active batch 下仍能传递为系统收益。两者不能直接横向比较毫秒数。
 
 所有 `WorkloadResult` 计数（completed tokens、request events、backpressure）只覆盖测量窗口；最终 `engine_metrics` 是运行结束时的累计快照，包含 warmup，避免把热身状态误认为测量数据。
 
@@ -73,19 +73,19 @@ python -m pytest -vv \
 python benchmarks/run_decode_engine_workload.py \
   --quick \
   --dtype both \
-  --output benchmarks/results/week12_decode_engine_workload_quick.csv
+  --output benchmarks/results/decode_engine_workload_quick.csv
 ```
 
-quick 成功后运行完整实验：
+Quick validation 通过后运行完整实验：
 
 ```bash
 python benchmarks/run_decode_engine_workload.py \
   --trials 3 \
   --dtype both \
-  --output benchmarks/results/week12_decode_engine_workload_trials3.csv
+  --output benchmarks/results/decode_engine_workload_trials3.csv
 ```
 
-默认同时测试 `append_backend=torch` 和 `append_backend=fused_cuda`，decode 固定为已冻结的 Triton `block_size=32, num_warps=2`。如果只定位 fused GPU path，可添加 `--append-backends fused_cuda`；此时 CSV 不会包含相对 torch 的 speedup。
+默认同时测试 `append_backend=torch` 和 `append_backend=fused_cuda`，decode 使用受控实验选出的 Triton `block_size=32, num_warps=2`。如果只定位 fused GPU path，可添加 `--append-backends fused_cuda`；此时 CSV 不会包含相对 torch 的 speedup。
 
 正式结果使用 `--trials 3`。trial 1/3 按命令行 backend 顺序执行，trial 2 反转顺序；seed 从基础值逐 trial 加一。CSV 明确记录 `trial`、`trial_count`、`backend_order` 和实际 seed，避免固定执行顺序或单一输入样本主导结论。
 
@@ -95,7 +95,7 @@ python benchmarks/run_decode_engine_workload.py \
 2. 检查 `long_pressure` 有非零 `backpressure_steps`，并且 `free_count/reuse_count` 随取消后续请求而增长；否则没有真正覆盖压力恢复。
 3. 使用同一 dtype/workload 的 `speedup_vs_torch_p50` 判断 fused 的端到端传递效率；不要把 p50 与不同 workload 的 p50 混合比较。
 4. `p99` 应与 `p50/p90` 一起看。短负载本身噪声较大；只有跨 workload、重复运行方向一致才做默认路径结论。
-5. 记录至少一个负结果：若 append-only fused 更快但 complete-step speedup 接近 1，说明 attention、allocator 或 Python/synchronization 已成为主导。这个结论同样是 AI Infra 项目的有效交付。
+5. 保留负结果：若 append-only fused 更快但 complete-step speedup 接近 1，说明 attention、allocator 或 Python/synchronization 已成为主导。这与正向 speedup 一样，是判断优化传播边界的有效系统证据。
 
 ## Complete-step 阶段归因
 
@@ -108,8 +108,8 @@ python benchmarks/profile_decode_engine.py \
   --append-backends torch fused_cuda \
   --quick \
   --export-trace \
-  --output-dir benchmarks/profiles/week12_decode_engine_quick \
-  --summary-output benchmarks/results/week12_decode_engine_profile_quick_summary.md
+  --output-dir benchmarks/profiles/decode_engine_quick \
+  --summary-output benchmarks/results/decode_engine_stage_profile_quick_summary.md
 ```
 
 显式 ranges：

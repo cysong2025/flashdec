@@ -523,7 +523,7 @@ def parse_args():
     parser.add_argument("--quick", action="store_true")
     parser.add_argument(
         "--output",
-        default="benchmarks/results/r3_shared_prefix_workload.csv",
+        default="benchmarks/results/shared_prefix_workload.csv",
     )
     return parser.parse_args()
 

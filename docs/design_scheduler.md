@@ -1,8 +1,8 @@
-# Block-aware Scheduler v2 设计说明
+# Block-aware Scheduler 设计
 
 ## 1. 目标与范围
 
-Scheduler v2 是 FlashDec 从“能处理动态 batch”走向“能在有限 KV 容量下做可解释资源决策”的核心扩展。它只回答三个问题：
+Block-aware Scheduler 在有限 KV 容量下做可解释的 admission 与 runnable-set 决策。它只回答三个问题：
 
 1. waiting request 何时可以进入 active 集合。
 2. active request 中哪些 request 在本轮执行一个 decode token。
@@ -10,7 +10,7 @@ Scheduler v2 是 FlashDec 从“能处理动态 batch”走向“能在有限 KV
 
 Scheduler 不生成 Q/K/V，不调用 Triton/CUDA kernel，也不直接分配或释放 physical block。`DecodeEngine` 负责执行已接受的决策，`PagedKVCache` 继续拥有 physical block 与 KV 数据。
 
-第一版固定单 GPU、单 layer、每 request 每次执行一个 token。priority API、swap/offload、生产级抢占、shared prefix 和多线程并发不在 R1 范围。
+调度单位固定为单 GPU 上每个 request 每次执行一个 token；layer 数不改变 token-level commitment。priority API、swap/offload、生产级抢占和多线程并发不在本文范围，shared prefix 的容量扩展见第 15 节。
 
 ## 2. 为什么不能只看“本 step 需要几个 block”
 
@@ -69,11 +69,11 @@ physical_blocks_used <= committed_blocks <= schedulable_blocks
 
 ### 3.3 设计取舍
 
-生命周期 commitment 是保守策略：如果请求提前结束，一部分承诺容量可能从未物理分配；与按 step 贪心 admission 相比，active concurrency 也可能降低。R1 不隐藏这个代价，而是同时报告 committed utilization、physical utilization、等待时间和完成吞吐。
+生命周期 commitment 是保守策略：如果请求提前结束，一部分承诺容量可能从未物理分配；与按 step 贪心 admission 相比，active concurrency 也可能降低。因此实验同时报告 committed utilization、physical utilization、等待时间和完成吞吐。
 
 ## 4. 数据模型
 
-建议新增 `flashdec/scheduler.py`，第一版核心类型如下：
+实现位于 `flashdec/scheduler.py`，核心类型如下：
 
 ```python
 @dataclass(frozen=True)
@@ -142,7 +142,7 @@ Scheduler 的 `plan(snapshot)` 不修改 Engine 或 Cache。只有 Engine 接受
 
 ## 6. 单线程一致性与 stale decision
 
-R1 使用单线程 event loop，但仍需要防止“基于旧容量做出的决策”被延迟执行：
+执行模型使用单线程 event loop，但仍需防止“基于旧容量做出的决策”被延迟执行：
 
 - Engine 维护单调递增的 `state_version`。
 - Cache 维护独立 ownership/seq_len `state_version`；scheduler-managed Engine 记录最后一次已观察版本，直接绕过 Engine 修改 Cache 会使 decision 失效。
@@ -151,7 +151,7 @@ R1 使用单线程 event loop，但仍需要防止“基于旧容量做出的决
 - Engine 应用 decision 前必须验证 `decision.snapshot_version == engine.state_version`。
 - 版本不匹配时拒绝 decision，记录 `stale_decision_count`，重新 snapshot/plan；不能尝试部分执行。
 
-R1-B 的兼容接口为：
+Scheduler-managed 接口为：
 
 ```python
 engine.submit_request(spec)
@@ -209,17 +209,17 @@ aging 不能抢占 active request，但对有限 workload，它能阻止年轻�
 5. finish/cancel 后立即释放 physical blocks 与 commitment。
 6. Scheduler 根据实际 outcome 更新 wait/service 计数；失败路径不能保留虚假的 admission commitment。
 
-R1 不把多 token prefill 做成新 kernel。现有 synthetic workload 的 context seeding 仍位于正式 decode-step 计时边界之外。
+Scheduler 不实现多 token prefill kernel。Synthetic workload 的 context seeding 位于正式 decode-step 计时边界之外。
 
 ## 8. 对照策略
 
-R1 benchmark 必须保留三种可解释策略：
+Benchmark protocol 保留三种可解释策略：
 
 | policy | 行为 | 用途 |
 | --- | --- | --- |
-| `cancel_on_backpressure` | 当前 baseline；全 active batch 失败后取消最老请求 | 对照现有行为和取消代价 |
+| `cancel_on_backpressure` | 全 active batch 失败后取消最老请求 | 对照取消恢复进展的代价 |
 | `greedy_step_only` | 只看本 step block 需求，不做 lifetime commitment | 展示更高并发及潜在 deadlock/stall |
-| `lifetime_fifo_aging` | 默认；完整生命周期 commitment + 公平 runnable batch | 目标策略 |
+| `lifetime_fifo_aging` | 默认；完整生命周期 commitment + 公平 runnable batch | 容量安全与进展策略 |
 
 `greedy_step_only` 必须检测连续零进展并输出 `resource_deadlock`/`stalled_steps`，不能让 benchmark 无限循环。
 
@@ -243,7 +243,7 @@ request/order decisions are deterministic for the same snapshot/config
 
 ## 10. 指标
 
-除现有 step latency、tokens/s 和 cache metrics 外，新增：
+除 step latency、tokens/s 和 cache metrics 外，还记录：
 
 - waiting queue mean/max depth。
 - admission wait steps p50/p90/max。
@@ -304,57 +304,57 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 - physical/commitment utilization。
 - scheduler decision overhead。
 
-验收不要求 lifetime policy 的所有 latency 指标都最好。预期取舍是：它可能降低瞬时并发或增加等待，但必须消除容量死锁和强制取消，并给出可解释的完成率/公平性收益。
+解释结果时不要求 lifetime policy 的所有 latency 指标都最好。它可能降低瞬时并发或增加等待；核心判断是能否消除容量死锁和强制取消，并给出可解释的完成率/公平性收益。
 
-## 13. 实现阶段与验收结果
+## 13. 实现与验证
 
-### R1-A：纯策略层
+### 纯策略层
 
-- 新增 immutable metadata、snapshot、decision 和 config。
+- immutable metadata、snapshot、decision 和 config。
 - 实现 commitment 计算、FIFO/aging admission、fair runnable selection。
-- 完成不依赖 torch/CUDA 的纯 Python tests。
+- 不依赖 torch/CUDA 的纯 Python tests。
 
-当前状态：已实现 `flashdec/scheduler.py` 和 `tests/test_scheduler.py`。planner 和 focused tests 不依赖 torch/pytest；标准库 `unittest`、随机合法 snapshot invariant、WSL pytest 与最终完整回归均已通过。
+实现位于 `flashdec/scheduler.py`，核心测试位于 `tests/test_scheduler.py`。planner 与基础 tests 不依赖 torch；standard-library `unittest`、随机合法 snapshot invariant、WSL pytest 与完整回归共同覆盖纯策略层。
 
-### R1-B：Engine/Cache 集成
+### Engine/Cache 集成
 
 - 增加 `state_version` 和 scheduler-facing snapshot。
 - 应用 decision 时进行 stale check。
 - lifecycle 同步释放 commitment。
 - 保持 Cache 为唯一 physical allocator。
 
-当前状态：Engine/Cache 集成、CPU/PyTorch tests、RTX fused/Triton 数值对齐和 stale-decision 错误路径均已完成验证。
+验证覆盖 CPU/PyTorch 状态路径、RTX fused/Triton 数值对齐和 stale-decision 原子拒绝。
 
-### R1-C：Workload 与对照实验
+### Workload 与对照实验
 
 - runner 支持三种 policy。
-- 新增 boundary-deadlock workload 与 scheduler metrics。
+- boundary-deadlock workload 与 scheduler metrics。
 - CPU quick 验证生命周期轨迹，再在 RTX 5070 跑 FP16/BF16 正式矩阵。
 
-当前状态：trace-driven runner、三策略 event loop、确定性 deadlock cutoff、等待/服务公平性/commitment/physical block/有效 token 指标、CPU/PyTorch 对抗测试和 scheduled fused CUDA + Triton 对齐均已完成。commit `16de9d4` 的 RTX 5070 正式 36-row policy matrix 已通过严格摘要校验。
+trace-driven runner 包含三策略 event loop、确定性 deadlock cutoff、等待/服务公平性、commitment/physical block 和有效 token 指标。CPU/PyTorch 对抗路径与 scheduled fused CUDA + Triton 数值路径均被覆盖；commit `16de9d4` 的 RTX 5070 36-row policy matrix 通过严格摘要校验。
 
-### R1-D：结论冻结
+### 默认策略的证据要求
 
 - 所有 correctness/invariant 通过。
 - 默认 pressure workload 不依赖强制取消恢复进度。
 - 有限 admissible 请求最终完成，无 starvation。
 - 报告 lifetime reservation 相对 greedy/cancel baseline 的收益与代价。
-- 只有完成上述证据后，才把 Scheduler v2 标记为实现完成。
+- 默认选择必须同时满足上述 correctness、进展和可解释性证据。
 
-## 14. 当前状态
+## 14. 实验结论
 
-本文已冻结 R1 的目标语义与实验边界。R1-A 纯策略层、R1-B Engine/Cache 集成、R1-C 三策略 workload 与 R1-D 结论冻结均已完成。正式结果表明 lifetime policy 在 boundary-deadlock 中完成 2/2 请求且无取消/死锁；cancel baseline 完成 1/2，greedy baseline 完成 0/2 并触发确定 deadlock。finite queue 中三种策略均完成 6/6，因此 R1 的稳定结论是容量安全与进展保证，而不是无条件 latency/TPS 优势。
+lifetime policy 在 boundary-deadlock 中完成 2/2 请求且无取消/死锁；cancel baseline 完成 1/2，greedy baseline 完成 0/2 并触发确定 deadlock。finite queue 中三种策略均完成 6/6，因此稳定结论是容量安全与进展保证，而不是无条件 latency/TPS 优势。[正式矩阵](../benchmarks/results/scheduler_capacity_progress_summary.md)
 
-## 15. R3-B Shared Prefix 扩展
+## 15. Shared Prefix 容量扩展
 
-R1 的 `sum(active physical_blocks) == used_blocks` 建立在每个 request 独占 block 的前提上。R3-B 允许多个 request 的 block table 重复引用同一组 immutable prefix ids，因此增加两层派生元数据：
+基础不变量 `sum(active physical_blocks) == used_blocks` 建立在每个 request 独占 block 的前提上。Shared Prefix 允许多个 request 的 block table 重复引用同一组 immutable prefix ids，因此增加两层派生元数据：
 
 - `SchedulingSnapshot.resident_prefix_blocks`：Cache registry 当前持有的唯一 physical prefix blocks，只计一次。
 - `WaitingRequestMetadata/ActiveRequestMetadata.shared_prefix_blocks`：单个 request 的 logical block table 中有多少前导块来自 prefix。
 
 `RequestSpec` 只增加 opaque `prefix_id`，不接受调用方提供 prefix 长度。DecodeEngine 从 Cache registry 派生 shared block 数并验证 prefix 覆盖完整 initial context，防止伪造容量节省。
 
-R3-B 将不变量改为：
+扩展后的不变量为：
 
 ```text
 used_blocks
@@ -370,10 +370,12 @@ used_blocks <= committed_blocks <= schedulable_blocks
 
 waiting request 的 admission 只消耗 private lifetime commitment；prefix residency 已经包含在全局基数中。admission 后 Engine 将同一 prefix ids 挂到 request block table 开头，下一 token 位于 full-block boundary 并分配私有 tail。
 
-当前限制：scheduler-managed mode 不在 decision 内注册或淘汰 prefix。resident set 必须在 request submission 前建立，后续外部 Cache mutation 会触发 version mismatch。这一边界先闭合了可验证的 capacity semantics，随后由 R3-C/R3-D workload 衡量固定 hit-rate 下的 KV-pool capacity 节省与性能归因。
+边界：scheduler-managed mode 不在 decision 内注册或淘汰 prefix。resident set 必须在 request submission 前建立，后续外部 Cache mutation 会触发 version mismatch。固定 hit-rate workload 分别衡量 KV-pool capacity 节省与性能归因。
 
-R3-B 已在 2026-07-17 RTX 5070 WSL 完成 focused `56 passed, 14 subtests passed in 5.29s` 与完整 `352 passed, 25 subtests passed in 9.37s` 回归。R3-C 使用 fixed bounded capacity 验证 admission 单调性，并在独立 fixed-full-batch 容量下测量 decode latency，避免把 admitted batch 差异混入性能解释。
+Engine/Scheduler 集成在 2026-07-17 的 RTX 5070 WSL 环境通过 focused `56 passed, 14 subtests passed in 5.29s` 与完整 `352 passed, 25 subtests passed in 9.37s` 回归。
 
-R3-C attribution 发现 75% hit 的 scheduler p50 在 FP16/BF16 都三轮稳定回退。R3-D 因此把 submission 时已验证的 `shared_prefix_blocks` 存入 Engine request metadata；纯调度热路径不再重复读取 prefix registry。Scheduler 仍只接收派生整数，不接触 K/V 或 physical ids；DecodeEngine 继续在 active snapshot/invariant 中将缓存值与 Cache request state 交叉校验，外部 registry mutation 仍触发 version mismatch。
+fixed bounded capacity 验证 admission 单调性；独立 fixed-full-batch 容量测量 decode latency，避免把 admitted batch 差异混入性能解释。
 
-R3-D commit `fe72e27` 的 lookup-count targeted test、focused `61 passed, 8 subtests passed` 与完整 `361 passed, 25 subtests passed` 均通过。优化后的 8-trial/64-row RTX confirmation 中，所有非零 hit-rate 的 scheduler p50 range 仍跨过 1；因此结构性结论是重复 registry lookup 已从热路径移除，性能结论则冻结为 near-neutral，而不是稳定 scheduler speedup。
+初始 attribution 发现 75% hit 的 scheduler p50 在 FP16/BF16 都三轮稳定回退，因此把 submission 时已验证的 `shared_prefix_blocks` 存入 Engine request metadata；纯调度热路径不再重复读取 prefix registry。Scheduler 仍只接收派生整数，不接触 K/V 或 physical ids；DecodeEngine 继续在 active snapshot/invariant 中将缓存值与 Cache request state 交叉校验，外部 registry mutation 仍触发 version mismatch。
+
+commit `fe72e27` 的 lookup-count targeted test 为 `1 passed`，focused 为 `61 passed, 8 subtests passed`，完整回归为 `361 passed, 25 subtests passed`。同 commit 的 8-trial/64-row confirmation 中，所有非零 hit-rate 的 scheduler p50 range 仍跨过 1；因此结构性结论是重复 registry lookup 已从热路径移除，性能结论为 near-neutral，而不是稳定 scheduler speedup。

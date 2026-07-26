@@ -1,4 +1,4 @@
-"""CUDA correctness coverage for the optional R5 FlashInfer baseline."""
+"""CUDA correctness coverage for the optional FlashInfer baseline."""
 
 from importlib import import_module, util
 
@@ -17,16 +17,16 @@ from benchmarks.run_flashinfer_baseline import (
     _make_flashinfer_wrapper,
     _make_inputs,
     _validate_outputs,
-    _validate_r5_environment,
+    _validate_flashinfer_environment,
 )
 
 
 if util.find_spec("flashinfer") is None:
     pytest.skip("could not import 'flashinfer'", allow_module_level=True)
 if not torch.cuda.is_available():
-    pytest.skip("R5 FlashInfer baseline requires CUDA", allow_module_level=True)
+    pytest.skip("FlashInfer baseline requires CUDA", allow_module_level=True)
 try:
-    _validate_r5_environment(torch)
+    _validate_flashinfer_environment(torch)
 except RuntimeError as exc:
     pytest.fail(str(exc), pytrace=False)
 try:

@@ -232,7 +232,7 @@ def _write_summary(path, rows):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# DecodeEngine Stage Profiling Summary",
+        "# DecodeEngine Stage Profile Summary",
         "",
         "Instrumented wall-clock values are not release benchmark numbers. "
         "Nested CPU/device profiler totals are attribution evidence and must not be added blindly.",
@@ -491,10 +491,10 @@ def parse_args():
     parser.add_argument("--record-shapes", action="store_true")
     parser.add_argument("--profile-memory", action="store_true")
     parser.add_argument("--export-trace", action="store_true")
-    parser.add_argument("--output-dir", default="benchmarks/profiles/week12_decode_engine")
+    parser.add_argument("--output-dir", default="benchmarks/profiles/decode_engine")
     parser.add_argument(
         "--summary-output",
-        default="benchmarks/results/week12_decode_engine_profile_summary.md",
+        default="benchmarks/results/decode_engine_stage_profile_summary.md",
     )
     return parser.parse_args()
 

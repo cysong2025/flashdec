@@ -1,4 +1,4 @@
-"""Strictly validate and summarize the R5 FlashInfer public baseline."""
+"""Strictly validate and summarize the FlashInfer kernel baseline."""
 
 from __future__ import annotations
 
@@ -35,12 +35,14 @@ from benchmarks.run_flashinfer_baseline import (
     EXPECTED_TORCH_VERSION,
     EXPECTED_TRITON_VERSION,
     FLASHDEC_KV_LAYOUT,
+    FLASHINFER_BASELINE_NAME,
     FLASHINFER_BACKEND,
     FLASHINFER_KV_LAYOUT,
     FORMAL_REPEATS,
     FORMAL_TRIALS,
     FORMAL_WARMUP,
     HEAD_DIM,
+    LEGACY_FLASHINFER_BASELINE_NAMES,
     NUM_KV_HEADS,
     NUM_Q_HEADS,
     TIMING_SCOPE,
@@ -153,7 +155,7 @@ REQUIRED_FIELDS = set(GLOBAL_IDENTITY_FIELDS) | set(PAIRED_INPUT_FIELDS) | {
 
 
 class FlashInferBaselineValidationError(ValueError):
-    """Raised when R5 rows cannot support a paired public comparison."""
+    """Raised when baseline rows cannot support a paired public comparison."""
 
 
 def _integer(row, field):
@@ -210,7 +212,7 @@ def read_csv(path):
         rows = list(csv.DictReader(file))
     if not rows:
         raise FlashInferBaselineValidationError(
-            "R5 FlashInfer baseline CSV must contain rows"
+            "FlashInfer baseline CSV must contain rows"
         )
     return rows
 
@@ -240,8 +242,15 @@ def _validate_global_identity(
                 f"global field {field} is inconsistent: {sorted(values)}"
             )
     first = rows[0]
+    accepted_names = (
+        FLASHINFER_BASELINE_NAME,
+        *LEGACY_FLASHINFER_BASELINE_NAMES,
+    )
+    if first["name"] not in accepted_names:
+        raise FlashInferBaselineValidationError(
+            f"name must be one of {accepted_names!r}, got {first['name']!r}"
+        )
     expected_strings = {
-        "name": "r5_flashinfer_paged_decode",
         "op": "paged_decode_attention",
         "torch": EXPECTED_TORCH_VERSION,
         "triton": EXPECTED_TRITON_VERSION,
@@ -293,7 +302,7 @@ def _validate_global_identity(
         )
     if "run_flashinfer_baseline.py" not in first["command"]:
         raise FlashInferBaselineValidationError(
-            "command must identify the R5 baseline runner"
+            "command must identify the FlashInfer baseline runner"
         )
     if "--require-clean" not in first["command"]:
         raise FlashInferBaselineValidationError(
@@ -573,7 +582,7 @@ def validate_rows(
     )
     if expected_backends != tuple(BACKENDS):
         raise FlashInferBaselineValidationError(
-            "R5 comparisons require FlashDec and both fixed FlashInfer backends"
+            "baseline comparisons require FlashDec and both fixed FlashInfer backends"
         )
     if not rows:
         raise FlashInferBaselineValidationError("rows must be non-empty")
@@ -760,7 +769,7 @@ def _metric_text(stats, digits=6):
 def render_markdown(input_path, rows, aggregates):
     first = rows[0]
     lines = [
-        "# R5 FlashInfer Paged-decode Baseline Summary",
+        "# FlashInfer Paged-decode Baseline Summary",
         "",
         "## Validation",
         "",
@@ -825,7 +834,7 @@ def render_markdown(input_path, rows, aggregates):
             "## Interpretation Boundary",
             "",
             "- Ratios above 1 favor the named FlashInfer backend. Latency uses `FlashDec/external`; throughput uses `external/FlashDec`.",
-            "- These ratios are descriptive evidence only. R5 has no pass/fail performance or winner gate.",
+            "- These ratios are descriptive evidence only; the comparison has no pass/fail performance or winner gate.",
             "- Logical workload GB/s counts each Q/K/V/output element once. It excludes metadata, caching, and implementation-specific rereads, so it is a shape-normalized workload proxy rather than measured DRAM bandwidth.",
             "- This is a common-shape, kernel-only comparison. It does not compare scheduler, KV ownership, prefix caching, multi-layer transactions, or end-to-end serving behavior.",
             "- `fa2_cuda_core` and `fa2_tensor_core` are two execution choices from the same pinned FlashInfer installation, not separate library versions.",
@@ -840,7 +849,7 @@ def parse_args(argv=None):
     parser.add_argument("--input", required=True)
     parser.add_argument(
         "--output",
-        default="benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md",
+        default="benchmarks/results/flashinfer_paged_decode_baseline_summary.md",
     )
     parser.add_argument(
         "--expected-trials", type=int, default=FORMAL_TRIALS
@@ -874,7 +883,7 @@ def main(argv=None):
         )
         markdown = render_markdown(args.input, rows, aggregate(rows))
     except (OSError, ValueError, FlashInferBaselineValidationError) as exc:
-        raise SystemExit(f"invalid R5 FlashInfer baseline CSV: {exc}") from exc
+        raise SystemExit(f"invalid FlashInfer baseline CSV: {exc}") from exc
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(markdown)

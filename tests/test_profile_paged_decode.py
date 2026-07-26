@@ -50,6 +50,7 @@ def test_write_summary_records_final_config_and_environment(tmp_path):
     _write_summary(output, [row])
 
     text = output.read_text()
+    assert text.startswith("# Paged Decode Default Configuration Profile Summary\n")
     assert "16x32x8x128x1024" in text
     assert "token_major" in text
     assert "| 32 | 2 | default |" in text

@@ -228,7 +228,7 @@ def parse_args():
     parser.add_argument("--decode-backend", choices=["reference", "triton"], default="triton")
     parser.add_argument("--trials", type=int, default=1)
     parser.add_argument("--seed", type=int, default=503)
-    parser.add_argument("--output", default="benchmarks/results/r1_scheduler_workload.csv")
+    parser.add_argument("--output", default="benchmarks/results/scheduler_workload.csv")
     return parser.parse_args()
 
 

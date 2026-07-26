@@ -1,4 +1,4 @@
-"""CPU/reference integration coverage for the full R4-C workload."""
+"""CPU/reference integration coverage for the full integrated workload."""
 
 import shutil
 

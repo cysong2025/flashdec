@@ -88,7 +88,7 @@ class DecodeEngine:
 
     ``append_backend`` selects ``torch``, ``cuda``, or ``fused_cuda`` from the
     RoPE/KV data path. ``decode_backend='reference'`` keeps CPU and semantic
-    tests available; ``'triton'`` uses the frozen paged decode kernel on CUDA.
+    tests available; ``'triton'`` uses the fixed paged decode kernel on CUDA.
     ``profile_ranges=True`` adds optional PyTorch profiler ranges without
     adding synchronization; it is disabled for normal execution/benchmarks.
     """
@@ -172,8 +172,8 @@ class DecodeEngine:
     def evict_prefix(self, prefix_id):
         """Evict one inactive prefix after all request lifecycles are resolved.
 
-        R4-C keeps the shared-prefix resident set fixed while a workload is
-        active.  This Engine-owned terminal cleanup entry point preserves the
+        The integrated workload keeps the shared-prefix resident set fixed while active.
+        This Engine-owned terminal cleanup entry point preserves the
         cache-version invariant instead of requiring callers to mutate the
         underlying cache directly.
         """
@@ -982,7 +982,7 @@ class DecodeEngine:
             ) from exc
         if prefix["token_count"] != spec.initial_context_tokens:
             raise ValueError(
-                "R3-B shared prefix must cover the full initial context"
+                "shared-prefix metadata must cover the full initial context"
             )
         return prefix["num_blocks"]
 

@@ -96,13 +96,13 @@ class DocumentationCheckTests(unittest.TestCase):
             archive.mkdir()
             tracked_backup = archive / "local_backups" / "tracked.md"
             tracked_backup.parent.mkdir()
-            canonical = results / "r1_trials3_summary.md"
-            archived_quick = archive / "r1_quick_summary.md"
+            canonical = results / "scheduler_trials3_summary.md"
+            archived_quick = archive / "scheduler_quick_summary.md"
             canonical.write_text("# Canonical\n")
             archived_quick.write_text("# Tracked archive\n")
             tracked_backup.write_text("# Tracked nested backup\n")
-            (results / "r1_quick_summary.md").write_text("[missing](nope.md)\n")
-            (results / "r1_smoke.md").write_text("[missing](nope.md)\n")
+            (results / "scheduler_quick_summary.md").write_text("[missing](nope.md)\n")
+            (results / "scheduler_smoke.md").write_text("[missing](nope.md)\n")
             (backups / "review.md").write_text("[missing](nope.md)\n")
 
             self.assertEqual(
@@ -153,8 +153,8 @@ class DocumentationCheckTests(unittest.TestCase):
     def test_accepts_placeholders_technical_private_terms_and_history(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            weekly = root / "docs" / "weekly"
-            weekly.mkdir(parents=True)
+            archive = root / "docs" / "archive"
+            archive.mkdir(parents=True)
             root.joinpath("README.md").write_text(
                 "Use /home/<user>/work/flashdec/ or C:\\Users\\<username>\\repo\\.\n"
                 "The request-private transition preserves the private tail.\n"
@@ -162,14 +162,14 @@ class DocumentationCheckTests(unittest.TestCase):
             root.joinpath("SECURITY.md").write_text(
                 "Use private vulnerability reporting and remove private paths.\n"
             )
-            (weekly / "week_1.md").write_text(
+            (archive / "legacy_stage.md").write_text(
                 "At that time the project used private maintenance.\n"
                 "Host: 192.168.1.42\n"
             )
 
             self.assertEqual(public_safety_problems(root), [])
 
-    def test_rejects_stale_visibility_wording_in_current_design_and_plan_docs(self):
+    def test_rejects_stale_visibility_wording_in_current_public_docs(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             docs = root / "docs"
@@ -177,7 +177,7 @@ class DocumentationCheckTests(unittest.TestCase):
             (docs / "design.md").write_text(
                 "仓库在最终 public-readiness gate 完成前仍为 private。\n"
             )
-            (docs / "ROADMAP.md").write_text(
+            (docs / "research_questions.md").write_text(
                 "The repository remains private until the visibility change.\n"
             )
 

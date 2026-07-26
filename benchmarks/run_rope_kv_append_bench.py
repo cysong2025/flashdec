@@ -209,7 +209,10 @@ def parse_args():
     parser.add_argument("--repeat", type=int, default=100)
     parser.add_argument("--seed", type=int, default=251)
     parser.add_argument("--quick", action="store_true", help="Run only default with at most warmup=5, repeat=20.")
-    parser.add_argument("--output", default="benchmarks/results/week11_rope_kv_append.csv")
+    parser.add_argument(
+        "--output",
+        default="benchmarks/results/rope_kv_append_backends.csv",
+    )
     return parser.parse_args()
 
 

@@ -1,4 +1,4 @@
-"""Dependency-free configuration coverage for the R4-C CUDA runner."""
+"""Dependency-free configuration coverage for the integrated CUDA runner."""
 
 import unittest
 

@@ -113,7 +113,7 @@ def write_summary(rows, output_path, input_path, expected_trials):
     commit = rows[0]["git_commit"]
     device = rows[0]["device"]
     lines = [
-        "# Scheduler Policy Workload Summary",
+        "# Scheduler Capacity and Progress Summary",
         "",
         "## Validation",
         "",
@@ -178,8 +178,11 @@ def write_summary(rows, output_path, input_path, expected_trials):
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", default="benchmarks/results/r1_scheduler_workload_trials3.csv")
-    parser.add_argument("--output", default="benchmarks/results/r1_scheduler_workload_trials3_summary.md")
+    parser.add_argument("--input", default="benchmarks/results/scheduler_workload_trials3.csv")
+    parser.add_argument(
+        "--output",
+        default="benchmarks/results/scheduler_capacity_progress_summary.md",
+    )
     parser.add_argument("--expected-trials", type=int, default=3)
     return parser.parse_args()
 

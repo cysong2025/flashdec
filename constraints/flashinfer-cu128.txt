@@ -1,0 +1,11 @@
+# Canonical Linux x86_64 / CPython 3.12 / RTX 5070 FlashInfer baseline environment.
+# This constrains the ABI/JIT-critical packages; pip freeze is the full record.
+# The torch local-version wheel requires the PyTorch cu128 package index.
+torch==2.11.0+cu128
+triton==3.6.0
+flashinfer-python==0.6.15.post1
+cuda-toolkit==12.8.1
+cuda-python==12.9.1
+cuda-bindings==12.9.7
+cuda-pathfinder==1.6.0
+ninja==1.13.0

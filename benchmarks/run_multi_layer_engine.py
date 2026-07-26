@@ -568,7 +568,7 @@ def parse_args():
     parser.add_argument("--quick", action="store_true")
     parser.add_argument(
         "--output",
-        default="benchmarks/results/r2_multi_layer_engine.csv",
+        default="benchmarks/results/multi_layer_transaction.csv",
     )
     return parser.parse_args()
 

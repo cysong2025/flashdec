@@ -1,4 +1,4 @@
-"""Profile a Week 2 matmul case with PyTorch profiler."""
+"""Profile a matmul case with the PyTorch profiler."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def parse_args():
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeat", type=int, default=10)
     parser.add_argument("--row-limit", type=int, default=20)
-    parser.add_argument("--output", default="benchmarks/profiles/week2_matmul_profiler.txt")
+    parser.add_argument("--output", default="benchmarks/profiles/matmul_profile.txt")
     return parser.parse_args()
 
 

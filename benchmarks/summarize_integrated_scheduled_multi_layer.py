@@ -1,4 +1,4 @@
-"""Strictly validate and summarize R4-C integrated workload evidence."""
+"""Strictly validate and summarize integrated-workload evidence."""
 
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ REQUIRED_FIELDS = set(GLOBAL_FIELDS) | {
 
 
 class IntegratedValidationError(ValueError):
-    """Raised when R4-C rows cannot support the recorded conclusions."""
+    """Raised when integrated-workload rows cannot support the conclusions."""
 
 
 def _integer(row, field):
@@ -120,7 +120,7 @@ def read_csv(path):
     with Path(path).open(newline="") as file:
         rows = list(csv.DictReader(file))
     if not rows:
-        raise IntegratedValidationError("R4-C CSV must contain rows")
+        raise IntegratedValidationError("integrated-workload CSV must contain rows")
     return rows
 
 
@@ -149,11 +149,13 @@ def validate_rows(
         if len(values) != 1:
             raise IntegratedValidationError(f"global field {field} is inconsistent")
     if rows[0]["append_backend"] != "fused_cuda":
-        raise IntegratedValidationError("R4-C must use the frozen fused CUDA path")
+        raise IntegratedValidationError("integrated workload must use fused CUDA append")
     if rows[0]["decode_backend"] != "triton":
-        raise IntegratedValidationError("R4-C must use the frozen Triton decode path")
+        raise IntegratedValidationError("integrated workload must use Triton decode")
     if rows[0]["metadata_policy"] != "materialized":
-        raise IntegratedValidationError("R4-C must use the R4-A materialized baseline")
+        raise IntegratedValidationError(
+            "integrated workload must use materialized transaction metadata"
+        )
 
     expected_keys = {
         (dtype, case, trial)
@@ -312,7 +314,7 @@ def aggregate(rows):
 def render_markdown(input_path, rows, aggregates):
     first = rows[0]
     lines = [
-        "# R4-C Integrated Scheduled Multi-layer Summary",
+        "# Integrated Runtime Lifecycle Summary",
         "",
         "## Validation",
         "",
@@ -321,9 +323,9 @@ def render_markdown(input_path, rows, aggregates):
         f"- Device: {first['device']}.",
         f"- PyTorch/CUDA: {first['torch']} / {first['cuda']}.",
         f"- Git commit: `{first['git_commit']}`.",
-        "- Frozen path: fused CUDA append + Triton decode + R4-A materialized transaction metadata.",
+        "- Fixed path: fused CUDA append + Triton decode + materialized transaction metadata.",
         "- Reference digest, dynamic admission/defer/completion/cancellation trajectory, rollback, transaction counts, prefix lifetime, released-block reuse, and final zero-used cleanup were validated.",
-        "- This matrix reports one integrated workload; it is not a shared-prefix speedup A/B and does not reopen frozen kernel tuning.",
+        "- This matrix reports one integrated workload; it is not a shared-prefix speedup A/B and does not change the established kernel configuration.",
         "",
         "## Cross-trial Absolute Results",
         "",
@@ -349,7 +351,7 @@ def render_markdown(input_path, rows, aggregates):
             "",
             "## Interpretation",
             "",
-            "- The primary R4-C gate is correctness and lifecycle closure, not a latency ratio.",
+            "- The validation focus is correctness and lifecycle closure, not a latency ratio.",
             "- p99 remains a small finite-trace tail statistic and is reported with the cross-trial range.",
             "- Context seeding is caller-supplied multi-layer prompt state for private misses; shared hits attach the fixed resident prefix. Random tensor construction and prefix registration are outside timing.",
             "- Terminal cleanup occurs only after every request is finished, cancelled, or rejected; no online prefix registration/eviction is part of this first slice.",
@@ -364,7 +366,7 @@ def parse_args():
     parser.add_argument("--input", required=True)
     parser.add_argument(
         "--output",
-        default="benchmarks/results/r4_integrated_scheduled_multi_layer_summary.md",
+        default="benchmarks/results/integrated_runtime_lifecycle_summary.md",
     )
     parser.add_argument("--expected-trials", type=int, default=3)
     parser.add_argument("--expected-cases", nargs="+", default=list(DEFAULT_CASES))
@@ -384,7 +386,7 @@ def main():
         )
         markdown = render_markdown(args.input, rows, aggregate(rows))
     except (OSError, ValueError, IntegratedValidationError) as exc:
-        raise SystemExit(f"invalid R4-C workload CSV: {exc}") from exc
+        raise SystemExit(f"invalid integrated workload CSV: {exc}") from exc
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(markdown)

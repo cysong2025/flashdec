@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: "📦 Delivery status and scope"
-    url: "https://github.com/cysong2025/flashdec/blob/main/docs/DELIVERY_STATUS.md"
-    about: "Check the frozen R1–R5 capabilities, canonical evidence, limits, and deferred release work."
+  - name: "🔬 Research questions and scope"
+    url: "https://github.com/cysong2025/flashdec/blob/main/docs/research_questions.md"
+    about: "Review the research questions, implementation boundaries, canonical evidence, and known limits."
   - name: "🧪 Reproduction and evidence guide"
     url: "https://github.com/cysong2025/flashdec/blob/main/docs/reproducibility.md"
     about: "Use the documented environment, validation layers, and timing boundaries before reporting results."

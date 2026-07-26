@@ -167,6 +167,7 @@ class DecodeEngineProfileHelperTests(unittest.TestCase):
             _write_summary(output, [_profile_row()])
             text = output.read_text()
 
+        self.assertTrue(text.startswith("# DecodeEngine Stage Profile Summary\n"))
         self.assertIn("mixed_steady", text)
         self.assertIn("fused_cuda", text)
         self.assertIn("`abc1234`", text)

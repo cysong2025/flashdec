@@ -1,4 +1,4 @@
-"""Run Week 1 Triton microbenchmarks."""
+"""Run Triton microbenchmarks for foundational operators."""
 
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def parse_args():
     parser.add_argument("--block-size", type=int, default=1024)
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--repeat", type=int, default=100)
-    parser.add_argument("--output", default="benchmarks/results/week1_microbench.csv")
+    parser.add_argument("--output", default="benchmarks/results/microbench.csv")
     return parser.parse_args()
 
 

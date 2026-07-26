@@ -4,7 +4,7 @@ FlashDec is a research prototype rather than a production serving framework. Sup
 
 ## Before opening an issue
 
-1. Read the [README](README.md), [documentation index](docs/INDEX.md), and [supported scope](docs/DELIVERY_STATUS.md).
+1. Read the [README](README.md), [research questions](docs/research_questions.md), and [documentation index](docs/INDEX.md).
 2. Check the [compatibility notes](docs/compatibility.md) and [reproduction guide](docs/reproducibility.md).
 3. Search existing issues for the same symptom or question.
 

@@ -11,7 +11,7 @@
 3. 生成每一行的 `physical_block` 与 `block_offset`。
 4. 在 CUDA kernel 成功发射后增长 `seq_len` 并生成 metadata。
 
-这样做先固定 allocator 和 native copy 的接口；下一步融合 RoPE 时，不会把状态机错误、RoPE 公式错误和 CUDA 写入错误混在一起排查。
+这样可以独立验证 allocator 与 native copy 的接口，避免把状态机错误、RoPE 公式错误和 CUDA 写入错误混在一起。
 
 ## 接口
 
@@ -87,8 +87,8 @@ export MAX_JOBS=1
 2. runtime integration：相同 token 序列分别走 `append()` 与 `append_cuda()`，比较 cache 内容、block table、request state、metrics 和 invariants。
 3. error path：CPU input、non-contiguous input 与 capacity failure；capacity failure 必须不创建 request、不分配 block。
 
-extension 会在 allocator mutation 前完成 JIT build；因此工具链或编译失败不会改变 cache state。capacity 在分配前统一检查。kernel 本身只接收 Python 已验证、由 allocator 生成的合法地址；本阶段没有为 runtime CUDA launch failure 设计 state rollback。
+extension 会在 allocator mutation 前完成 JIT build；因此工具链或编译失败不会改变 cache state。capacity 在分配前统一检查。kernel 本身只接收 Python 已验证、由 allocator 生成的合法地址；该路径没有为 runtime CUDA launch failure 设计 state rollback。
 
-## 当前状态
+## 验证与实验结论
 
-RTX 5070 已成功完成 JIT build 和完整 correctness。初次运行的 2 项公开 API namespace 失败已通过将内部模块改为 `_cuda_kv_append.py` 修复；修复后 focused 结果为 `34 passed in 3.59s`，完整回归为 `198 passed in 5.13s`。验证覆盖 raw slot 写入（FP16/BF16/FP32）、地址边界、runtime allocator 对齐、capacity atomicity 与既有 paged cache/decode 回归。后续三路径实验中，独立 CUDA append 的 p50 几何平均为 `0.9840x` vs torch，未形成稳定收益；fused RoPE + KV append 为 `1.2226x`，因此成为 GPU Engine 路径。
+RTX 5070 的验证覆盖 raw slot 写入（FP16/BF16/FP32）、地址边界、runtime allocator 对齐、capacity atomicity 与既有 paged cache/decode 回归。三路径实验中，独立 CUDA append 的 p50 几何平均为 `0.9840x` vs torch，未形成稳定收益；fused RoPE + KV append 为 `1.2226x`，因此 GPU Engine 选择 fused 路径。完整数据见[append backend summary](../benchmarks/results/rope_kv_append_backends_summary.md)。

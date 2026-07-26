@@ -99,6 +99,7 @@ class SchedulerWorkloadSummaryTests(unittest.TestCase):
             write_summary(_rows(), output, "input.csv", expected_trials=3)
             text = output.read_text()
 
+        self.assertTrue(text.startswith("# Scheduler Capacity and Progress Summary\n"))
         self.assertIn("Rows: 36", text)
         self.assertIn("`abc1234`", text)
         self.assertIn("boundary_deadlock", text)

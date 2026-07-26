@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the auditable, public R1-R5 evidence overview SVGs."""
+"""Generate the auditable FlashDec research-evidence overview SVGs."""
 
 from __future__ import annotations
 
@@ -223,7 +223,7 @@ def _ratio_range(value: str) -> tuple[float, float, float]:
 
 
 def _validate_provenance(
-    stage: str,
+    evidence_id: str,
     section: dict[str, Any],
     source_text: str,
     *,
@@ -236,23 +236,25 @@ def _validate_provenance(
     )
     if observed != expected:
         raise ValueError(
-            f"{stage} provenance must be commit/rows/trials "
+            f"{evidence_id} provenance must be commit/rows/trials "
             f"{'/'.join(map(str, expected))}, got {observed!r}"
         )
     metadata = _source_metadata(source_text)
     if metadata["commit"] != expected[0] or metadata["rows"] != expected[1]:
-        raise ValueError(f"{stage} snapshot provenance differs from canonical source")
+        raise ValueError(
+            f"{evidence_id} snapshot provenance differs from canonical source"
+        )
     if metadata["device"] != "NVIDIA GeForce RTX 5070":
-        raise ValueError(f"{stage} canonical source has an unexpected device")
+        raise ValueError(f"{evidence_id} canonical source has an unexpected device")
     if metadata["trials"] is not None and metadata["trials"] != expected[2]:
-        raise ValueError(f"{stage} trial count differs from canonical source")
+        raise ValueError(f"{evidence_id} trial count differs from canonical source")
     return metadata
 
 
 def validate_snapshot(data: dict[str, Any], *, root: Path = ROOT) -> None:
     """Validate the snapshot by parsing canonical tables and outcome sections."""
-    if data.get("schema_version") != 1:
-        raise ValueError("snapshot schema_version must be 1")
+    if data.get("schema_version") != 2:
+        raise ValueError("snapshot schema_version must be 2")
 
     artifact = data.get("artifact", {})
     expected_artifact = {
@@ -263,15 +265,16 @@ def validate_snapshot(data: dict[str, Any], *, root: Path = ROOT) -> None:
     for key, expected in expected_artifact.items():
         if artifact.get(key) != expected:
             raise ValueError(f"artifact.{key} must be {expected!r}")
-    if "not comparable across stages" not in artifact.get("ratio_boundary", ""):
-        raise ValueError("artifact.ratio_boundary must forbid cross-stage comparison")
+    if "not comparable across panels" not in artifact.get("ratio_boundary", ""):
+        raise ValueError("artifact.ratio_boundary must forbid cross-panel comparison")
 
-    r1 = data["r1_scheduler_progress"]
-    r3 = data["r3_shared_prefix_capacity"]
-    outcomes = data["optimization_outcomes"]["entries"]
-    r4c = data["r4c_integrated_correctness"]
-    r5 = data["r5_flashinfer_kernel_baseline"]
-    sections = [r1, r3, *outcomes, r4c, r5]
+    scheduler = data["scheduler_progress"]
+    shared_prefix = data["shared_prefix_capacity"]
+    optimization = data["optimization_outcomes"]
+    outcomes = optimization["entries"]
+    integrated = data["integrated_lifecycle"]
+    external_baseline = data["flashinfer_kernel_baseline"]
+    sections = [scheduler, shared_prefix, *outcomes, integrated, external_baseline]
     source_texts: dict[str, str] = {}
     for section in sections:
         source = root / section["source"]
@@ -279,22 +282,31 @@ def validate_snapshot(data: dict[str, Any], *, root: Path = ROOT) -> None:
             raise ValueError(f"canonical source does not exist: {section['source']}")
         source_texts[section["source"]] = source.read_text(encoding="utf-8")
 
-    if r1.get("kind") != "correctness_and_progress":
-        raise ValueError("R1 must be represented as correctness/progress evidence")
-    r1_outcomes = {
+    if scheduler.get("kind") != "correctness_and_progress":
+        raise ValueError(
+            "scheduler progress must be represented as correctness/progress evidence"
+        )
+    scheduler_outcomes = {
         row["id"]: (row["completed"], row["cancelled"], row["deadlock"])
-        for row in r1["policies"]
+        for row in scheduler["policies"]
     }
-    if r1_outcomes != {
+    if scheduler_outcomes != {
         "lifetime_fifo_aging": (2, 0, False),
         "cancel_on_backpressure": (1, 1, False),
         "greedy_step_only": (0, 0, True),
     }:
-        raise ValueError("R1 boundary-pressure outcomes do not match canonical evidence")
-    r1_text = source_texts[r1["source"]]
-    _validate_provenance("R1", r1, r1_text, expected=("16de9d4", 36, 3))
-    r1_table = _markdown_table(r1_text, "Cross-trial Medians")
-    observed_r1 = {
+        raise ValueError(
+            "scheduler boundary-pressure outcomes do not match canonical evidence"
+        )
+    scheduler_text = source_texts[scheduler["source"]]
+    _validate_provenance(
+        "scheduler_progress",
+        scheduler,
+        scheduler_text,
+        expected=("16de9d4", 36, 3),
+    )
+    scheduler_table = _markdown_table(scheduler_text, "Cross-trial Medians")
+    observed_scheduler = {
         (
             row["dtype"],
             row["policy"],
@@ -302,10 +314,10 @@ def validate_snapshot(data: dict[str, Any], *, root: Path = ROOT) -> None:
             row["cancellations"],
             row["deadlocks"],
         )
-        for row in r1_table
+        for row in scheduler_table
         if row["case"] == "boundary_deadlock"
     }
-    expected_r1 = {
+    expected_scheduler = {
         (dtype, policy, completion, cancellations, deadlocks)
         for dtype in ("float16", "bfloat16")
         for policy, completion, cancellations, deadlocks in (
@@ -314,40 +326,49 @@ def validate_snapshot(data: dict[str, Any], *, root: Path = ROOT) -> None:
             ("greedy_step_only", "0.000", "0", "1"),
         )
     }
-    if observed_r1 != expected_r1:
-        raise ValueError("R1 canonical boundary-pressure table changed")
+    if observed_scheduler != expected_scheduler:
+        raise ValueError("scheduler canonical boundary-pressure table changed")
 
-    if r3.get("kind") != "kv_pool_capacity_not_process_vram":
-        raise ValueError("R3 must distinguish KV-pool capacity from process VRAM")
-    expected_r3 = [
+    if shared_prefix.get("kind") != "kv_pool_capacity_not_process_vram":
+        raise ValueError(
+            "shared-prefix evidence must distinguish KV-pool capacity from process VRAM"
+        )
+    expected_shared_prefix = [
         (0, 64, 9, 0.0),
         (25, 52, 12, 1.5),
         (50, 36, 15, 3.5),
         (75, 20, 16, 5.5),
     ]
-    snapshot_r3 = [
+    snapshot_shared_prefix = [
         (
             row["hit_rate_percent"],
             row["physical_context_blocks"],
             row["admitted_requests"],
             row["saved_kv_capacity_mib"],
         )
-        for row in r3["points"]
+        for row in shared_prefix["points"]
     ]
-    if snapshot_r3 != expected_r3:
-        raise ValueError("R3 capacity/admission points do not match canonical evidence")
-    r3_text = source_texts[r3["source"]]
-    _validate_provenance("R3", r3, r3_text, expected=("fe72e27", 64, 8))
-    canonical_r3 = set()
-    for row in _markdown_table(r3_text, "Cross-trial Medians"):
+    if snapshot_shared_prefix != expected_shared_prefix:
+        raise ValueError(
+            "shared-prefix capacity/admission points do not match canonical evidence"
+        )
+    shared_prefix_text = source_texts[shared_prefix["source"]]
+    _validate_provenance(
+        "shared_prefix_capacity",
+        shared_prefix,
+        shared_prefix_text,
+        expected=("fe72e27", 64, 8),
+    )
+    canonical_shared_prefix = set()
+    for row in _markdown_table(shared_prefix_text, "Cross-trial Medians"):
         admitted, admitted_total = map(int, row["admitted"].split("/"))
         physical, logical = map(
             int,
             row["context physical/logical blocks"].split("/"),
         )
         if admitted_total != 16 or logical != 64:
-            raise ValueError("R3 canonical capacity denominator changed")
-        canonical_r3.add(
+            raise ValueError("shared-prefix canonical capacity denominator changed")
+        canonical_shared_prefix.add(
             (
                 row["dtype"],
                 int(row["hit rate"].rstrip("%")),
@@ -356,19 +377,36 @@ def validate_snapshot(data: dict[str, Any], *, root: Path = ROOT) -> None:
                 float(row["saved KV-capacity MiB"]),
             )
         )
-    expected_canonical_r3 = {
+    expected_canonical_shared_prefix = {
         (dtype, hit_rate, physical, admitted, saved)
         for dtype in ("float16", "bfloat16")
-        for hit_rate, physical, admitted, saved in expected_r3
+        for hit_rate, physical, admitted, saved in expected_shared_prefix
     }
-    if canonical_r3 != expected_canonical_r3:
-        raise ValueError("R3 canonical capacity table changed")
+    if canonical_shared_prefix != expected_canonical_shared_prefix:
+        raise ValueError("shared-prefix canonical capacity table changed")
 
     expected_outcomes = [
-        ("R2", 1.2101, 20, 24, "observed", "stability_observation"),
-        ("R4-A", 1.7307, 16, 16, "accepted", "scoped_acceptance"),
         (
-            "R4-B",
+            "fused_append",
+            "Fused append path",
+            1.2101,
+            20,
+            24,
+            "observed",
+            "stability_observation",
+        ),
+        (
+            "trusted_transaction",
+            "Trusted transaction path",
+            1.7307,
+            16,
+            16,
+            "accepted",
+            "scoped_acceptance",
+        ),
+        (
+            "persistent_metadata",
+            "Persistent metadata",
             1.2493,
             13,
             16,
@@ -378,7 +416,8 @@ def validate_snapshot(data: dict[str, Any], *, root: Path = ROOT) -> None:
     ]
     observed_outcomes = [
         (
-            row["stage"],
+            row["id"],
+            row["feature"],
             row["p50_ratio"],
             row["stable_groups"],
             row["total_groups"],
@@ -388,100 +427,145 @@ def validate_snapshot(data: dict[str, Any], *, root: Path = ROOT) -> None:
         for row in outcomes
     ]
     if observed_outcomes != expected_outcomes:
-        raise ValueError("R2/R4 outcome scorecard does not match canonical evidence")
+        raise ValueError(
+            "transaction-optimization scorecard does not match canonical evidence"
+        )
+
+    technical_boundary = optimization.get("technical_boundary", "")
+    if (
+        "different workloads and timing boundaries" not in technical_boundary
+        or "pre-registered keep gate" not in technical_boundary
+    ):
+        raise ValueError(
+            "optimization_outcomes.technical_boundary must state the comparison boundary"
+        )
 
     outcome_rules = {
-        "R2": ("fa0f89a", 144, 3, "fused_faster", 20, 24, 1.2101),
-        "R4-A": ("4018449", 160, 5, "trusted_faster", 16, 16, 1.7307),
-        "R4-B": ("8047a9c", 160, 5, "persistent_faster", 13, 16, 1.2493),
+        "fused_append": ("fa0f89a", 144, 3, "fused_faster", 20, 24, 1.2101),
+        "trusted_transaction": (
+            "4018449",
+            160,
+            5,
+            "trusted_faster",
+            16,
+            16,
+            1.7307,
+        ),
+        "persistent_metadata": (
+            "8047a9c",
+            160,
+            5,
+            "persistent_faster",
+            13,
+            16,
+            1.2493,
+        ),
     }
     for row in outcomes:
         commit, total_rows, trials, direction, stable, groups, p50 = outcome_rules[
-            row["stage"]
+            row["id"]
         ]
         source_text = source_texts[row["source"]]
         metadata = _validate_provenance(
-            row["stage"],
+            row["id"],
             row,
             source_text,
             expected=(commit, total_rows, trials),
         )
         case_table = _markdown_table(source_text, "Cross-trial Cases")
         if len(case_table) != groups:
-            raise ValueError(f"{row['stage']} canonical group count changed")
+            raise ValueError(f"{row['id']} canonical group count changed")
         if metadata["paired_trials"] != groups * trials:
-            raise ValueError(f"{row['stage']} paired-trial count changed")
+            raise ValueError(f"{row['id']} paired-trial count changed")
         if sum(case["direction"] == direction for case in case_table) != stable:
-            raise ValueError(f"{row['stage']} canonical stable-group count changed")
+            raise ValueError(f"{row['id']} canonical stable-group count changed")
         overall = _markdown_table(source_text, "Overall Geometric Mean")
         metric_row = next(
             (item for item in overall if item["metric"] == "complete-token p50"),
             None,
         )
         if metric_row is None:
-            raise ValueError(f"{row['stage']} canonical p50 metric is missing")
+            raise ValueError(f"{row['id']} canonical p50 metric is missing")
         ratio_column = next(key for key in metric_row if key != "metric")
         if _ratio(metric_row[ratio_column]) != p50:
-            raise ValueError(f"{row['stage']} canonical p50 ratio changed")
-    r4b_text = source_texts[outcomes[2]["source"]]
-    if "- Formal keep gate: `fail`." not in _markdown_section(
-        r4b_text,
-        "Performance Gates",
+            raise ValueError(f"{row['id']} canonical p50 ratio changed")
+    persistent_metadata_text = source_texts[outcomes[2]["source"]]
+    if "- Keep decision: `not adopted`." not in _markdown_section(
+        persistent_metadata_text,
+        "Pre-registered Decision Rule",
     ):
-        raise ValueError("R4-B canonical rejection gate changed")
+        raise ValueError("persistent-metadata decision rule changed")
 
-    if r4c.get("kind") != "integrated_correctness_and_lifecycle" or r4c.get(
+    if integrated.get("kind") != "integrated_correctness_and_lifecycle" or integrated.get(
         "status"
     ) != "passed":
-        raise ValueError("R4-C must be represented as a passed lifecycle gate")
-    r4c_text = source_texts[r4c["source"]]
-    _validate_provenance("R4-C", r4c, r4c_text, expected=("6912894", 24, 3))
-    if len(_markdown_table(r4c_text, "Cross-trial Absolute Results")) != 8:
-        raise ValueError("R4-C canonical matrix shape changed")
-    if "24 行全部通过 strict validator" not in _markdown_section(
-        r4c_text,
+        raise ValueError("integrated workload must be represented as a passed lifecycle gate")
+    integrated_text = source_texts[integrated["source"]]
+    _validate_provenance(
+        "integrated_lifecycle",
+        integrated,
+        integrated_text,
+        expected=("6912894", 24, 3),
+    )
+    if len(_markdown_table(integrated_text, "Cross-trial Absolute Results")) != 8:
+        raise ValueError("integrated-workload canonical matrix shape changed")
+    if "24 行均通过 strict validator" not in _markdown_section(
+        integrated_text,
         "Interpretation",
     ):
-        raise ValueError("R4-C canonical lifecycle acceptance changed")
+        raise ValueError("integrated-workload lifecycle validation changed")
 
-    if r5.get("kind") != "descriptive_external_kernel_baseline":
-        raise ValueError("R5 must be represented as descriptive kernel-only evidence")
-    if r5.get("performance_gate") is not False:
-        raise ValueError("R5 has no pass/fail performance gate")
-    if "above 1 favor FlashInfer" not in r5.get("ratio_direction", ""):
-        raise ValueError("R5 must state that ratios above 1 favor FlashInfer")
-    r5_text = source_texts[r5["source"]]
-    _validate_provenance("R5", r5, r5_text, expected=("d7d4feb", 72, 3))
-    r5_table = _markdown_table(r5_text, "Paired Cross-trial Results")
-    if len(r5_table) != 16:
-        raise ValueError("R5 canonical matrix must contain 16 backend comparisons")
+    if external_baseline.get("kind") != "descriptive_external_kernel_baseline":
+        raise ValueError("external baseline must be descriptive kernel-only evidence")
+    if external_baseline.get("performance_gate") is not False:
+        raise ValueError("external baseline must not define a performance gate")
+    if "above 1 favor FlashInfer" not in external_baseline.get(
+        "ratio_direction", ""
+    ):
+        raise ValueError("external baseline must state that ratios above 1 favor FlashInfer")
+    external_baseline_text = source_texts[external_baseline["source"]]
+    _validate_provenance(
+        "flashinfer_kernel_baseline",
+        external_baseline,
+        external_baseline_text,
+        expected=("d7d4feb", 72, 3),
+    )
+    external_baseline_table = _markdown_table(
+        external_baseline_text,
+        "Paired Cross-trial Results",
+    )
+    if len(external_baseline_table) != 16:
+        raise ValueError("external-baseline matrix must contain 16 backend comparisons")
     by_backend: dict[str, list[float]] = {}
     above_one = 0
-    for row in r5_table:
+    for row in external_baseline_table:
         median, minimum, _maximum = _ratio_range(
             row["p50 ratio FlashDec/external"]
         )
         by_backend.setdefault(row["external backend"], []).append(median)
         above_one += minimum > 1.0
-    canonical_r5 = [
+    canonical_external_baseline = [
         (backend["id"], backend["p50_ratio_geometric_mean"])
-        for backend in r5["backends"]
+        for backend in external_baseline["backends"]
     ]
-    observed_r5 = [
+    observed_external_baseline = [
         (
             backend,
             round(math.exp(sum(math.log(value) for value in values) / len(values)), 4),
         )
         for backend, values in sorted(by_backend.items())
     ]
-    if observed_r5 != sorted(canonical_r5):
-        raise ValueError("R5 canonical p50 geometric means changed")
+    if observed_external_baseline != sorted(canonical_external_baseline):
+        raise ValueError("external-baseline canonical p50 geometric means changed")
     range_counts = (
-        r5.get("observed_p50_ranges_above_one"),
-        r5.get("total_p50_ranges"),
+        external_baseline.get("observed_p50_ranges_above_one"),
+        external_baseline.get("total_p50_ranges"),
     )
-    if range_counts != (above_one, len(r5_table)) or range_counts != (16, 16):
-        raise ValueError("R5 observed p50 range counts changed")
+    if range_counts != (above_one, len(external_baseline_table)) or range_counts != (
+        16,
+        16,
+    ):
+        raise ValueError("external-baseline observed p50 range counts changed")
 
 
 def _style(palette: dict[str, str]) -> str:
@@ -526,10 +610,22 @@ def _panel_end(svg: SVG) -> None:
     svg.close("g")
 
 
-def _render_r1(svg: SVG, data: dict[str, Any], p: dict[str, str]) -> None:
+def _render_scheduler_progress(
+    svg: SVG,
+    data: dict[str, Any],
+    p: dict[str, str],
+) -> None:
     x, y, width, height = 64, 178, 674, 382
-    _panel(svg, x, y, width, height, "r1-panel", "R1 scheduler progress outcomes")
-    svg.text(x + 30, y + 43, "R1 · Scheduler progress", "panel-title")
+    _panel(
+        svg,
+        x,
+        y,
+        width,
+        height,
+        "scheduler-progress-panel",
+        "Scheduler progress outcomes",
+    )
+    svg.text(x + 30, y + 43, "Scheduler progress", "panel-title")
     svg.text(x + 30, y + 69, "Boundary-pressure case · 2 requests · FP16/BF16 agree", "panel-subtitle")
 
     bar_x = x + 266
@@ -577,10 +673,22 @@ def _render_r1(svg: SVG, data: dict[str, Any], p: dict[str, str]) -> None:
     _panel_end(svg)
 
 
-def _render_r3(svg: SVG, data: dict[str, Any], p: dict[str, str]) -> None:
+def _render_shared_prefix_capacity(
+    svg: SVG,
+    data: dict[str, Any],
+    p: dict[str, str],
+) -> None:
     x, y, width, height = 762, 178, 674, 382
-    _panel(svg, x, y, width, height, "r3-panel", "R3 shared-prefix capacity and admission")
-    svg.text(x + 30, y + 43, "R3 · Shared-prefix capacity", "panel-title")
+    _panel(
+        svg,
+        x,
+        y,
+        width,
+        height,
+        "shared-prefix-capacity-panel",
+        "Shared-prefix capacity and admission",
+    )
+    svg.text(x + 30, y + 43, "Shared-prefix capacity", "panel-title")
     svg.text(x + 30, y + 69, "48-block admission pool · 64 logical context blocks", "panel-subtitle")
 
     legend_y = y + 101
@@ -643,28 +751,28 @@ def _render_r3(svg: SVG, data: dict[str, Any], p: dict[str, str]) -> None:
 def _render_scorecard(
     svg: SVG,
     data: dict[str, Any],
-    r4c: dict[str, Any],
+    integrated_lifecycle: dict[str, Any],
     p: dict[str, str],
 ) -> None:
     x, y, width, height = 64, 584, 674, 416
-    _panel(svg, x, y, width, height, "scorecard-panel", "R2 and R4 evidence outcomes")
-    svg.text(x + 30, y + 43, "R2 / R4 · Recorded outcomes", "panel-title")
+    _panel(svg, x, y, width, height, "scorecard-panel", "Transaction optimization outcomes")
+    svg.text(x + 30, y + 43, "Transaction optimization", "panel-title")
     svg.text(x + 30, y + 69, "p50 ratio · stable groups · evidence disposition", "panel-subtitle")
 
-    svg.text(x + 31, y + 104, "PATH / STAGE", "tiny")
+    svg.text(x + 31, y + 104, "PATH / FEATURE", "tiny")
     svg.text(x + 392, y + 104, "P50", "tiny", text_anchor="end")
     svg.text(x + 475, y + 104, "STABLE", "tiny", text_anchor="middle")
     svg.text(x + width - 31, y + 104, "OUTCOME", "tiny", text_anchor="end")
 
     outcome_labels = {
         "observed": "OBSERVED",
-        "accepted": "ACCEPTED",
-        "rejected_and_rolled_back": "REJECTED",
+        "accepted": "ADOPTED",
+        "rejected_and_rolled_back": "NOT ADOPTED",
     }
     for index, row in enumerate(data["entries"]):
         row_y = y + 122 + index * 82
         svg.element("rect", class_="row", x=x + 22, y=row_y, width=width - 44, height=68, rx=13)
-        svg.text(x + 38, row_y + 25, f"{row['stage']} · {row['label']}", "label")
+        svg.text(x + 38, row_y + 25, row["feature"], "label")
         svg.text(x + 38, row_y + 47, row["ratio_direction"], "tiny")
         svg.text(x + 392, row_y + 30, f"{row['p50_ratio']:.4f}×", "value", text_anchor="end")
         svg.text(x + 475, row_y + 29, f"{row['stable_groups']}/{row['total_groups']}", "value", text_anchor="middle")
@@ -693,17 +801,31 @@ def _render_scorecard(
     svg.text(
         x + 30,
         y + height - 20,
-        f"R4-C lifecycle PASS · {r4c['rows']} rows / {r4c['trials']} trials",
+        "Integrated lifecycle · "
+        f"{integrated_lifecycle['rows']} validated rows / "
+        f"{integrated_lifecycle['trials']} trials",
         "tiny",
     )
-    svg.text(x + width - 30, y + height - 20, "R4-B rolled back", "tiny", text_anchor="end")
+    svg.text(x + width - 30, y + height - 20, "Persistent metadata was not adopted", "tiny", text_anchor="end")
     _panel_end(svg)
 
 
-def _render_r5(svg: SVG, data: dict[str, Any], p: dict[str, str]) -> None:
+def _render_flashinfer_kernel_baseline(
+    svg: SVG,
+    data: dict[str, Any],
+    p: dict[str, str],
+) -> None:
     x, y, width, height = 762, 584, 674, 416
-    _panel(svg, x, y, width, height, "r5-panel", "R5 FlashInfer kernel-only baseline")
-    svg.text(x + 30, y + 43, "R5 · External kernel baseline", "panel-title")
+    _panel(
+        svg,
+        x,
+        y,
+        width,
+        height,
+        "flashinfer-kernel-baseline-panel",
+        "FlashInfer kernel-only baseline",
+    )
+    svg.text(x + 30, y + 43, "External kernel baseline", "panel-title")
     svg.text(x + 30, y + 69, "Common-shape paged decode · geometric mean across 8 groups", "panel-subtitle")
 
     plot_left = x + 254
@@ -732,7 +854,7 @@ def _render_r5(svg: SVG, data: dict[str, Any], p: dict[str, str]) -> None:
     svg.text(
         x + 41,
         note_y + 51,
-        f"{data['observed_p50_ranges_above_one']}/{data['total_p50_ranges']} observed three-trial ranges are above 1; R5 has no winner gate.",
+        f"{data['observed_p50_ranges_above_one']}/{data['total_p50_ranges']} observed three-trial ranges are above 1; this is descriptive kernel evidence.",
         "small",
     )
     svg.text(x + 41, note_y + 74, "KERNEL-ONLY · excludes scheduler, KV ownership and end-to-end serving", "tiny")
@@ -756,43 +878,46 @@ def render_svg(data: dict[str, Any], theme: str) -> str:
         aria_labelledby="chart-title chart-description",
         data_theme=theme,
     )
-    svg.element("title", "FlashDec R1-R5 auditable evidence overview", id="chart-title")
+    svg.element("title", "FlashDec auditable research evidence overview", id="chart-title")
     svg.element(
         "desc",
-        "Four panels summarize R1 scheduler progress, R3 shared-prefix KV-pool capacity, "
-        "R2 and R4 outcomes including the rejected R4-B result and passed R4-C lifecycle, and the R5 "
-        "FlashInfer kernel-only p50 comparison. Data was derived from validated canonical "
+        "Four panels summarize scheduler progress, shared-prefix KV-pool capacity, "
+        "transaction optimization outcomes including a negative result and integrated lifecycle validation, "
+        "and the FlashInfer kernel-only p50 comparison. Data was derived from validated canonical "
         "Markdown summaries on an NVIDIA GeForce RTX 5070 and is not a raw dataset.",
         id="chart-description",
     )
+    outcomes_by_id = {
+        row["id"]: row for row in data["optimization_outcomes"]["entries"]
+    }
     evidence_sections = [
-        ("R1", data["r1_scheduler_progress"]),
-        ("R2", data["optimization_outcomes"]["entries"][0]),
-        ("R3", data["r3_shared_prefix_capacity"]),
-        ("R4-A", data["optimization_outcomes"]["entries"][1]),
-        ("R4-B", data["optimization_outcomes"]["entries"][2]),
-        ("R4-C", data["r4c_integrated_correctness"]),
-        ("R5", data["r5_flashinfer_kernel_baseline"]),
+        ("scheduler_progress", data["scheduler_progress"]),
+        ("fused_append", outcomes_by_id["fused_append"]),
+        ("shared_prefix_capacity", data["shared_prefix_capacity"]),
+        ("trusted_transaction", outcomes_by_id["trusted_transaction"]),
+        ("persistent_metadata", outcomes_by_id["persistent_metadata"]),
+        ("integrated_lifecycle", data["integrated_lifecycle"]),
+        ("flashinfer_kernel_baseline", data["flashinfer_kernel_baseline"]),
     ]
     metadata = {
         "device": data["artifact"]["device"],
         "evidence": [
             {
-                "stage": stage,
+                "id": evidence_id,
                 "commit": section["evidence_commit"],
                 "rows": section["rows"],
                 "trials": section["trials"],
             }
-            for stage, section in evidence_sections
+            for evidence_id, section in evidence_sections
         ],
         "snapshot": "benchmarks/results/public_results_snapshot.json",
         "sources": sorted(
             {
-                data["r1_scheduler_progress"]["source"],
-                data["r3_shared_prefix_capacity"]["source"],
-                data["r5_flashinfer_kernel_baseline"]["source"],
+                data["scheduler_progress"]["source"],
+                data["shared_prefix_capacity"]["source"],
+                data["flashinfer_kernel_baseline"]["source"],
                 *(row["source"] for row in data["optimization_outcomes"]["entries"]),
-                data["r4c_integrated_correctness"]["source"],
+                data["integrated_lifecycle"]["source"],
             }
         ),
     }
@@ -822,17 +947,21 @@ def render_svg(data: dict[str, Any], theme: str) -> str:
     svg.text(64, 126, data["artifact"]["title"], "title")
     svg.text(64, 157, "RTX 5070 · derived from validated canonical summaries · processed snapshot, not a raw dataset", "subtitle")
 
-    _render_r1(svg, data["r1_scheduler_progress"], p)
-    _render_r3(svg, data["r3_shared_prefix_capacity"], p)
+    _render_scheduler_progress(svg, data["scheduler_progress"], p)
+    _render_shared_prefix_capacity(svg, data["shared_prefix_capacity"], p)
     _render_scorecard(
         svg,
         data["optimization_outcomes"],
-        data["r4c_integrated_correctness"],
+        data["integrated_lifecycle"],
         p,
     )
-    _render_r5(svg, data["r5_flashinfer_kernel_baseline"], p)
+    _render_flashinfer_kernel_baseline(
+        svg,
+        data["flashinfer_kernel_baseline"],
+        p,
+    )
 
-    svg.text(750, 1037, "Ratios retain each source's direction and are not comparable across stages.", "footer")
+    svg.text(750, 1037, "Ratios retain each source's direction and are not comparable across panels.", "footer")
     svg.text(750, 1061, "Canonical Markdown remains authoritative · theme-specific SVGs are deterministic", "footer")
     svg.close("svg")
     return svg.finish()

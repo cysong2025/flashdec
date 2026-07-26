@@ -1,4 +1,4 @@
-"""Dependency-free strict validation coverage for R4-C evidence."""
+"""Dependency-free strict validation coverage for integrated-workload evidence."""
 
 import unittest
 
@@ -130,9 +130,10 @@ class IntegratedWorkloadSummaryTests(unittest.TestCase):
         self.assertEqual(validate_rows(rows), rows)
         aggregates = aggregate(rows)
         markdown = render_markdown("results.csv", rows, aggregates)
+        self.assertTrue(markdown.startswith("# Integrated Runtime Lifecycle Summary\n"))
         self.assertEqual(len(aggregates), 8)
         self.assertIn("Rows: 24; trials: 3", markdown)
-        self.assertIn("R4-A materialized", markdown)
+        self.assertIn("materialized transaction metadata", markdown)
         self.assertIn("not a shared-prefix speedup A/B", markdown)
         self.assertIn("zero-used cleanup", markdown)
 

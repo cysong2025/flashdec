@@ -1,4 +1,4 @@
-"""Correctness coverage for R3 shared immutable prefix blocks."""
+"""Correctness coverage for shared immutable prefix blocks."""
 
 import pytest
 
