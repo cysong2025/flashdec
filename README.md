@@ -39,22 +39,15 @@ FlashDec 研究在请求长度、batch 和 KV 容量持续变化时，如何把 
 
 ## 🏗️ 架构
 
-```mermaid
-flowchart LR
-    W["Synthetic / trace workload"] --> S["Block-aware Scheduler"]
-    S -->|runnable request ids| E["DecodeEngine"]
-    E -->|begin / commit / abort| C["Paged KV Runtime<br/>ownership · transactions · shared prefix"]
-    E -->|Q / K / V| A["Fused RoPE + KV Append<br/>CUDA / PyTorch fallback"]
-    C -->|Cache-owned block id / offset| A
-    A -->|write K / V| C
-    E -->|Q| D["Paged Decode Attention<br/>Triton / PyTorch reference"]
-    C -->|paged K / V · block table · seq len| D
-    D -->|layer output| E
-    E -. latency / events .-> O["Observability & Evidence"]
-    C -. capacity / lifecycle .-> O
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/flashdec-architecture-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/flashdec-architecture-light.svg">
+    <img src="docs/assets/flashdec-architecture-light.svg" width="100%" alt="FlashDec architecture showing the caller, scheduler, DecodeEngine, transactional PagedKVCache, fused RoPE and KV append, paged decode attention, and the evidence boundary.">
+  </picture>
+</p>
 
-Scheduler 只输出 request ids 和容量决策；DecodeEngine 组织执行；Paged KV Runtime 是 block ownership、事务和 lifecycle 的唯一权威来源。Kernel 不推进 request 状态，benchmark 也不拥有运行时对象。
+Scheduler 只输出版本化容量决策；DecodeEngine 组织执行；PagedKVCache 是 block ownership、事务、`seq_len` 和 lifecycle 的唯一权威来源。RoPE/append 产生 rotated Q 并写入 K/V，paged attention 再读取 Cache-owned paged K/V；Kernel 不推进 request 状态，benchmark 也不拥有运行时对象。完整语义见[总体设计](docs/design.md)。
 
 ## ✨ R1–R5 交付矩阵
 

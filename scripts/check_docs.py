@@ -9,6 +9,10 @@ from urllib.parse import unquote
 
 
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+HTML_RESOURCE = re.compile(
+    r"\b(?:src|srcset)\s*=\s*[\"']([^\"']+)[\"']",
+    re.IGNORECASE,
+)
 SKIP_PREFIXES = ("http://", "https://", "mailto:", "data:", "#")
 DEFAULT_ROOT_FILES = ("README.md", "CHANGELOG.md", "CONTRIBUTING.md")
 DEFAULT_DIRECTORIES = ("docs", "benchmarks", "scripts", ".github")
@@ -51,6 +55,16 @@ def markdown_files(root: Path):
     return sorted(public_files)
 
 
+def document_targets(line: str):
+    """Yield Markdown links and HTML image resources from one source line."""
+    yield from MARKDOWN_LINK.findall(line)
+    for raw_srcset in HTML_RESOURCE.findall(line):
+        for candidate in raw_srcset.split(","):
+            target = candidate.strip().split(maxsplit=1)[0]
+            if target:
+                yield target
+
+
 def local_link_problems(root: Path):
     """Return missing repository-local Markdown link targets."""
     root = root.resolve()
@@ -58,7 +72,7 @@ def local_link_problems(root: Path):
     for document in markdown_files(root):
         text = document.read_text(encoding="utf-8")
         for line_number, line in enumerate(text.splitlines(), 1):
-            for raw_target in MARKDOWN_LINK.findall(line):
+            for raw_target in document_targets(line):
                 target = raw_target.strip().strip("<>")
                 if not target or target.startswith(SKIP_PREFIXES):
                     continue

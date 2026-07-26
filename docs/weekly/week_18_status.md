@@ -11,7 +11,7 @@ R1–R5 完成后的项目整理与交付审查：统一当前状态、证据入
 - 修正 R3/R4-C 后仍残留的“未实现 prefix cache / multi-layer prompt prefill”歧义：当前支持调用方预构建 shared prefix 和调用方提供的多层 context K/V，但不执行模型 prefill forward 或内容构建/hash。
 - canonical Markdown、忽略的 CSV/log/profile/local backups 和 release evidence gate 的用途已分开说明；本轮不删除本地实验原始文件。
 - release artifact gate 补入统一交付状态和 R1 `scheduled_workload` 实现/测试覆盖，避免关键交付文件缺失时仍通过结构检查。
-- GitHub landing page 使用有限 badge、Mermaid runtime 数据流与精简 R1–R5 交付矩阵；新增 correctness/regression、scoped change/evidence issue forms 和 PR validation template，并将 `.github/` collaboration surface 纳入 docs/release checks。
+- GitHub landing page 使用有限 badge、GitHub light/dark 双主题 runtime SVG 与精简 R1–R5 交付矩阵；图中明确 rotated Q、Cache-owned paged K/V 和 FlashInfer kernel-only evidence 边界。新增 correctness/regression、scoped change/evidence issue forms 和 PR validation template，并将 `.github/` collaboration surface 纳入 docs/release checks。
 
 ## 本轮范围
 
@@ -35,9 +35,9 @@ git diff --check
 
 - documentation check：`PASS (73 files)`；
 - release evidence check：`PASS`；
-- compileall 与 `git diff --check`：通过；
+- 双主题 SVG XML、完整尺寸渲染、compileall 与 `git diff --check`：通过；
 - GitHub issue/workflow YAML parse：通过；
-- dependency-free pytest：`147 passed, 94 subtests passed in 0.53s`。
+- dependency-free pytest：`148 passed, 94 subtests passed`。
 
 GPU/full 证据继续使用 commit `d7d4feb` 的 `453 passed, 94 subtests passed`；本轮没有运行或声称新的 GPU 结果，也没有创建新环境。
 

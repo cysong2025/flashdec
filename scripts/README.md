@@ -35,7 +35,7 @@ docs/environment.md
 python scripts/check_docs.py
 ```
 
-该脚本扫描 README、CHANGELOG、CONTRIBUTING、`docs/`、`benchmarks/`、`scripts/` 和 `.github/` 中的 canonical Markdown 链接，拒绝缺失目标、逃逸出仓库的相对路径，以及与项目实现无关的个人评估措辞；外部 URL 不发起网络请求。`benchmarks/results/` 下由 Git 忽略的 `*_quick_summary.md`、`*_smoke.md` 和 `local_backups/` 不属于交付文档，因此不进入扫描。
+该脚本扫描 README、CHANGELOG、CONTRIBUTING、`docs/`、`benchmarks/`、`scripts/` 和 `.github/` 中的 canonical Markdown 链接及 HTML `src`/`srcset` 图片资源，拒绝缺失目标、逃逸出仓库的相对路径，以及与项目实现无关的个人评估措辞；外部 URL 不发起网络请求。`benchmarks/results/` 下由 Git 忽略的 `*_quick_summary.md`、`*_smoke.md` 和 `local_backups/` 不属于交付文档，因此不进入扫描。
 
 发布候选结构检查：
 

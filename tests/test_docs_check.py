@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from scripts.check_docs import (
+    document_targets,
     documentation_problems,
     local_link_problems,
     markdown_files,
@@ -36,6 +37,27 @@ class DocumentationCheckTests(unittest.TestCase):
 
             self.assertEqual(local_link_problems(root), [])
             self.assertEqual(len(markdown_files(root)), 2)
+
+    def test_checks_html_picture_sources_and_fallback(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            assets = root / "docs" / "assets"
+            assets.mkdir(parents=True)
+            (assets / "light.svg").write_text("<svg/>")
+            root.joinpath("README.md").write_text(
+                '<picture>\n'
+                '  <source srcset="docs/assets/dark.svg 1x, https://example.com/dark.svg 2x">\n'
+                '  <img src="docs/assets/light.svg">\n'
+                '</picture>\n'
+            )
+
+            self.assertEqual(
+                list(document_targets('<img src="docs/assets/light.svg">')),
+                ["docs/assets/light.svg"],
+            )
+            problems = local_link_problems(root)
+            self.assertEqual(len(problems), 1)
+            self.assertIn("docs/assets/dark.svg", problems[0])
 
     def test_scans_github_markdown_templates(self):
         with TemporaryDirectory() as directory:

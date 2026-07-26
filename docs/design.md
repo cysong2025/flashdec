@@ -14,28 +14,15 @@ FlashDec 研究单 GPU LLM decode 中三个相互关联的问题：
 
 ## 2. 分层架构
 
-```text
-Workload / caller
-        |
-        v
-BlockAwareScheduler       request order, capacity commitment, fairness
-        |
-        v
-DecodeEngine              row mapping, lifecycle, execution orchestration
-        |
-        v
-PagedKVCache              block ownership, transaction, commit / rollback
-        |
-        +-------------------------------+
-        |                               |
-        v                               v
-Fused RoPE + KV Append             Observability
-CUDA extension                     latency, events, memory
-        |
-        v
-Paged Decode Attention
-Triton kernel / PyTorch reference
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/flashdec-architecture-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/flashdec-architecture-light.svg">
+    <img src="assets/flashdec-architecture-light.svg" width="100%" alt="FlashDec 分层架构：caller、scheduler、DecodeEngine、事务化 PagedKVCache、RoPE/KV append、paged decode attention 与证据边界。">
+  </picture>
+</p>
+
+单次 token transaction 的数据路径是：DecodeEngine 把当前层 Q/K/V 和 Cache 预留的位置交给 fused RoPE + KV append；append 返回 rotated Q 并把 rotated K 与 V 写入 Cache；paged decode attention 使用 rotated Q，以及 Cache 提供的 paged K/V、block tables 和 effective seq_lens。Attention 输出回到 DecodeEngine 后才能继续下一层或提交事务。
 
 所有权规则：
 
