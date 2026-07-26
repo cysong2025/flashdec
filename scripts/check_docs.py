@@ -12,6 +12,8 @@ MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 SKIP_PREFIXES = ("http://", "https://", "mailto:", "data:", "#")
 DEFAULT_ROOT_FILES = ("README.md", "CHANGELOG.md", "CONTRIBUTING.md")
 DEFAULT_DIRECTORIES = ("docs", "benchmarks", "scripts")
+IGNORED_RESULT_DIRECTORIES = ("local_backups",)
+IGNORED_RESULT_SUFFIXES = ("_quick_summary.md", "_smoke.md")
 DISALLOWED_PORTFOLIO_TERMS = (
     "面试",
     "求职",
@@ -28,7 +30,25 @@ def markdown_files(root: Path):
         path = root / directory
         if path.is_dir():
             files.extend(path.rglob("*.md"))
-    return sorted(set(files))
+    public_files = []
+    result_root = root / "benchmarks" / "results"
+    for path in set(files):
+        try:
+            result_relative = path.relative_to(result_root)
+        except ValueError:
+            public_files.append(path)
+            continue
+        if (
+            result_relative.parts
+            and result_relative.parts[0] in IGNORED_RESULT_DIRECTORIES
+        ):
+            continue
+        if len(result_relative.parts) == 1 and path.name.endswith(
+            IGNORED_RESULT_SUFFIXES
+        ):
+            continue
+        public_files.append(path)
+    return sorted(public_files)
 
 
 def local_link_problems(root: Path):

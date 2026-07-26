@@ -19,5 +19,6 @@
 - [Stage 15](week_15_status.md)：Trusted Transaction Fast Path R4
 - [Stage 16](week_16_status.md)：Integrated Scheduled Multi-layer Workload R4-C
 - [Stage 17](week_17_status.md)：FlashInfer 有限公开基线 R5
+- [Stage 18](week_18_status.md)：项目整理、统一交付状态与 release 边界
 
-当前设计与结果入口见[文档索引](../INDEX.md)。
+当前设计与结果入口见[交付状态](../DELIVERY_STATUS.md)和[文档索引](../INDEX.md)。

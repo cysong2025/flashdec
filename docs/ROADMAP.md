@@ -374,12 +374,12 @@ dynamic arrivals
 
 ### 有限公开对比
 
-- 选择 FlashInfer 或 vLLM 的公开、可安装版本之一并固定版本/commit。
+- 已选择并固定 `flashinfer-python==0.6.15.post1`；vLLM 完整 serving 不属于第一版共同 kernel 边界。
 - 只比较共同支持的 paged decode shape、dtype、layout 语义。
 - 分离 kernel-only 与 runtime workload，不把不同计时边界放在同一 speedup 表中。
 - 同时记录安装成本、API/布局转换和不兼容项。
 
-第一版固定 `flashinfer-python==0.6.15.post1`，只比较双方共同支持的 batch paged-decode attention。正式矩阵为 4 个冻结 shape、FP16/BF16、FlashDec Triton + FlashInfer FA2 CUDA-core/tensor-core、3 trials，共 72 rows。输入、page table、softmax scale 与 physical layout 共用；FlashInfer `plan()`、JIT、随机输入和 reference validation 全部在 CUDA-event timing 之外。CUDA-core/tensor-core 的 p50 ratio 几何平均为 `1.2003x/1.2284x`，16/16 个三轮范围高于 1；p99 的 7/16 范围重叠，不作稳定尾延迟或 runtime 胜负声明。完整契约见[FlashInfer 基线设计](design_flashinfer_baseline.md)，逐组数据见[R5 正式摘要](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md)。
+第一版固定 `flashinfer-python==0.6.15.post1`，只比较双方共同支持的 batch paged-decode attention。正式矩阵为 4 个冻结 shape、FP16/BF16、FlashDec Triton + FlashInfer FA2 CUDA-core/tensor-core、3 trials，共 72 rows。FlashDec token-major 直接对应 FlashInfer HND；双方共用逻辑 Q/K/V pages、page table 和 softmax scale，API/metadata 适配、FlashInfer `plan()`、JIT、随机输入和 reference validation 全部在 CUDA-event timing 之外。CUDA-core/tensor-core 的 p50 ratio 几何平均为 `1.2003x/1.2284x`，16/16 个三轮范围高于 1；p99 的 7/16 范围重叠，不作稳定尾延迟或 runtime 胜负声明。完整契约见[FlashInfer 基线设计](design_flashinfer_baseline.md)，逐组数据见[R5 正式摘要](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md)。
 
 ### 对外材料
 
@@ -393,17 +393,16 @@ dynamic arrivals
 
 ## 10. 优先级与截止线
 
-| 优先级 | 内容 | 是否影响“深度项目”完成 |
+| 优先级 | 内容 | 当前状态 |
 | --- | --- | --- |
-| P0 | multi-trial、阶段归因、reproducibility、v0.1.0 | 必须 |
-| P1 | block-aware scheduler | 必须，最重要的系统扩展 |
-| P1 | multi-layer KV transaction | 必须，修复当前架构边界 |
-| P2 | shared prefix blocks | 已完成 R3-A 至 R3-D |
-| P1 | trusted transaction fast path + integrated workload | R4-A 与 R4-C 已完成；R4-B 未过 keep gate 后已回滚 |
-| P2 | FlashInfer/vLLM 有限公开对比 | 已选择 FlashInfer；runner/validator、RTX 72-row 正式矩阵和 canonical evidence 均已完成 |
-| 不做 | HTTP server、完整模型、sampling、TP/PP、多机、swap/offload | 不影响项目完成 |
+| 技术证据 | multi-trial、阶段归因、R1 Scheduler、R2 Multi-layer | 已完成 |
+| 系统扩展 | R3 Shared Prefix、R4 trusted/integrated workload | 已完成；R4-B 负结果与回滚保留 |
+| 外部基线 | 固定版本 FlashInfer 有限共同 kernel 对比 | 已完成 72-row/3-trial 正式矩阵 |
+| 项目交付 | 交付状态、结果索引、范围/复现/发布边界一致性 | 已完成整理；不改变冻结实现 |
+| Release-only | fresh environment、`0.1.0`、公开设置、tag | 按所有者要求暂停，不影响 R1–R5 工程完成 |
+| 不做 | HTTP server、完整模型、sampling、TP/PP、多机、swap/offload | 不在当前交付范围 |
 
-如果时间不足，项目应在 R2 后停止增加功能，集中完成复现和文章。Scheduler + multi-layer transaction 比再增加三个小 kernel 更能证明 AI Infra 深度。
+技术深度的完成标准与 `v0.1.0` 发布门是两件事：前者由 R1–R5 的实现、correctness 和正式证据闭合；后者仍需要全新环境复现、版本与 tag，未经所有者指令不启动。
 
 ## 11. 每阶段统一 Definition of Done
 
@@ -421,7 +420,8 @@ dynamic arrivals
 ## 12. 当前立即执行顺序
 
 1. R1 Scheduler、R2 Multi-layer、R3 Shared Prefix、R4 trusted/integrated 与 R5 public baseline 的实现和正式证据均已完成。
-2. 先进行项目整理与交付审查：统一当前状态、结果索引、范围声明、仓库结构和可复现入口，不新增功能或重新调参。
-3. 仓库继续保持 private `0.0.0`；收到所有者明确指令后，才执行 clean-machine install、版本升级、公开设置与 tag。
+2. 项目整理已统一当前状态、结果索引、范围声明、仓库结构和可复现入口，没有新增功能或重新调参。
+3. 当前进入 private `0.0.0` 维护状态，只处理 correctness、回归、文档与证据问题。
+4. 收到所有者明确 release 指令后，才执行 clean-machine install、版本升级、公开设置与 tag。
 
 这条顺序把研究阶段与发布阶段分离，避免在整理中改变已经冻结的实验边界。

@@ -92,7 +92,7 @@ allocate/free/reuse      block_tables/seq_lens
 - tokenizer、采样、logits processor 和完整 Transformer 模型。
 - HTTP/RPC 服务、鉴权、流式返回等网络层。
 - tensor parallel、pipeline parallel 或多机调度。
-- prefix cache、swap、CPU offload 和生产级抢占。
+- 自动 prefix 内容哈希/模型 prefill 构建、admission-time 在线 eviction、swap、CPU offload 和生产级抢占；R3 已支持调用方提供的 immutable full-block shared prefix。
 - 完整 prefill kernel 与生产级 continuous batching scheduler。
 - 完整多 layer 模型 forward；当前只实现调用方提供逐层 Q/K/V 的顺序 token transaction。
 
@@ -110,9 +110,9 @@ allocate/free/reuse      block_tables/seq_lens
 | External Baseline | 固定 FlashInfer 0.6.15.post1 的 72-row/3-trial 共同 paged-decode kernel-only 对比完成 | 不外推 scheduler、transaction、完整 serving 或生产尾延迟 |
 | Reproducibility | 环境检查、分层验证、严格 summary、R1-R5 canonical evidence 与 release checker 已完成 | clean-machine install、版本与 tag 留在最终发布阶段 |
 
-## Release candidate 完成标准
+## v0.1.0 Release candidate gate
 
-只有满足以下条件，FlashDec 才算完成一个有足够深度的 AI Infra 项目：
+R1–R5 已满足研究型 AI Infra 项目的技术深度与证据要求。若要进一步发布 `v0.1.0`，还必须满足以下 release gate：
 
 1. kernel correctness 与最终配置有完整证据。
 2. Paged KV Cache 支持 request add、append、finish/cancel、block free/reuse 和容量统计。
@@ -122,8 +122,8 @@ allocate/free/reuse      block_tables/seq_lens
 6. request churn、容量耗尽、释放后复用等状态机测试通过。
 7. 新环境能够按文档复现 correctness 和 quick end-to-end benchmark。
 
-单个 kernel 更快、参数 sweep 更多，不能单独满足上述完成标准。
+单个 kernel 更快、参数 sweep 更多，不能单独满足技术交付或 release gate。上述技术 gate 的第 1–6 项已满足，第 7 项按所有者要求暂停；版本升级、仓库可见性/许可证决定和 tag 也仍属独立 release 工作，因此不能称为已发布 `v0.1.0`。
 
 ## 选择性扩展边界
 
-Block-aware Scheduler、multi-layer KV token transaction、shared prefix blocks、trusted/integrated transaction 与 FlashInfer 有限公开基线均已完成。当前不自动启动下一条功能主线；仓库保持 private `0.0.0`，先进行项目整理与交付审查，版本、公开和 tag 等待所有者明确启动 release gate。完整优先级与验收门槛见 `docs/ROADMAP.md`。
+Block-aware Scheduler、multi-layer KV token transaction、shared prefix blocks、trusted/integrated transaction 与 FlashInfer 有限公开基线均已完成，项目整理也已统一交付入口。当前不自动启动下一条功能主线；仓库保持 private `0.0.0`，新环境复现、版本、公开和 tag 等待所有者明确启动 release gate。完整状态见[交付状态](DELIVERY_STATUS.md)，优先级与验收门槛见[路线图](ROADMAP.md)。

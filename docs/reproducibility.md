@@ -2,14 +2,14 @@
 
 ## 目的与证据边界
 
-本文定义第三方复现 FlashDec `v0.1.0` 候选版本的唯一流程。复现分为四层，不能用后一层的成功替代前一层：
+本文定义 FlashDec 证据复核与未来 `v0.1.0` 候选版本的复现流程。仓库当前保持 private，只有已有访问权限的审阅者可以直接使用；若未来公开，同一流程才成为第三方入口。复现分为四层，不能用后一层的成功替代前一层：
 
 1. environment/package：依赖、commit、CUDA Toolkit 和编译器可见。
 2. correctness：reference、runtime state machine、native extension 和 Triton 对齐。
 3. non-instrumented benchmark：CUDA-event 或完整 Engine wall-clock 性能。
 4. instrumented profiling：阶段归因和 Chrome trace，不作为 release latency。
 
-所有公开数字必须绑定 commit、命令、GPU、PyTorch/CUDA、shape、dtype、warmup/repeat/trial 和结果摘要。当前 macOS Codex 工作区没有 torch/pytest/CUDA；GPU 证据只来自个人 RTX 5070 WSL 环境。
+所有公开数字必须绑定 commit、命令、GPU、PyTorch/CUDA、shape、dtype、warmup/repeat/trial 和结果摘要。当前 macOS Codex 工作区没有项目 GPU 栈（Torch/CUDA）；dependency-free pytest 使用 Codex bundled runtime 执行，GPU 证据只来自个人 RTX 5070 WSL 环境。
 
 ## 已验证参考环境
 
@@ -28,9 +28,9 @@ GCC/G++: 13.3.0
 
 驱动、`nvidia-smi` 和完整环境历史见 `docs/environment.md`。这里记录的是已验证参考环境，不表示项目只能在这些精确版本运行；其他组合必须重新执行 correctness，不得直接继承性能结论。
 
-正式 release 前需要在 clean WSL venv 生成并审核 `pip freeze`；当前不提交未在新环境验证的伪 lock file。
+正式 release 前需要在 clean WSL venv 生成并审核 `pip freeze`；当前不提交未在新环境验证的伪 lock file。按所有者要求，本轮项目整理不创建新目录/新 virtualenv，也不把历史环境重跑伪装成 clean-install 证据。
 
-## Fresh clone 与安装
+## Fresh clone 与安装（当前暂停）
 
 ```bash
 git clone https://github.com/cysong2025/flashdec.git
@@ -48,6 +48,7 @@ extras：
 - 默认依赖：torch、triton。
 - `dev`：pytest。
 - `cuda-extension`：Ninja，用于 lazy JIT C++/CUDA extension。
+- `baseline`：固定 `flashinfer-python==0.6.15.post1`；不得脱离 R5 constraints 在既有 cu128 环境直接解析安装。
 
 若通用 PyPI 解析出的 torch 不是目标 CUDA build，应先按目标环境安装匹配的 PyTorch，再使用：
 
@@ -562,7 +563,7 @@ Mac 再通过 Windows OpenSSH 拉取；代码同步始终使用 GitHub，不用�
 python scripts/check_release.py --require-clean
 ```
 
-该命令检查必需 artifact、`pyproject.toml`/`flashdec.__version__` 一致性和 clean Git worktree。当前版本仍为 `0.0.0`，因此此时不要求 tag。
+该命令检查必需 artifact、`pyproject.toml`/`flashdec.__version__` 一致性和 clean Git worktree。该调用没有启用 `--require-tag`；当前仍为 `0.0.0` development candidate，因此此阶段也不应启用 tag gate。
 
 只有所有者明确启动 release 且完成所有 GPU/clean-install gate 后：
 
@@ -592,7 +593,8 @@ python scripts/check_release.py --require-clean
 | R4-B persistent metadata | 已评估并回滚 | commit `8047a9c` 的 correctness 与 [160-row/80-pair 正式负结果](../benchmarks/results/r4_persistent_transaction_metadata_trials5_summary.md)；overall p50 `1.2493x`，但仅 13/16 分组稳定胜出，未通过 keep gate |
 | R4-C integrated workload | 已完成 | commit `6912894` 的 focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`、FP16 quick 与 [24-row/3-trial canonical summary](../benchmarks/results/r4_integrated_scheduled_multi_layer_trials3_summary.md)；digest/rollback/prefix/reuse/cleanup 全部通过 |
 | R5 FlashInfer 有限基线 | 已完成 | commit `d7d4feb` 的 post-schema focused `93 passed, 37 subtests passed`、3-row quick、72-row/3-trial formal、full `453 passed, 94 subtests passed` 与 clean-tree release check `PASS`；[canonical summary](../benchmarks/results/r5_flashinfer_paged_decode_trials3_summary.md) 已纳入 evidence gate |
-| Clean WSL editable install | 暂停 | 仓库继续 private；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
+| Project handoff | 已完成 | [交付状态](DELIVERY_STATUS.md)、[结果索引](../benchmarks/results/README.md)、一致性检查与扩展后的 release guard |
+| Clean WSL editable install | 暂停 | 所有者已明确本轮不做新环境复现；收到 release 指令后保存新 venv、pip freeze、pytest/quick 输出 |
 | Package version `0.1.0` | 未设置 | pyproject/package version equality |
 | `v0.1.0` tag | 未创建 | `check_release.py --require-tag` |
 

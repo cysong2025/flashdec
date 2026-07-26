@@ -31,6 +31,7 @@
 - R4-C integrated scheduled multi-layer workload：原子 caller-supplied multi-layer prompt transaction、terminal Engine-owned prefix cleanup、dynamic mixed-prefix reference trajectory、layer-failure rollback、released-block reuse、observed/reference SHA-256 digest、24-row CUDA runner 与 strict summary validator。
 - R5 FlashInfer public baseline：固定 `flashinfer-python==0.6.15.post1`，在相同 Q/K/V、page table、HND physical layout 与 CUDA-event timing 下运行 FlashDec Triton、FlashInfer FA2 CUDA-core/tensor-core；新增 72-row runner、strict summary、optional CUDA correctness 与 dependency-free matrix tests。
 - R5 CUDA 12.8/SM120a 复现护栏：新增 `constraints/r5-cu128.txt`，固定 Torch/Triton/CUDA Python packages/Ninja；runner 在 FlashInfer import/JIT 前验证 `CUDA_HOME` 与 `FLASHINFER_CUDA_ARCH_LIST=12.0a`，CSV/strict summary 记录并拒绝环境漂移。
+- R1–R5 [交付状态](docs/DELIVERY_STATUS.md)与 [benchmark 结果索引](benchmarks/results/README.md)：集中记录能力、canonical evidence、负结果、本地产物边界和暂停的 release 项。
 
 ### Changed
 
@@ -38,7 +39,8 @@
 - Python package 核心依赖只保留 torch/triton；pytest 移入 `dev` extra，Ninja 保留在 `cuda-extension` extra。
 - GPU Engine 明确使用 fused CUDA append policy；公开 reference API 默认仍保持 PyTorch 路径。
 - DecodeEngine workload CSV、multi-trial summary 和 profiler evidence 现在绑定生成时的 Git commit。
-- Release artifact/evidence gate 现在同时要求 R1 Scheduler、R2 Multi-layer、R3 Shared Prefix、R4-A Trusted Transaction、R4-C Integrated Workload 与 R5 FlashInfer Baseline 的 runner、validator、focused tests 和最终 Markdown summary。
+- Release artifact/evidence gate 现在同时要求冻结 kernel 默认配置、R1 Scheduler、R2 Multi-layer、R3 Shared Prefix、R4-A Trusted Transaction、R4-B Persistent Metadata 正式负结果、R4-C Integrated Workload 与 R5 FlashInfer Baseline 的 runner、validator、focused tests 和最终 Markdown summary。
+- Release artifact gate 进一步覆盖完整 R1 scheduled-workload surface、交付/复现/结果索引和当前核心设计文档；Markdown checker 忽略 Git 本就不跟踪的 quick/smoke summaries 与 `local_backups/`，避免本地证据污染 canonical 文档检查。
 - R4-A profiler attribution 改用 CPU-only WARMUP→active schedule；active CPU user annotation 提供 inclusive host time，并严格验证 checked/trusted scalar extraction。少记 range/scalar 可用相同 seed、全新 probe 最多重采集三次并记录 attempt count，多记立即失败。paired trial 先完成两条 path 的正式 wall，再运行 attribution/rollback，避免 retry 介入配对计时。未稳定关联的 append/decode device 与 CUDA-activity 字段从 strict schema 删除。
 - R4-B persistent metadata candidate 未通过预注册 16/16 分组稳定性门，生产主线恢复 R4-A/materialized 默认；candidate commit 与正式负结果保留用于追溯，不继续同线微调。
 
@@ -78,7 +80,7 @@
 - R3-D commit `fe72e27` RTX 5070 targeted hot-path test：`1 passed`；focused：`61 passed, 8 subtests passed`；完整回归：`361 passed, 25 subtests passed in 6.28s`。
 - R4-A commit `1169cb8` RTX 5070 focused CUDA suite：`40 passed in 2.34s`。第一次 quick CSV 因 profiler CPU/CUDA 分组选择缺陷未通过严格 summary，性能证据作废并等待修复后重跑。
 - R4-A commit `4ee5fab` 的第二次 quick 在 `flashdec::paged_decode` CPU annotation 记录 `116.108 us` host time，但其自身 device total 为 0；runner 在写 CSV 前严格失败。该结果用于修正 CPU/CUDA range 归因契约，不构成性能结论。
-- R4-A commit `4e18f5d` 的第三次 quick strict summary 已通过；当前 commit 的完整 RTX 回归仍待执行，因此 correctness 完成状态仍以 `1169cb8` 的 focused CUDA suite 为限。
+- R4-A commit `4e18f5d` 的第三次 quick strict summary 已通过；在该历史阶段，完整 RTX 回归仍待执行，因此当时的 correctness 状态仍以 `1169cb8` 的 focused CUDA suite 为限。后续 commit `4018449` 已完成 focused/full 与正式矩阵。
 - R4-A commit `e88900a` 的 formal 在一个 l4 probe 捕获 8 个 CPU append ranges、7 个同名 CUDA user annotations 后于写 CSV 前严格停止；该结果证明 profiler peer 契约错误，不表示 Engine 少执行 layer，也不产生正式性能数据。
 - R4-A commit `5d2f9c0` 的 l4 stress 三次均在首个 decode CPU range 得到零 correlated device time并停止；没有 CSV/summary，不能形成性能结论。
 - R4-A commit `4018449` RTX 5070 focused：`73 passed, 23 subtests passed`；完整回归：`410 passed, 48 subtests passed`。正式 160-row 数据、transaction/Engine trajectory、parity、rollback、CPU range 与 scalar extraction evidence 均通过 strict validator。

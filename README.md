@@ -6,7 +6,7 @@ FlashDec 是一个面向单 GPU LLM decode 的研究型运行时原型，覆盖 
 
 项目关注的核心问题是：在请求长度与 batch 持续变化的情况下，如何维护可验证的 KV 所有权和失败原子性，并证明底层 kernel 优化能够转化为完整 decode step 的系统收益。
 
-> 当前状态：R1 Block-aware Scheduler、R2 Multi-layer KV Token Transaction、R3 Shared Prefix Blocks、R4 与 R5 均已完成。R4-A commit `4018449` 的 Cache-owned trusted path 在 160-row/80-pair 正式矩阵中取得 complete-token p50/TPS `1.7307x/1.7131x`，16/16 个 dtype/case 分组的五轮 p50 range 均稳定胜出。R4-B persistent metadata 未通过预注册的 16/16 稳定性门，主线已恢复 R4-A/materialized 默认。R4-C commit `6912894` 在 RTX 5070 通过 focused `60 passed, 17 subtests`、full `425 passed, 57 subtests` 与 24-row 正式矩阵。R5 commit `d7d4feb` 完成固定 `flashinfer-python==0.6.15.post1` 的 72-row/3-trial 公平 kernel-only 对比：FlashInfer FA2 CUDA-core/tensor-core 的 p50 ratio 几何平均为 `1.2003x/1.2284x`，16/16 个三轮范围均高于 1；绝对 p99 的三轮 `[min,max]` 在 7/16 组重叠，其中 2 个 tensor-core 组中位数反向，不声明稳定尾延迟或端到端 runtime 胜负。仓库继续保持 private 和 `0.0.0`。
+> 当前状态：R1–R5 研究与工程交付均已完成，默认路径和 canonical evidence 已冻结。仓库继续保持 private `0.0.0`；新环境复现、版本升级、公开设置和 tag 暂缓。完整交付矩阵、证据入口与限制见[交付状态](docs/DELIVERY_STATUS.md)。
 
 ## 架构
 
@@ -47,7 +47,7 @@ Scheduler 只决定可进入本轮执行的 request ids；DecodeEngine 组织数
 - **Multi-layer transaction**：一个 token 只预留一次位置；各 layer 共用 block id/offset；全部成功后 seq_len 只增长一次；任一 layer 失败自动 rollback。
 - **Trusted transaction R4**：公开 fused primitive 保留完整索引检查；Cache-owned transaction path 可跳过 allocator 已证明的 device-value reduction，避免每 layer 的重复 host/stream sync。
 - **Integrated workload R4-C**：动态到达、fixed-prefix hit/private miss、multi-layer prompt、逐层 token transaction、rollback、finish/cancel 与 block reuse 使用同一 dependency-free reference trajectory 验证。
-- **External baseline R5**：在同一 Q/K/V、page table、HND physical layout、softmax scale 和 CUDA-event timing 下，对比 FlashDec Triton 与固定版本 FlashInfer FA2 CUDA-core/tensor-core；planning、JIT 和输入转换不混入 kernel-only latency。
+- **External baseline R5**：FlashDec token-major 直接对应 FlashInfer HND；双方共用逻辑 Q/K/V pages、page table、softmax scale 和 CUDA-event timing，API/metadata 适配、planning 与 JIT 不混入 kernel-only latency。
 - **证据链**：固定 commit/seed/trial/shape/timing scope 的 benchmark、严格 summary validator、独立 profiler attribution 和 release gate。
 
 ## 结果摘要
@@ -160,6 +160,8 @@ scripts/                  环境检查、验证编排和 release gate
 
 ## 文档
 
+- [交付状态与证据入口](docs/DELIVERY_STATUS.md)
+- [当前状态与下一步](docs/NEXT_STEPS.md)
 - [文档索引](docs/INDEX.md)
 - [公开 API](docs/API.md)
 - [系统范围与分层](docs/AI_INFRA_SCOPE.md)
@@ -179,7 +181,7 @@ scripts/                  环境检查、验证编排和 release gate
 
 - 单 GPU、每 request 每 step 一个 decode token。
 - Q/K/V 由调用方提供；不执行完整 Transformer forward、tokenizer、sampling 或网络服务。
-- Multi-layer API 是顺序 token transaction，不是完整模型执行器；multi-layer prompt prefill 尚未实现。
+- Multi-layer API 是顺序 token transaction，不是完整模型执行器；R4-C 可事务性导入调用方提供的多层 context K/V，但不执行模型 prompt/prefill forward。
 - R3 prefix cache 只接收调用方已经构建的 full blocks；R3-B 要求 prefix 覆盖完整 initial context，且 scheduler-managed request 开始前 resident set 已固定。尚不包含模型 prefill、content hashing、admission-time prefix eviction、swap/offload、生产级抢占、tensor/pipeline parallel 或多机执行。
 - CUDA extension 使用 lazy JIT，首次运行包含构建成本。
 - 公开结果只来自仓库代码、公开工具链与个人硬件；不包含任何第三方非公开实现或数据。

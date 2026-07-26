@@ -37,6 +37,30 @@ class DocumentationCheckTests(unittest.TestCase):
             self.assertEqual(local_link_problems(root), [])
             self.assertEqual(len(markdown_files(root)), 2)
 
+    def test_ignores_local_and_quick_result_markdown(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            results = root / "benchmarks" / "results"
+            backups = results / "local_backups"
+            backups.mkdir(parents=True)
+            archive = results / "archive"
+            archive.mkdir()
+            tracked_backup = archive / "local_backups" / "tracked.md"
+            tracked_backup.parent.mkdir()
+            canonical = results / "r1_trials3_summary.md"
+            archived_quick = archive / "r1_quick_summary.md"
+            canonical.write_text("# Canonical\n")
+            archived_quick.write_text("# Tracked archive\n")
+            tracked_backup.write_text("# Tracked nested backup\n")
+            (results / "r1_quick_summary.md").write_text("[missing](nope.md)\n")
+            (results / "r1_smoke.md").write_text("[missing](nope.md)\n")
+            (backups / "review.md").write_text("[missing](nope.md)\n")
+
+            self.assertEqual(
+                markdown_files(root), [tracked_backup, archived_quick, canonical]
+            )
+            self.assertEqual(documentation_problems(root), [])
+
     def test_reports_missing_and_escaping_targets(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

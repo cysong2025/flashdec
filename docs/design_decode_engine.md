@@ -2,7 +2,7 @@
 
 ## 目标
 
-`DecodeEngine` 是 FlashDec 从数据路径走向 AI Infra runtime 的第一层执行编排。v1 固定验证 single-layer `step()`；R2-B 增加一个 token 跨多个 layer 的 sequential transaction API。两者都不处理模型投影、采样、完整 prefill 或网络服务。
+`DecodeEngine` 是 FlashDec 从数据路径走向 AI Infra runtime 的第一层执行编排。v1 固定验证 single-layer `step()`；R2-B 增加一个 token 跨多个 layer 的 sequential transaction API；R4-C 再加入调用方提供的多层 prompt/context K/V 原子导入。它不处理模型投影、采样、模型 prefill forward 或网络服务。
 
 每一步把 active request rows 按固定顺序送入。默认 active batch 使用稳定的提交顺序；调用方显式传入 `request_ids` 时保留其 row order：
 
@@ -88,12 +88,12 @@ Engine 在执行 RoPE/KV append 前根据每个 active request 的当前 `seq_le
 ## 当前限制
 
 - single-layer `step()` 与 multi-layer sequential transaction 均为每个 request 每 step 一 token。
-- Q/K/V 由调用方提供；不执行模型 forward、sampling 或 prefill。
-- multi-layer prompt prefill 尚未实现。
+- Q/K/V 由调用方提供；不执行模型 forward、sampling、tokenizer 或 prompt/prefill forward。
+- R4-C 支持通过 `prefill_request_layers()` 原子导入调用方已经构建的多层 prompt/context K/V；FlashDec 不负责从 token/model 生成这些 K/V。
 - multi-layer transaction 支持 `append_backend="torch"` 与 `"fused_cuda"`；独立非 fused CUDA append 不进入 transaction。
 - 不实现 priority、preemption、prefix 内容构建、admission-time prefix eviction 或 CPU offload。
 
-后续 Scheduler v2 不会让 Scheduler 直接持有 physical blocks，而是在 admission 时建立 lifetime logical commitment，再由 Cache 按 append 进度惰性分配。详细状态所有权、deadlock 反例与 stale-decision 语义见 `docs/design_scheduler.md`。
+R1 Scheduler v2 不直接持有 physical blocks；它在 admission 时建立 lifetime logical commitment，再由 Cache 按 append 进度惰性分配。详细状态所有权、deadlock 反例与 stale-decision 语义见 `docs/design_scheduler.md`。
 
 R3-B 在同一边界上增加 shared-prefix admission：Engine 从 Cache registry 验证 `RequestSpec.prefix_id`，admission 时挂载 immutable full blocks；Scheduler 只接收 derived `shared_prefix_blocks`，不接触 K/V 或 physical ids。global prefix residency 只计一次，每个 request 只承诺 private tail。完整定义见 `docs/design_shared_prefix_blocks.md`。
 

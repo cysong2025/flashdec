@@ -1,6 +1,6 @@
 # Benchmarks
 
-这里放 benchmark 脚本和结果。
+这里记录 benchmark 脚本、计时边界和执行命令。Git 跟踪的正式摘要、本地 CSV/log/quick/profile 产物边界与历史结果入口见[结果索引](results/README.md)。
 
 计划目录：
 
@@ -311,7 +311,7 @@ python benchmarks/summarize_fused_transaction_fast_path.py \
 
 正式矩阵共 `8 cases x 2 dtypes x 2 paths x 5 trials = 160 rows`，strict summary 报告 80 个 paired trials。`checked` 与 `trusted` 复用相同 Cache transaction API；runner 只在 benchmark context 中把 Cache 内部 raw launch 切换为 checked 或 trusted，因此状态机和 Engine 路由不变。每个 paired trial 先按轮换顺序完成两条 path 的 non-instrumented synchronized wall，再统一执行 profiler/rollback，避免 attribution 重采集夹在两侧 wall 之间。CPU-only profiler 先在 WARMUP cycle 执行并 abort 一个同形 token，再在唯一 active cycle采集；每个 layer 必须有精确一个 CPU user annotation，其 inclusive CPU total保留 checked 路径 `.item()` 的 host/stream 等待。checked 每个 profiled layer 必须有 5 次 `aten::item`/`aten::_local_scalar_dense`，trusted 为 0。少记 range/scalar 或缺少有效 CPU time可用相同 seed、全新 engine/profiler 重采集，固定最多三次并写入 `profile_attempt_count`；多出 range/scalar 则视为 active-work/fast-path 契约回归并立即终止，不能用重试掩盖。append/decode device time与 CUDA activity不再属于该 strict schema；若未来需要分段 GPU attribution，使用独立 CUDA Event/Nsight probe。summary validator 负责证据完整性，不替代人工性能 gate：overall p50 至少 `1.05x`，且全部 16 个 `dtype x case` 分组的五轮 p50 `[min,max]` 都不穿过 1。该证据只归因于 device-value validation，仍存在的 transaction-view H2D materialization/copy 留给独立 R4-B。
 
-commit `4018449` 的 RTX 5070/CUDA 12.8 正式矩阵通过严格校验：160 rows、80 paired trials，全部 16 个 `dtype x case` 分组均为 `trusted_faster` 且五轮 p50 最小值都大于 1。overall complete-token p50/p90/p99、TPS 和 append CPU/layer ratio 分别为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`；focused `73 passed, 23 subtests passed`，完整回归 `410 passed, 48 subtests passed`。7/16 分组的 p99 range 穿过 1，因此不声明稳定尾延迟收益。R4-A 已冻结，canonical release evidence 见[R4-A 五轮正式摘要](results/r4_fused_transaction_fast_path_trials5_summary.md)。R4-B 已评估并按 keep gate 回滚；当前进入 R4-C。
+commit `4018449` 的 RTX 5070/CUDA 12.8 正式矩阵通过严格校验：160 rows、80 paired trials，全部 16 个 `dtype x case` 分组均为 `trusted_faster` 且五轮 p50 最小值都大于 1。overall complete-token p50/p90/p99、TPS 和 append CPU/layer ratio 分别为 `1.7307x/1.6751x/1.6944x/1.7131x/2.3612x`；focused `73 passed, 23 subtests passed`，完整回归 `410 passed, 48 subtests passed`。7/16 分组的 p99 range 穿过 1，因此不声明稳定尾延迟收益。R4-A 已冻结，canonical release evidence 见[R4-A 五轮正式摘要](results/r4_fused_transaction_fast_path_trials5_summary.md)。R4-B 已评估并按 keep gate 回滚；R4-C 与 R5 也已完成，当前默认路径保持冻结。
 
 R4-C integrated scheduled multi-layer quick：
 
@@ -347,3 +347,25 @@ python benchmarks/summarize_integrated_scheduled_multi_layer.py \
 ```
 
 formal 为 `2 layer counts x 2 contexts x 2 dtypes x 3 trials = 24 rows`。每 row 是完整 dynamic trace；strict summary 重建 dependency-free reference，验证 admission/defer/completion/cancel、layer-1 rollback、transaction/prefix 计数、released-block reuse、observed/reference digest 与 terminal zero-used cleanup。它只报告绝对 workload latency/TPS，不构造 shared-prefix speedup，也不重新比较已回滚的 R4-B candidate。完整 schema 见[R4-C 设计](../docs/design_integrated_scheduled_multi_layer.md)。
+
+R5 FlashInfer formal baseline：
+
+```bash
+python benchmarks/run_flashinfer_baseline.py \
+  --case all \
+  --dtype both \
+  --trials 3 \
+  --warmup 10 \
+  --repeat 50 \
+  --require-clean \
+  --output "$RESULT_DIR/r5_flashinfer_paged_decode_trials3.csv"
+
+python benchmarks/summarize_flashinfer_baseline.py \
+  --input "$RESULT_DIR/r5_flashinfer_paged_decode_trials3.csv" \
+  --output "$RESULT_DIR/r5_flashinfer_paged_decode_trials3_summary.md" \
+  --expected-trials 3 \
+  --expected-warmup 10 \
+  --expected-repeats 50
+```
+
+正式矩阵为 `4 cases x 2 dtypes x 3 backends x 3 trials = 72 rows`。commit `d7d4feb` 已完成 focused `93 passed, 37 subtests passed`、quick、formal、full `453 passed, 94 subtests passed` 与 clean-tree release check。它只比较共同 paged-decode kernel：输入、page table、layout 语义与 CUDA-event timing 对齐，FlashInfer plan/JIT 排除在计时外；不比较 scheduler、KV ownership、transaction 或完整 serving。固定 cu128/SM120a 环境、quick 命令与安装步骤见[R5 复现章节](../docs/reproducibility.md#r5-flashinfer-有限公开基线)，canonical evidence 见[R5 正式摘要](results/r5_flashinfer_paged_decode_trials3_summary.md)。

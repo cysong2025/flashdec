@@ -28,7 +28,8 @@ FlashDec 研究 LLM decode 阶段的三个相互关联的问题：
 | Shared Prefix R3 | immutable full-block reuse、refcount/LRU、shared-aware admission | R3-D correctness 与 8-trial/64-row RTX confirmation 已完成 |
 | Trusted Transaction R4 | checked public raw op、Cache-owned device-value-check-free path、persistent metadata、统一多层调度证据 | R4-A 完成并冻结；R4-B 稳定性门失败后恢复 materialized 默认；R4-C commit `6912894` 完成 RTX correctness 与 24-row 正式验证 |
 | External Baseline R5 | 固定版本 FlashInfer paged-decode 公平对比、strict summary、对外技术文章 | commit `d7d4feb` 的 post-schema focused、quick、72-row formal、full 与 release check 全部通过；canonical evidence 已固化 |
-| Release | clean install、版本、tag、公开 release | 最终 release gate，留到项目收尾执行 |
+| Project handoff | 统一交付状态、结果索引、文档一致性与 release guard | R1–R5 交付面已盘点；现有环境 dependency-free checks 已通过，整理状态已冻结 |
+| Release | clean install、版本、tag、公开 release | 独立 release gate；本轮不执行，仅在所有者明确启动后恢复 |
 
 ## 3. 关键设计决策
 
@@ -72,8 +73,9 @@ Scheduler 不持有 K/V tensor 或 physical blocks；kernel 不推进 request se
 - rollback commit `36225d1` 已通过 focused `89 passed, 23 subtests passed`、full `410 passed, 48 subtests passed` 与 release evidence gate。随后 R4-C commit `6912894` 在 RTX 5070 通过 focused `60 passed, 17 subtests passed`、full `425 passed, 57 subtests passed`、FP16 quick 与 24-row/3-trial FP16/BF16 正式矩阵；dynamic mixed-prefix reference digest、multi-layer prompt transaction、failure rollback、prefix lifetime、block reuse 与最终零占用 cleanup 全部严格通过，R4 阶段完成。
 - R5 commit `d7d4feb` 在固定 Python 3.12/Torch `2.11.0+cu128`/Triton `3.6.0`/CUDA 12.8/FlashInfer `0.6.15.post1` 环境完成 post-schema focused `93 passed, 37 subtests passed`、3-row quick、72-row/3-trial formal、full `453 passed, 94 subtests passed` 与 clean-tree release check。CUDA-core/tensor-core 的 8 组 p50 ratio 几何平均为 `1.2003x/1.2284x`，16/16 个三轮范围均高于 1；small-shape 幅度波动和 7/16 p99 range 重叠被保留，因此只冻结有限 kernel-only p50 观察，不外推端到端 runtime 或生产尾延迟。
 - R2 正式结果绑定 commit `fa0f89a`；证据提交 `67bee15` 在 RTX 5070 完成 `337 passed, 25 subtests passed` 的无跳过回归。
+- R1–R5 的当前交付入口、canonical evidence、限制与负结果已统一到[交付状态](DELIVERY_STATUS.md)和[结果索引](../benchmarks/results/README.md)；项目整理不修改冻结 runtime/kernel 路径。
 - 当前仓库仍为 private `0.0.0` development candidate。
-- clean-install、版本更新、公开与 tag 按所有者要求暂停在最后 release 阶段。
+- clean-install、新环境复现、版本更新、公开与 tag 按所有者要求暂停在最后 release 阶段。
 
 ## 6. 工程完成定义
 
@@ -88,4 +90,4 @@ Scheduler 不持有 K/V tensor 或 physical blocks；kernel 不推进 request se
 7. README、设计、性能和复现文档与当前实现一致。
 8. 结果绑定可读 commit，并由严格 validator 检查完整性。
 
-后续功能优先级与选择性扩展见[路线图](ROADMAP.md)，完整命令见[复现指南](reproducibility.md)。
+后续功能优先级与选择性扩展见[路线图](ROADMAP.md)，当前维护边界见[后续目标](NEXT_STEPS.md)，完整命令见[复现指南](reproducibility.md)。

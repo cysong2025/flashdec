@@ -125,7 +125,7 @@ python -m pytest -vv \
 
 完整回归结果：`198 passed in 5.13s`。
 
-覆盖 FP16/BF16/FP32 raw physical slot 写入、block id/offset 边界检查、`append_cuda()` 与 Python allocator/cache 对齐、capacity failure atomicity、non-contiguous 输入拒绝与公开 API lazy import。尚未测量 native append 的性能。
+覆盖 FP16/BF16/FP32 raw physical slot 写入、block id/offset 边界检查、`append_cuda()` 与 Python allocator/cache 对齐、capacity failure atomicity、non-contiguous 输入拒绝与公开 API lazy import。后续 Week 11 三路径 benchmark 已完成：独立 native CUDA append 没有形成跨 shape 稳定优势，因此 GPU Engine 默认保留 `fused_cuda`。
 
 ## 已验证 Correctness
 
@@ -265,4 +265,6 @@ python benchmarks/run_layout_sweep.py --output benchmarks/results/week8_paged_de
 - kernel 配置已冻结为 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`。
 - PagedKVCache runtime v2、RoPE/KV append、DecodeEngine、R1 Scheduler 与 R2 multi-layer transaction 均已完成 RTX 验证。
 - R3 Shared Prefix Blocks 已完成 R3-A Cache core、R3-B scheduler integration、R3-C benchmark 与 R3-D metadata hot-path cache。commit `fe72e27` 的 RTX correctness 与 8-trial/64-row confirmation 已闭合；稳定结论是 physical KV 节省和 bounded-capacity admission 提升，性能近中性且无稳定方向。
-- clean-install、版本升级、公开和 release tag 按所有者要求暂停；公开基线继续作为未启动的选择性扩展。
+- R4-A trusted transaction 与 R4-C integrated workload 已完成；R4-B 未通过稳定性门并已回滚。调用方可原子导入多层 prompt/context K/V，但 FlashDec 不执行模型 prefill forward。
+- R5 已完成固定 `flashinfer-python==0.6.15.post1` 的 72-row/3-trial 共同 paged-decode kernel-only 基线；vLLM 完整 serving 不在第一版公平范围。
+- clean-install、新环境复现、版本升级、公开和 release tag 按所有者要求暂停。

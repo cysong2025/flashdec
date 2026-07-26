@@ -1,6 +1,6 @@
 # Contributing to FlashDec
 
-FlashDec 是一个以 correctness、状态所有权和可复现实验为优先级的研究型 runtime。Issue、bug report、文档修正和范围明确的实现建议都欢迎；较大的功能改动应先说明语义边界和验证方案。
+FlashDec 是一个以 correctness、状态所有权和可复现实验为优先级的研究型 runtime。Issue、bug report、文档修正和范围明确的实现建议都欢迎；较大的功能改动应先说明语义边界和验证方案。R1–R5 已完成并冻结，当前能力、证据与限制以[交付状态](docs/DELIVERY_STATUS.md)为准。
 
 ## 开发环境
 
@@ -39,5 +39,6 @@ GPU 结果必须记录 device、PyTorch/CUDA、commit、shape、seed、warmup/re
 - 性能改动同时保留绝对延迟、ratio 和负结果，不只报告最佳 case。
 - 不把不同 shape、layout、硬件或计时范围的数字直接比较。
 - 更新行为或公开结论时，同步更新相关设计、兼容性和复现文档。
+- 当前 private `0.0.0` 维护期不自动扩大功能范围；新环境复现、版本、公开和 tag 只在所有者明确启动 release gate 后进行。
 
-仓库的系统边界和非目标见[总体设计](docs/design.md)与[AI Infra 范围](docs/AI_INFRA_SCOPE.md)。
+仓库的系统边界和非目标见[总体设计](docs/design.md)与[AI Infra 范围](docs/AI_INFRA_SCOPE.md)，正式结果入口见[benchmark 结果索引](benchmarks/results/README.md)。

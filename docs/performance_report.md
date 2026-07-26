@@ -1,6 +1,6 @@
 # FlashDec 性能报告
 
-本文记录 FlashDec paged decode attention、DecodeEngine 和 multi-layer transaction 的性能结论与 profiling 证据。
+本文记录 FlashDec paged decode attention、DecodeEngine、Scheduler、multi-layer transaction、Shared Prefix、trusted/integrated workload 与 FlashInfer 有限基线的性能结论和 profiling 证据。
 
 ## 当前结论
 
@@ -17,6 +17,11 @@
 - 当前 RTX 5070 WSL 环境缺少 `ncu` / `nsys`，Nsight 硬件计数暂未补充。
 - Week 12 正式 36 行 multi-trial 显示 fused complete-step p50/p90/TPS 几何平均为 1.0668x/1.0317x/1.0811x；short-churn p50 跨 trial 穿过 1.0。
 - Week 12 正式 12-case profiler 显示 fusion 将 CUDA event 数减少 21.8%-45.6%，paged decode device time 仅变化 -1.7%-+1.1%。
+- R1 Scheduler 的稳定交付是容量安全和进展保证：boundary-deadlock 下 lifetime policy 100% completion，cancel/greedy 对照分别为 50%/0%；它不是无条件 latency 加速。
+- R2 multi-layer fused complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`，24 个分组中 20 个 p50 三轮稳定胜出；收益主要来自 append/launch 路径。
+- R3 75% shared-prefix hit 节省 `68.8%`/`5.5 MiB` context KV capacity，并把 bounded-pool admission 从 `9/16` 提高到 `16/16`；完整 step latency 为 near-neutral/no stable direction。
+- R4-A trusted path 的 complete-token p50/TPS 为 `1.7307x/1.7131x`，16/16 p50 分组稳定胜出；R4-B 未过 16/16 keep gate 并已回滚，R4-C 完成组合 correctness。
+- R5 的共同 paged-decode kernel-only 对比中，FlashInfer CUDA-core/tensor-core p50 ratio 几何平均为 `1.2003x/1.2284x`；p99 和端到端 serving 不作稳定胜负声明。
 
 ## Profiling 场景与命令
 
@@ -142,7 +147,7 @@ CUDA event 结果：
 - 对当前 `block_size=16`、`head_dim=128` 的实现，更多 warps 没有带来足够收益，反而可能增加调度、同步或 register pressure。
 - 较少 warps 更适合当前工作粒度。
 
-## 需要验证的瓶颈
+## 可选硬件计数假设（不阻塞交付）
 
 - K/V cache global memory load 是否占主导。
 - block table 间接索引在长 context 下是否可见。
@@ -152,10 +157,10 @@ CUDA event 结果：
 ## Profiling 最终判断
 
 - small shape：最终 FP16 profiler kernel avg 约 4.8 us/call，固定开销与测量抖动更值得关注。
-- medium shape：最终 FP16 profiler kernel avg 约 98.8 us/call，可作为后续参数实验的主力代表场景。
+- medium shape：最终 FP16 profiler kernel avg 约 98.8 us/call，曾作为 staging/profiler 实验的主力代表场景；当前只在明确回归或独立研究启动时复用。
 - large shape：最终 FP16 profiler kernel avg 约 828.5 us/call，随 context 变长明显增长，继续支持 memory-bound 判断。
 - PyTorch profiler 已经能确认主要 CUDA 时间集中在 `_paged_decode_attention_kernel`；但它还不能替代 Nsight 的硬件计数。
-- 因当前环境没有 `ncu` / `nsys`，Week 10 先使用 CUDA event、PyTorch profiler 和逻辑带宽估算推进优化实验；后续环境具备时再补硬件计数。
+- 当前环境没有 `ncu` / `nsys`；既有结论使用 CUDA event、PyTorch profiler 和逻辑带宽估算。Nsight 硬件计数不属于当前交付，只有明确启动独立研究时再补充。
 
 ## Week 12 Complete-step Multi-trial（2026-07-12）
 
@@ -184,6 +189,16 @@ CUDA event 结果：
 | BF16 | long-pressure | 1.1523x | 45.6% | 10.0% | -0.0% |
 
 这里的 profiler totals 是 nested attribution，不能相加，也不能替代 non-instrumented benchmark。Attention device time 基本不变，而事件数显著下降，支持“fusion 优化 append/launch/runtime 路径”的判断。long-pressure FP16 的 CPU total 与 instrumented p99 仍有回退，是必须保留的负结果。
+
+## R1 Block-aware Scheduler 正式矩阵（2026-07-13）
+
+commit `16de9d4` 的 RTX 5070 正式矩阵为 2 cases × 2 dtypes × 3 policies × 3 trials，共 36 行。boundary-deadlock 下默认 lifetime FIFO + aging 达到 100% completion、0 cancel、0 deadlock；cancel-on-backpressure 只有 50% completion，greedy-step-only 为 0% completion，且每次 trial 都检测到 1 次确定 deadlock。finite queue 下三策略都完成 100%，所以 R1 的可交付结论是容量承诺、公平等待和进展保证，不是普通 workload 的无条件 speedup。完整数据见[R1 正式摘要](../benchmarks/results/r1_scheduler_workload_trials3_summary.md)。
+
+## R2 Multi-layer Transaction 正式矩阵（2026-07-15）
+
+commit `fa0f89a` 的正式矩阵为 12 cases × 2 dtypes × 2 backends × 3 trials，共 144 行。fused complete-token p50/p90/TPS 几何平均为 `1.2101x/1.3826x/1.2800x`；per-layer append device、decode device 与 CUDA event ratio 分别为 `1.6103x/1.0024x/1.9784x`，说明主要收益来自 append 与 launch 数减少，而不是 attention device kernel 改变。
+
+24 个 dtype/case 分组中 20 个三轮 p50 稳定胜出，4 个范围跨 1，没有稳定 torch-faster case。每轮只有 20 repeats，nearest-rank p99 接近样本最大值；BF16 `l4_b4_c128` 还保留独立 profiler attribution anomaly，因此不声明生产级尾延迟收益。完整数据见[R2 正式摘要](../benchmarks/results/r2_multi_layer_engine_trials3_summary.md)。
 
 ## R3 Shared Prefix 正式矩阵（2026-07-17）
 
@@ -286,5 +301,5 @@ ratio 定义为 `FlashDec p50 / FlashInfer p50`，大于 1 表示对应 FlashInf
 
 1. kernel 配置已经冻结，不再重复 `num_warps`、block size、layout 或 `num_stages` sweep。
 2. Block-aware Scheduler、Multi-layer KV Token Transaction、R4-A trusted validation 与 R4-C integrated workload 均已完成；R4-B 已完成评估并按稳定性门回滚。
-3. clean-install、版本与 tag 留在最终 release gate。
-4. Shared Prefix R3 与固定版本公开基线 R5 已完成；当前不继续围绕同一数据调参。下一阶段先做项目整理与交付审查，版本、公开和 tag 仍等待所有者明确启动 release gate。
+3. 项目整理已完成当前状态、结果索引和证据边界统一；不把文档整理解释为新的 GPU 性能运行。
+4. clean-install、新环境复现、版本、公开与 tag 留在最终 release gate，并等待所有者明确启动。

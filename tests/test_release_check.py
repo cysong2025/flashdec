@@ -130,6 +130,33 @@ def test_release_evidence_includes_scheduler_multi_layer_and_shared_prefix_summa
     )
 
 
+def test_release_evidence_covers_frozen_kernel_defaults():
+    for relative in (
+        "benchmarks/results/week8_block_size_summary.md",
+        "benchmarks/results/week8_layout_summary.md",
+        "benchmarks/results/week9_final_default_summary.md",
+        "benchmarks/results/week10_num_stages_summary.md",
+    ):
+        assert relative in RELEASE_EVIDENCE_PATHS
+
+
+def test_release_tree_requires_delivery_index_and_complete_r1_surface():
+    for relative in (
+        "docs/DELIVERY_STATUS.md",
+        "docs/NEXT_STEPS.md",
+        "docs/compatibility.md",
+        "docs/design_decode_engine.md",
+        "benchmarks/README.md",
+        "benchmarks/results/README.md",
+        "scripts/README.md",
+        "flashdec/scheduled_workload.py",
+        "tests/test_scheduled_workload.py",
+        "tests/test_scheduled_workload_config.py",
+        "tests/test_scheduler_workload_benchmark.py",
+    ):
+        assert relative in REQUIRED_PATHS
+
+
 def test_release_tree_requires_r4_runner_validator_and_dependency_free_tests():
     for relative in (
         "benchmarks/run_fused_transaction_fast_path.py",
