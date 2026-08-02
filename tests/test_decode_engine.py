@@ -225,7 +225,11 @@ def test_scheduler_managed_engine_applies_decisions_and_releases_commitment():
 
     snapshot = engine.scheduling_snapshot(logical_step=0)
     decision = scheduler.plan(snapshot)
-    applied = engine.apply_scheduler_decision(decision)
+    applied = engine.apply_scheduler_decision(
+        decision,
+        scheduler=scheduler,
+        snapshot=snapshot,
+    )
 
     assert applied == (
         AdmissionResult("a", DecodeEngine.ACTIVE),
@@ -247,7 +251,11 @@ def test_scheduler_managed_engine_applies_decisions_and_releases_commitment():
     )
     decision = scheduler.plan(snapshot)
     assert decision.runnable_ids == ("b",)
-    assert engine.apply_scheduler_decision(decision) == ()
+    assert engine.apply_scheduler_decision(
+        decision,
+        scheduler=scheduler,
+        snapshot=snapshot,
+    ) == ()
     second = engine.step(q, k, v, request_ids=["b"])
     assert second.status == DecodeEngine.STEP_OK
 
@@ -286,7 +294,11 @@ def test_scheduler_managed_engine_counts_shared_prefix_once_and_private_tail_per
     assert decision.committed_blocks_after == 4
     assert decision.needed_physical_blocks_now == 2
 
-    engine.apply_scheduler_decision(decision)
+    engine.apply_scheduler_decision(
+        decision,
+        scheduler=scheduler,
+        snapshot=snapshot,
+    )
     assert cache.request_block_ids("a") == prefix_ids
     assert cache.request_block_ids("b") == prefix_ids
     assert engine.metrics()["committed_blocks"] == 4
@@ -348,8 +360,13 @@ def test_scheduler_caches_validated_shared_prefix_blocks_off_the_step_hot_path(
     engine.submit_request(RequestSpec("b", 4, 2, 1, prefix_id="system"))
     assert lookup_count == 2
 
-    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
-    engine.apply_scheduler_decision(decision)
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    decision = scheduler.plan(snapshot)
+    engine.apply_scheduler_decision(
+        decision,
+        scheduler=scheduler,
+        snapshot=snapshot,
+    )
     q, k, v = _step_inputs(2)
     assert engine.step(q, k, v, request_ids=["a", "b"]).status == DecodeEngine.STEP_OK
     scheduler.plan(engine.scheduling_snapshot(logical_step=1))
@@ -391,12 +408,17 @@ def test_scheduler_decision_stale_version_is_rejected_without_partial_admission(
         SchedulerConfig(max_active_requests=2, max_batch_requests=2)
     )
     engine.submit_request(RequestSpec("first", 0, 2, 0))
-    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    decision = scheduler.plan(snapshot)
     before_version = engine.state_version
     engine.submit_request(RequestSpec("later", 0, 2, 1))
 
     with pytest.raises(RuntimeError, match="stale scheduler decision"):
-        engine.apply_scheduler_decision(decision)
+        engine.apply_scheduler_decision(
+            decision,
+            scheduler=scheduler,
+            snapshot=snapshot,
+        )
 
     assert engine.state_version == before_version + 1
     assert engine.request_state("first")["status"] == DecodeEngine.WAITING
@@ -411,20 +433,29 @@ def test_scheduler_decision_validation_is_atomic_and_rejects_external_cache_muta
         SchedulerConfig(max_active_requests=1, max_batch_requests=1)
     )
     engine.submit_request(RequestSpec("request", 0, 2, 0))
-    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    decision = scheduler.plan(snapshot)
     malformed = replace(
         decision,
         committed_blocks_after=decision.committed_blocks_after + 1,
     )
 
-    with pytest.raises(ValueError, match="committed_blocks_after"):
-        engine.apply_scheduler_decision(malformed)
+    with pytest.raises(ValueError, match="does not match the supplied policy"):
+        engine.apply_scheduler_decision(
+            malformed,
+            scheduler=scheduler,
+            snapshot=snapshot,
+        )
     assert engine.request_state("request")["status"] == DecodeEngine.WAITING
     assert engine.cache.num_used_blocks == 0
 
     engine.cache.add_request("request")
     with pytest.raises(RuntimeError, match="mutated outside"):
-        engine.apply_scheduler_decision(decision)
+        engine.apply_scheduler_decision(
+            decision,
+            scheduler=scheduler,
+            snapshot=snapshot,
+        )
     assert engine.request_state("request")["status"] == DecodeEngine.WAITING
     assert engine.metrics()["stale_decision_count"] == 1
 
@@ -435,6 +466,96 @@ def test_scheduler_decision_validation_is_atomic_and_rejects_external_cache_muta
         populated_engine.submit_request(RequestSpec("new", 0, 2, 0))
 
 
+def test_scheduler_decision_requires_explicit_policy_and_original_snapshot():
+    engine = DecodeEngine(_make_cache(block_size=2, max_blocks=4))
+    scheduler = BlockAwareScheduler(
+        SchedulerConfig(max_active_requests=2, max_batch_requests=2)
+    )
+    engine.submit_request(RequestSpec("a", 0, 2, 0))
+    engine.submit_request(RequestSpec("b", 0, 2, 1))
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    decision = scheduler.plan(snapshot)
+
+    different_scheduler = BlockAwareScheduler(
+        SchedulerConfig(max_active_requests=2, max_batch_requests=1)
+    )
+    with pytest.raises(ValueError, match="supplied scheduler config"):
+        engine.apply_scheduler_decision(
+            decision,
+            scheduler=different_scheduler,
+            snapshot=snapshot,
+        )
+
+    different_snapshot = engine.scheduling_snapshot(
+        logical_step=0,
+        waiting_wait_steps={"a": 1},
+    )
+    with pytest.raises(ValueError, match="not bound to the supplied scheduling snapshot"):
+        engine.apply_scheduler_decision(
+            decision,
+            scheduler=scheduler,
+            snapshot=different_snapshot,
+        )
+
+    forged = replace(
+        decision,
+        needed_physical_blocks_now=decision.needed_physical_blocks_now + 1,
+    )
+    with pytest.raises(ValueError, match="does not match the supplied policy"):
+        engine.apply_scheduler_decision(
+            forged,
+            scheduler=scheduler,
+            snapshot=snapshot,
+        )
+
+    class OverriddenScheduler(BlockAwareScheduler):
+        def plan(self, plan_snapshot):
+            planned = super().plan(plan_snapshot)
+            return replace(
+                planned,
+                needed_physical_blocks_now=planned.needed_physical_blocks_now + 1,
+            )
+
+    overridden_scheduler = OverriddenScheduler(scheduler.config)
+    overridden_decision = overridden_scheduler.plan(snapshot)
+    with pytest.raises(ValueError, match="does not match the supplied policy"):
+        engine.apply_scheduler_decision(
+            overridden_decision,
+            scheduler=overridden_scheduler,
+            snapshot=snapshot,
+        )
+
+    assert engine.state_version == snapshot.state_version
+    assert engine.cache.num_used_blocks == 0
+    assert engine.request_state("a")["status"] == DecodeEngine.WAITING
+    assert engine.request_state("b")["status"] == DecodeEngine.WAITING
+    assert engine.metrics()["applied_decision_count"] == 0
+
+
+def test_scheduler_snapshot_engine_fields_are_rebuilt_before_apply():
+    engine = DecodeEngine(_make_cache(block_size=2, max_blocks=4))
+    scheduler = BlockAwareScheduler(
+        SchedulerConfig(max_active_requests=1, max_batch_requests=1)
+    )
+    engine.submit_request(RequestSpec("request", 0, 2, 0))
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    forged_spec = replace(snapshot.waiting[0].spec, max_new_tokens=4)
+    forged_waiting = replace(snapshot.waiting[0], spec=forged_spec)
+    forged_snapshot = replace(snapshot, waiting=(forged_waiting,))
+    forged_decision = scheduler.plan(forged_snapshot)
+
+    with pytest.raises(ValueError, match="snapshot does not match DecodeEngine state"):
+        engine.apply_scheduler_decision(
+            forged_decision,
+            scheduler=scheduler,
+            snapshot=forged_snapshot,
+        )
+
+    assert engine.state_version == snapshot.state_version
+    assert engine.cache.num_used_blocks == 0
+    assert engine.request_state("request")["status"] == DecodeEngine.WAITING
+
+
 def test_scheduler_rejects_impossible_request_and_keeps_it_out_of_cache():
     engine = DecodeEngine(_make_cache(block_size=2, max_blocks=2))
     scheduler = BlockAwareScheduler(
@@ -443,8 +564,13 @@ def test_scheduler_rejects_impossible_request_and_keeps_it_out_of_cache():
     engine.submit_request(RequestSpec("too-large", 0, 5, 0))
     engine.submit_request(RequestSpec("small", 0, 2, 1))
 
-    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
-    applied = engine.apply_scheduler_decision(decision)
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    decision = scheduler.plan(snapshot)
+    applied = engine.apply_scheduler_decision(
+        decision,
+        scheduler=scheduler,
+        snapshot=snapshot,
+    )
 
     assert applied == (
         AdmissionResult("small", DecodeEngine.ACTIVE),
@@ -463,8 +589,13 @@ def test_scheduler_initial_context_must_be_seeded_then_replanned():
         SchedulerConfig(max_active_requests=1, max_batch_requests=1)
     )
     engine.submit_request(RequestSpec("context", 2, 2, 0))
-    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
-    engine.apply_scheduler_decision(decision)
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    decision = scheduler.plan(snapshot)
+    engine.apply_scheduler_decision(
+        decision,
+        scheduler=scheduler,
+        snapshot=snapshot,
+    )
 
     q, k, v = _step_inputs(1)
     with pytest.raises(RuntimeError, match="requires an applied decision"):
@@ -478,7 +609,11 @@ def test_scheduler_initial_context_must_be_seeded_then_replanned():
     assert snapshot.active[0].seq_len == 2
     assert snapshot.active[0].remaining_tokens == 2
     decision = scheduler.plan(snapshot)
-    engine.apply_scheduler_decision(decision)
+    engine.apply_scheduler_decision(
+        decision,
+        scheduler=scheduler,
+        snapshot=snapshot,
+    )
     result = engine.step(q, k, v, request_ids=["context"])
     assert result.status == DecodeEngine.STEP_OK
     assert engine.request_state("context")["cache"]["seq_len"] == 3

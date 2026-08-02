@@ -107,12 +107,15 @@ class SchedulingSnapshot:
     block_size: int
     max_blocks: int
     free_blocks: int
+    resident_prefix_blocks: int
     waiting: tuple[WaitingRequestMetadata, ...]
     active: tuple[ActiveRequestMetadata, ...]
 
 
 @dataclass(frozen=True)
 class SchedulerDecision:
+    snapshot: SchedulingSnapshot
+    scheduler_config: SchedulerConfig
     snapshot_version: int
     admit_ids: tuple[Hashable, ...]
     runnable_ids: tuple[Hashable, ...]
@@ -127,29 +130,31 @@ class SchedulerDecision:
     reasons: tuple[str, ...]
 ```
 
-`ActiveRequestMetadata` 至少包含 request spec、当前 `seq_len`、剩余 decode token、已持有 block、commitment 和 service-wait 计数。`deferred_ids` 只表示已 active 但本轮未运行的请求；未 admission 的请求由 `waiting_ids` 表示，永久无法放入 schedulable capacity 的请求由 `rejected_ids` 表示。字段只描述调度所需元数据，不暴露 K/V tensor。
+`ActiveRequestMetadata` 至少包含 request spec、当前 `seq_len`、剩余 decode token、已持有 block、commitment 和 service-wait 计数。`deferred_ids` 只表示已 active 但本轮未运行的请求；未 admission 的请求由 `waiting_ids` 表示，永久无法放入 schedulable capacity 的请求由 `rejected_ids` 表示。Decision 按 value 携带生成它的完整 snapshot/config，字段只描述调度所需元数据，不暴露 K/V tensor 或 physical page 内容；因此一个被排队或长期保存的 decision 会保留 O(requests) metadata，包括 caller-provided opaque ids。
 
 ## 5. 状态与所有权
 
 | 组件 | 拥有的状态 | 不允许拥有 |
 | --- | --- | --- |
-| Scheduler | admission/runnable policy、wait/skip/service 计数 | K/V tensor、physical block id、Engine lifecycle mutation |
+| Scheduler | immutable config 与纯 admission/runnable policy | K/V tensor、physical block id、Engine lifecycle mutation、fairness counter mutation |
 | DecodeEngine | immutable request spec、waiting/active/terminal 状态、commitment 派生、稳定 row mapping、`state_version`、决策执行 | allocator free list |
 | PagedKVCache | physical block、request block list、seq_len、KV storage、allocator invariant、ownership `state_version` | admission/fairness policy |
-| Workload/Caller | Q/K/V 输入、arrival、请求 token budget | 直接伪造 scheduler/cache 内部状态 |
+| Workload/Caller | Q/K/V 输入、arrival、请求 token budget、wait/skip/service counters | 直接伪造 scheduler/cache 内部状态 |
 
-Scheduler 的 `plan(snapshot)` 不修改 Engine 或 Cache。只有 Engine 接受并应用 decision 后，Scheduler 才通过明确的 outcome 更新 commitment 与 fairness 计数。
+Scheduler 的 `plan(snapshot)` 不修改 Engine 或 Cache。只有 Engine 接受并应用 decision 后，caller/workload 才根据明确 outcome 更新其 fairness counters；commitment 始终由 Engine 从 immutable request spec 派生。
 
-## 6. 单线程一致性与 stale decision
+## 6. 单线程一致性、policy binding 与 stale decision
 
 执行模型使用单线程 event loop，但仍需防止“基于旧容量做出的决策”被延迟执行：
 
 - Engine 维护单调递增的 `state_version`。
 - Cache 维护独立 ownership/seq_len `state_version`；scheduler-managed Engine 记录最后一次已观察版本，直接绕过 Engine 修改 Cache 会使 decision 失效。
 - submit、admit、成功 append、finish、cancel 都递增版本。
-- `SchedulingSnapshot` 和 `SchedulerDecision` 携带版本。
-- Engine 应用 decision 前必须验证 `decision.snapshot_version == engine.state_version`。
-- 版本不匹配时拒绝 decision，记录 `stale_decision_count`，重新 snapshot/plan；不能尝试部分执行。
+- `SchedulingSnapshot` 携带版本；`SchedulerDecision` 同时携带原始 snapshot、config 与冗余的 `snapshot_version`。
+- Engine 应用 decision 前必须验证 supplied snapshot、embedded snapshot、decision version 与当前 Engine version 一致。
+- Engine 保留 snapshot 中调用方负责的 wait/skip/service counters，但从当前 Engine/Cache 重建 request spec、lifecycle、seq_len、physical ownership、commitment、prefix residency 与 free-block 字段，并要求 value equality。
+- Engine 要求 embedded config 与 supplied scheduler config 相等，再使用新的 canonical `BlockAwareScheduler(scheduler.config)` 重跑规划并 exact compare；不信任 subclass 覆写或有状态的 `plan()`。
+- 任一版本、snapshot、config 或 decision 字段不匹配都在 admission/rejection mutation 前失败。版本不匹配记录 `stale_decision_count`，调用方必须重新 snapshot/plan；不能尝试部分执行。
 
 Scheduler-managed 接口为：
 
@@ -162,8 +167,14 @@ snapshot = engine.scheduling_snapshot(
     active_service_wait_steps=...,
 )
 decision = scheduler.plan(snapshot)
-engine.apply_scheduler_decision(decision)
+engine.apply_scheduler_decision(
+    decision,
+    scheduler=scheduler,
+    snapshot=snapshot,
+)
 ```
+
+这是一次 apply 的完整性边界：Engine 不永久固定某个 scheduler 实例，每次都以显式 supplied config 为本次 policy；fairness counters 仍由 caller/workload 管理。该机制防止同一进程内误用、过期或被修改的输入，不构成多线程同步、密码学签名或对不可信进程的安全认证。新签名是研究原型 API 的显式 breaking change，旧的单参数调用会失败。
 
 旧 `add_request()` / `admit()` / `step()` 继续作为 unscheduled compatibility path；同一个 Engine 不能混用两种 submission 模式。scheduler-managed step 必须严格使用最后一次已应用 decision 的 `runnable_ids`。永久超过容量的 request 进入 Engine-only `rejected` 终态，不创建 Cache ownership。
 
@@ -202,12 +213,13 @@ aging 不能抢占 active request，但对有限 workload，它能阻止年轻�
 
 ### 7.4 应用结果
 
-1. Engine 验证 snapshot version。
-2. 按 decision admission，并立即为 workload request 执行既有 initial-context seeding。
-3. Caller 仅为 `runnable_ids` 生成/选择对应 Q/K/V rows。
-4. Engine 执行一个 token 的 append -> paged decode。
-5. finish/cancel 后立即释放 physical blocks 与 commitment。
-6. Scheduler 根据实际 outcome 更新 wait/service 计数；失败路径不能保留虚假的 admission commitment。
+1. Engine 验证 version、supplied/embedded snapshot 与 config binding。
+2. Engine 从权威状态重建 snapshot，并用 canonical policy 重跑后 exact compare decision。
+3. 全部校验通过后才按 decision admission/reject；workload 随后执行既有 initial-context seeding。
+4. Caller 仅为 `runnable_ids` 生成/选择对应 Q/K/V rows。
+5. Engine 执行一个 token 的 append -> paged decode。
+6. finish/cancel 后立即释放 physical blocks 与 commitment。
+7. Caller 根据实际 outcome 更新 wait/service 计数；失败路径不能保留虚假的 admission commitment。
 
 Scheduler 不实现多 token prefill kernel。Synthetic workload 的 context seeding 位于正式 decode-step 计时边界之外。
 
@@ -236,6 +248,9 @@ terminal request has no commitment and owns no physical block
 waiting request owns no physical block
 decision does not mutate Engine/Cache
 decision version matches before apply
+decision embeds the supplied snapshot/config
+authoritative snapshot rebuild == supplied snapshot
+canonical plan(supplied snapshot/config) == decision
 request/order decisions are deterministic for the same snapshot/config
 ```
 
@@ -251,7 +266,7 @@ request/order decisions are deterministic for the same snapshot/config
 - per-request 最大 service wait。
 - committed blocks、committed-but-unallocated blocks。
 - commitment utilization、physical utilization 及二者差值。
-- scheduler decision p50/p90 wall time。
+- scheduler decision p50/p90 wall time；lifetime 路径必须包含 snapshot 构造、caller plan、Engine 权威重建、canonical replan 与 apply，不得在 apply 前停止计时。
 - stale decisions、stalled steps、resource deadlocks。
 - completed requests/tokens、forced cancellations、backpressure steps。
 
@@ -269,6 +284,8 @@ plan(snapshot) -> no Engine/Cache mutation
 max_batch limit -> fair runnable/deferred rotation
 aged large request -> younger admissions stop until capacity drains
 stale version -> decision rejected without partial apply
+wrong supplied/embedded snapshot or config -> rejected without partial apply
+forged decision field or overridden scheduler -> canonical replan mismatch
 ```
 
 ### 11.2 Engine/Cache 集成测试
@@ -280,6 +297,7 @@ released capacity -> oldest eligible waiting request admitted
 all rows at block boundary -> lifetime policy still makes progress
 unexpected physical backpressure -> invariant failure, no forced cancel
 request churn -> no leaked block or commitment
+policy/snapshot rejection -> applied_decision_count remains unchanged
 ```
 
 ### 11.3 Workload 测试
@@ -319,11 +337,11 @@ same seed/config -> lifecycle and scheduler metrics reproducible
 ### Engine/Cache 集成
 
 - 增加 `state_version` 和 scheduler-facing snapshot。
-- 应用 decision 时进行 stale check。
+- 应用 decision 时进行 stale、snapshot/config binding、权威重建与 canonical replan check。
 - lifecycle 同步释放 commitment。
 - 保持 Cache 为唯一 physical allocator。
 
-验证覆盖 CPU/PyTorch 状态路径、RTX fused/Triton 数值对齐和 stale-decision 原子拒绝。
+验证覆盖 CPU/PyTorch 状态路径、RTX fused/Triton 数值对齐，以及 stale、错 config/snapshot、伪造字段和 overridden scheduler 的原子拒绝。
 
 ### Workload 与对照实验
 

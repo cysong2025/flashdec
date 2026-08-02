@@ -56,8 +56,12 @@ def test_multi_layer_prompt_prefill_commits_once_and_rolls_back_on_failure(monke
     scheduler = BlockAwareScheduler(
         SchedulerConfig(max_active_requests=1, max_batch_requests=1)
     )
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    decision = scheduler.plan(snapshot)
     engine.apply_scheduler_decision(
-        scheduler.plan(engine.scheduling_snapshot(logical_step=0))
+        decision,
+        scheduler=scheduler,
+        snapshot=snapshot,
     )
     k = torch.randn((2, 1, 4))
     v = torch.randn_like(k)

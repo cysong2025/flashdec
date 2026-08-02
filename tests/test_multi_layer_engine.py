@@ -224,18 +224,31 @@ def test_scheduler_cannot_replan_during_open_engine_transaction():
         SchedulerConfig(max_active_requests=1, max_batch_requests=1)
     )
     engine.submit_request(RequestSpec("request", 0, 2, 0))
-    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
-    engine.apply_scheduler_decision(decision)
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    decision = scheduler.plan(snapshot)
+    engine.apply_scheduler_decision(
+        decision,
+        scheduler=scheduler,
+        snapshot=snapshot,
+    )
     transaction = engine.begin_step(["request"])
 
     with pytest.raises(RuntimeError, match="open decode step transaction"):
         engine.scheduling_snapshot(logical_step=1)
     with pytest.raises(RuntimeError, match="open decode step transaction"):
-        engine.apply_scheduler_decision(decision)
+        engine.apply_scheduler_decision(
+            decision,
+            scheduler=scheduler,
+            snapshot=snapshot,
+        )
 
     engine.abort_step(transaction)
     with pytest.raises(RuntimeError, match="stale scheduler decision"):
-        engine.apply_scheduler_decision(decision)
+        engine.apply_scheduler_decision(
+            decision,
+            scheduler=scheduler,
+            snapshot=snapshot,
+        )
     assert engine.scheduling_snapshot(logical_step=1).active[0].seq_len == 0
     assert engine.validate_invariants()
 

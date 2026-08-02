@@ -607,7 +607,11 @@ def run_integrated_workload(engine, config, *, num_q_heads, seed=0):
             active_service_wait_steps=service_wait,
         )
         decision = scheduler.plan(snapshot)
-        engine.apply_scheduler_decision(decision)
+        engine.apply_scheduler_decision(
+            decision,
+            scheduler=scheduler,
+            snapshot=snapshot,
+        )
         scheduler_ms = (time.perf_counter() - decision_start) * 1_000.0
         if tuple(decision.admit_ids) != expected.admitted_ids:
             raise RuntimeError(
@@ -652,7 +656,11 @@ def run_integrated_workload(engine, config, *, num_q_heads, seed=0):
             execution_decision = scheduler.plan(snapshot)
             if execution_decision.admit_ids or execution_decision.rejected_ids:
                 raise RuntimeError("context replan unexpectedly changed admission")
-            engine.apply_scheduler_decision(execution_decision)
+            engine.apply_scheduler_decision(
+                execution_decision,
+                scheduler=scheduler,
+                snapshot=snapshot,
+            )
             scheduler_ms += (time.perf_counter() - decision_start) * 1_000.0
         if tuple(execution_decision.runnable_ids) != expected.runnable_ids:
             raise RuntimeError(

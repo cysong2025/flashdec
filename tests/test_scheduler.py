@@ -357,6 +357,8 @@ class SchedulerPolicyTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertEqual(repr(snapshot), before)
+        self.assertEqual(first.snapshot, snapshot)
+        self.assertEqual(first.scheduler_config, scheduler.config)
         self.assertEqual(first.snapshot_version, 7)
         self.assertEqual(first.runnable_ids, ("a",))
         self.assertEqual(first.deferred_ids, ("b",))

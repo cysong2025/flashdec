@@ -10,8 +10,8 @@ FlashDec `0.0.0` 是研究原型版本。本文件只记录版本级能力变化
 - 实现 request-scoped `PagedKVCache`：block allocate/free/reuse、capacity atomicity、committed `seq_len`、fragmentation/utilization metrics 和 invariant validation。
 - 实现 PyTorch、独立 CUDA 与 fused CUDA 的 RoPE + paged KV append 路径；GPU Engine 默认使用 fused append，reference API 保持 PyTorch 语义基线。
 - 实现 `DecodeEngine` 的 waiting/active/finished/cancelled lifecycle、动态 active batch、显式 backpressure，以及 caller-provided Q/K/V 的 single-token step。
-- 实现 block-aware scheduler：lifetime block commitment、FIFO + aging、bounded runnable subset、versioned decision，以及 stale/forged decision 的原子拒绝。
-- 实现 multi-layer token transaction：跨 layer 共享写入位置、顺序执行、单次 `seq_len` commit、batch abort 和失败回滚。
+- 实现 block-aware scheduler：lifetime block commitment、FIFO + aging、bounded runnable subset，以及携带原始 snapshot/config 的 decision；Engine 在 lifecycle/cache mutation 前重建权威 snapshot、重跑 canonical policy 并原子拒绝 stale、错配或伪造结果。`apply_scheduler_decision()` 现在要求显式传入生成 decision 的 `scheduler` 与 `snapshot`。
+- 实现 multi-layer token transaction：跨 layer 共享写入位置、顺序执行、单次 `seq_len` commit、batch abort 和失败回滚；commit/abort 立即释放 Cache 内部完整 transaction state，只以容量 256 的轻量终态 tombstone 保留近期重复操作诊断。
 - 实现 immutable full-block shared prefix：request refcount、private tail、inactive residency/LRU、terminal cleanup，以及 scheduler 的 shared/private capacity accounting。
 - 实现 Cache-owned trusted transaction provenance，避免已验证位置在每个 layer 重复执行 device reduction 与 host scalar extraction。
 - 实现 integrated scheduled multi-layer workload，覆盖 dynamic arrival、mixed prefix、caller-supplied context、rollback、block reuse 和 terminal zero-used cleanup。

@@ -214,8 +214,13 @@ def test_scheduler_managed_fused_triton_path_matches_reference():
     scheduler = BlockAwareScheduler(
         SchedulerConfig(max_active_requests=1, max_batch_requests=1)
     )
-    decision = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
-    engine.apply_scheduler_decision(decision)
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    decision = scheduler.plan(snapshot)
+    engine.apply_scheduler_decision(
+        decision,
+        scheduler=scheduler,
+        snapshot=snapshot,
+    )
 
     q = torch.randn((1, 2, 64), device="cuda", dtype=torch.float16)
     k = torch.randn((1, 1, 64), device="cuda", dtype=torch.float16)

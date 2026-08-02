@@ -97,7 +97,7 @@
     <text x="59" y="12" class="small" fill="#7c3aed">ORCHESTRATOR</text>
     <text x="59" y="39" class="card-title">DecodeEngine</text>
     <text x="0" y="82" class="card-copy">stable row mapping · lifecycle validation</text>
-    <text x="0" y="107" class="card-copy">multi-layer execution · stale-decision check</text>
+    <text x="0" y="107" class="card-copy">transaction · policy/snapshot validation</text>
   </g>
 
   <!-- Scheduler -->
@@ -108,7 +108,7 @@
     <circle cx="20" cy="20" r="20" fill="#e0f2fe"/>
     <path d="M10 14h20M10 20h13M10 26h17" fill="none" stroke="#0284c7" stroke-width="2.3" stroke-linecap="round"/>
     <circle cx="28" cy="20" r="3" fill="#0284c7"/>
-    <text x="55" y="9" class="small" fill="#0284c7">PURE · VERSIONED DECISION</text>
+    <text x="55" y="9" class="small" fill="#0284c7">PURE · BOUND DECISION</text>
     <text x="55" y="33" class="card-title">Block-aware Scheduler</text>
     <text x="0" y="70" class="card-copy">lifetime commitment · FIFO + aging</text>
   </g>
@@ -121,7 +121,7 @@
   <path d="M795 232H875" class="edge" marker-end="url(#arrow)"/>
   <text x="835" y="218" text-anchor="middle" class="edge-label">state snapshot</text>
   <path d="M875 292H795" class="edge" marker-end="url(#arrow)"/>
-  <text x="835" y="313" text-anchor="middle" class="edge-label">versioned decision</text>
+  <text x="835" y="313" text-anchor="middle" class="edge-label">bound decision</text>
 
   <!-- Authoritative cache -->
   <g filter="url(#shadow)">

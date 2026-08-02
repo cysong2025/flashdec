@@ -24,8 +24,8 @@ FlashDec 用一条可审计的数据路径研究单 token decode：请求如何�
 | --- | --- | --- |
 | logical token 如何映射到非连续 physical KV blocks？ | 独立 dense/paged reference、token-major cache、显式 block table 与 masked online softmax | [warp selection](benchmarks/results/paged_decode_warp_selection_summary.md) · [block-size](benchmarks/results/paged_decode_block_size_summary.md) · [layout](benchmarks/results/paged_decode_kv_layout_summary.md) · [default profile](benchmarks/results/paged_decode_default_profile_summary.md) |
 | 谁拥有 block、`seq_len` 和 request lifecycle？ | PagedKVCache 是唯一权威状态源；kernel 和 benchmark 不推进 lifecycle | [Paged KV 设计](docs/design_paged_kv.md) · [DecodeEngine 设计](docs/design_decode_engine.md) |
-| KV 容量不足时如何避免 boundary deadlock 与 starvation？ | lifetime block commitment、FIFO + aging、公平 runnable subset、stale decision 拒绝 | [scheduler matrix](benchmarks/results/scheduler_capacity_progress_summary.md) |
-| 多层 token 如何只提交一次并支持整体回滚？ | 所有 layer 共享预留位置，按序写入，batch 原子 commit/abort | [multi-layer matrix](benchmarks/results/multi_layer_transaction_summary.md) · [transaction design](docs/design_multi_layer_kv_transaction.md) |
+| KV 容量不足时如何避免 boundary deadlock 与 starvation？ | lifetime block commitment、FIFO + aging、公平 runnable subset、policy/snapshot-bound decision | [scheduler matrix](benchmarks/results/scheduler_capacity_progress_summary.md) |
+| 多层 token 如何只提交一次并支持整体回滚？ | 所有 layer 共享预留位置，按序写入，batch 原子 commit/abort，终态元数据有界回收 | [multi-layer matrix](benchmarks/results/multi_layer_transaction_summary.md) · [transaction design](docs/design_multi_layer_kv_transaction.md) |
 | shared prefix 的收益究竟来自哪里？ | 只共享 immutable full blocks，以 refcount/LRU 管理；容量与 admission 收益和 latency 分开报告 | [8-trial confirmation](benchmarks/results/shared_prefix_capacity_summary.md) |
 | kernel 优化如何传播到系统，又如何公平比较外部实现？ | 分离 append-only、complete-step、profiler 和共同 kernel scope；保留负结果与不可比边界 | [性能报告](docs/performance_report.md) · [FlashInfer baseline](benchmarks/results/flashinfer_paged_decode_baseline_summary.md) |
 
@@ -46,7 +46,7 @@ RequestSpec / caller-provided Q,K,V
                  │
                  ▼
        Block-aware Scheduler
-                 │ versioned decision
+                 │ policy + snapshot-bound decision
                  ▼
             DecodeEngine
                  │ token transaction
@@ -62,7 +62,7 @@ Fused RoPE + KV append   Triton paged decode
       correctness + benchmark evidence
 ```
 
-Scheduler 只产生版本化容量决策；DecodeEngine 编排执行；PagedKVCache 管理 ownership、事务、`seq_len` 和 shared-prefix lifetime。完整不变量见[总体设计](docs/design.md)。
+Scheduler 产生携带原始 K/V-free metadata snapshot 与 config 的容量决策；DecodeEngine 从权威状态重建 snapshot、按 config 重跑 canonical policy 后再编排执行；PagedKVCache 管理 ownership、事务、`seq_len` 和 shared-prefix lifetime。完整不变量见[总体设计](docs/design.md)。
 
 ## 主要发现
 

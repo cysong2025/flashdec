@@ -191,8 +191,14 @@ def _capacity_probe(torch, config, dtype, hit_count, prefix_k, prefix_v):
         _register(engine, prefix_k, prefix_v)
     for spec in _request_specs(config, hit_count):
         engine.submit_request(spec)
-    decision = _scheduler(config).plan(engine.scheduling_snapshot(logical_step=0))
-    engine.apply_scheduler_decision(decision)
+    scheduler = _scheduler(config)
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    decision = scheduler.plan(snapshot)
+    engine.apply_scheduler_decision(
+        decision,
+        scheduler=scheduler,
+        snapshot=snapshot,
+    )
     if not engine.validate_invariants():
         raise RuntimeError("capacity probe invariant validation failed")
     metrics = engine.metrics()
@@ -315,7 +321,11 @@ def _run_decode_steps(torch, engine, scheduler, request_ids, inputs, warmup):
         host_start = time.perf_counter_ns()
         snapshot = engine.scheduling_snapshot(logical_step=step_index)
         decision = scheduler.plan(snapshot)
-        engine.apply_scheduler_decision(decision)
+        engine.apply_scheduler_decision(
+            decision,
+            scheduler=scheduler,
+            snapshot=snapshot,
+        )
         host_ms = (time.perf_counter_ns() - host_start) / 1_000_000.0
         if decision.runnable_ids != request_ids:
             raise RuntimeError("latency probe did not preserve the full request batch")
@@ -358,8 +368,13 @@ def _latency_probe(torch, config, dtype, hit_count, prefix_k, prefix_v, seed):
     for spec in specs:
         engine.submit_request(spec)
     scheduler = _scheduler(config)
-    admission = scheduler.plan(engine.scheduling_snapshot(logical_step=0))
-    engine.apply_scheduler_decision(admission)
+    snapshot = engine.scheduling_snapshot(logical_step=0)
+    admission = scheduler.plan(snapshot)
+    engine.apply_scheduler_decision(
+        admission,
+        scheduler=scheduler,
+        snapshot=snapshot,
+    )
     if admission.admit_ids != request_ids or admission.waiting_ids or admission.rejected_ids:
         raise RuntimeError("latency probe requires complete admission")
 

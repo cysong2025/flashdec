@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 from typing import Hashable
 
@@ -55,6 +55,16 @@ class _KVTokenTransactionState:
     state: str = "open"
 
 
+@dataclass(frozen=True)
+class _TerminalTransactionState:
+    """Metadata-only tombstone for a recently closed transaction."""
+
+    transaction_id: int
+    cache_version: int
+    request_ids: tuple[Hashable, ...]
+    state: str
+
+
 def _torch():
     import torch
 
@@ -79,6 +89,7 @@ class PagedKVCache:
     ACTIVE = "active"
     FINISHED = "finished"
     CANCELLED = "cancelled"
+    _TERMINAL_TRANSACTION_HISTORY_LIMIT = 256
 
     def __init__(
         self,
@@ -145,6 +156,12 @@ class PagedKVCache:
         self._next_transaction_id = 1
         self._open_transaction_id: int | None = None
         self._transactions: dict[int, _KVTokenTransactionState] = {}
+        self._terminal_transactions: OrderedDict[
+            int, _TerminalTransactionState
+        ] = OrderedDict()
+        self._terminal_transaction_history_limit = (
+            self._TERMINAL_TRANSACTION_HISTORY_LIMIT
+        )
         self._transaction_begin_count = 0
         self._transaction_commit_count = 0
         self._transaction_abort_count = 0
@@ -595,6 +612,7 @@ class PagedKVCache:
         state = self._require_open_transaction(transaction)
         if state.next_layer_idx != self.num_layers:
             raise RuntimeError("cannot commit token before all layers are written")
+        view = replace(self._transaction_view(state), state="committed")
         for request_id in state.request_ids:
             request = self._requests[request_id]
             request.seq_len += 1
@@ -603,7 +621,8 @@ class PagedKVCache:
         self._open_transaction_id = None
         self._transaction_commit_count += 1
         self._state_version += 1
-        return self._transaction_view(state)
+        self._retire_transaction(state)
+        return view
 
     def abort_token(self, transaction):
         """Abort an open token and return any boundary blocks it reserved."""
@@ -612,6 +631,9 @@ class PagedKVCache:
             request = self._requests[request_id]
             if not request.block_ids or request.block_ids[-1] != block_id:
                 raise RuntimeError("transaction rollback block ownership is inconsistent")
+        view = replace(self._transaction_view(state), state="aborted")
+        for request_id, block_id in state.newly_allocated_by_request.items():
+            request = self._requests[request_id]
             request.block_ids.pop()
         for block_id in reversed(state.allocation_order):
             self._free_blocks.appendleft(block_id)
@@ -622,11 +644,15 @@ class PagedKVCache:
         self._transaction_abort_count += 1
         self._transaction_rollback_block_count += len(state.allocation_order)
         self._state_version += 1
-        return self._transaction_view(state)
+        self._retire_transaction(state)
+        return view
 
     def transaction_view(self, transaction):
-        """Return the latest detached snapshot for a transaction handle."""
-        return self._transaction_view(self._require_transaction(transaction))
+        """Return the latest detached snapshot for an open transaction handle."""
+        state = self._require_transaction(transaction)
+        if isinstance(state, _TerminalTransactionState):
+            raise RuntimeError(f"token transaction is already {state.state}")
+        return self._transaction_view(state)
 
     def finish_request(self, request_id):
         """Mark an active request finished and release all owned blocks."""
@@ -742,6 +768,13 @@ class PagedKVCache:
             "transaction_commit_count": self._transaction_commit_count,
             "transaction_abort_count": self._transaction_abort_count,
             "open_transaction_count": int(open_transaction is not None),
+            "retained_transaction_state_count": len(self._transactions),
+            "terminal_transaction_history_count": len(
+                self._terminal_transactions
+            ),
+            "terminal_transaction_history_limit": (
+                self._terminal_transaction_history_limit
+            ),
             "pending_request_count": (
                 len(open_transaction.request_ids) if open_transaction is not None else 0
             ),
@@ -833,11 +866,48 @@ class PagedKVCache:
         if set(owned_blocks) | set(free_blocks) != set(range(self.max_blocks)):
             raise RuntimeError("physical block accounting does not cover the cache")
 
-        open_states = [
-            transaction
+        if len(self._transactions) > 1:
+            raise RuntimeError("PagedKVCache retains more than one transaction state")
+        if any(
+            transaction.state != "open"
             for transaction in self._transactions.values()
-            if transaction.state == "open"
-        ]
+        ):
+            raise RuntimeError("terminal transaction retained device-backed state")
+        if self._terminal_transaction_history_limit < 0:
+            raise RuntimeError("terminal transaction history limit is negative")
+        if (
+            len(self._terminal_transactions)
+            > self._terminal_transaction_history_limit
+        ):
+            raise RuntimeError("terminal transaction history exceeds its limit")
+        if set(self._transactions) & set(self._terminal_transactions):
+            raise RuntimeError("transaction appears in both open and terminal state")
+        if any(
+            transaction.state not in {"committed", "aborted"}
+            for transaction in self._terminal_transactions.values()
+        ):
+            raise RuntimeError("terminal transaction history contains an open state")
+        terminal_transaction_ids = tuple(self._terminal_transactions)
+        if any(
+            transaction_id != transaction.transaction_id
+            for transaction_id, transaction in self._terminal_transactions.items()
+        ):
+            raise RuntimeError("terminal transaction history key does not match its state")
+        if any(
+            transaction_id <= 0 or transaction_id >= self._next_transaction_id
+            for transaction_id in terminal_transaction_ids
+        ):
+            raise RuntimeError("terminal transaction history contains an invalid id")
+        if any(
+            transaction.cache_version <= 0
+            or transaction.cache_version > self._state_version
+            for transaction in self._terminal_transactions.values()
+        ):
+            raise RuntimeError("terminal transaction history contains an invalid version")
+        if terminal_transaction_ids != tuple(sorted(terminal_transaction_ids)):
+            raise RuntimeError("terminal transaction history is not ordered by id")
+
+        open_states = list(self._transactions.values())
         if self._open_transaction_id is None:
             if open_states:
                 raise RuntimeError("open transaction is missing from cache state")
@@ -1010,6 +1080,8 @@ class PagedKVCache:
             raise TypeError("transaction must be a KVTokenTransactionView")
         state = self._transactions.get(transaction.transaction_id)
         if state is None:
+            state = self._terminal_transactions.get(transaction.transaction_id)
+        if state is None:
             raise RuntimeError("unknown token transaction")
         if (
             transaction.cache_version != state.cache_version
@@ -1017,6 +1089,23 @@ class PagedKVCache:
         ):
             raise RuntimeError("stale or invalid token transaction handle")
         return state
+
+    def _retire_transaction(self, transaction):
+        retained = self._transactions.pop(transaction.transaction_id, None)
+        if retained is not transaction:
+            raise RuntimeError("token transaction retention state is inconsistent")
+        tombstone = _TerminalTransactionState(
+            transaction_id=transaction.transaction_id,
+            cache_version=transaction.cache_version,
+            request_ids=transaction.request_ids,
+            state=transaction.state,
+        )
+        self._terminal_transactions[transaction.transaction_id] = tombstone
+        while (
+            len(self._terminal_transactions)
+            > self._terminal_transaction_history_limit
+        ):
+            self._terminal_transactions.popitem(last=False)
 
     def _require_open_transaction(self, transaction):
         state = self._require_transaction(transaction)

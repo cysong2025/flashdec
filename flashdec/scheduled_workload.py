@@ -329,8 +329,12 @@ def run_scheduler_workload(engine, config, num_q_heads, seed=0):
             active_service_wait_steps=service_wait_steps,
         )
         decision = scheduler.plan(snapshot)
+        engine.apply_scheduler_decision(
+            decision,
+            scheduler=scheduler,
+            snapshot=snapshot,
+        )
         decision_ms = (time.perf_counter() - decision_start) * 1_000.0
-        engine.apply_scheduler_decision(decision)
 
         admitted = tuple(decision.admit_ids)
         rejected = tuple(decision.rejected_ids)
@@ -359,10 +363,14 @@ def run_scheduler_workload(engine, config, num_q_heads, seed=0):
                 active_service_wait_steps=service_wait_steps,
             )
             decision = scheduler.plan(snapshot)
-            decision_ms += (time.perf_counter() - decision_start) * 1_000.0
             if decision.admit_ids or decision.rejected_ids:
                 raise RuntimeError("context replan unexpectedly changed admission")
-            engine.apply_scheduler_decision(decision)
+            engine.apply_scheduler_decision(
+                decision,
+                scheduler=scheduler,
+                snapshot=snapshot,
+            )
+            decision_ms += (time.perf_counter() - decision_start) * 1_000.0
 
         for request_id in decision.waiting_ids:
             wait_steps[request_id] += 1

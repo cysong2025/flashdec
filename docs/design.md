@@ -26,8 +26,8 @@ FlashDec 研究单 GPU LLM decode 中三个相互关联的问题：
 
 所有权规则：
 
-- Scheduler 只产生 decision，不直接修改 Cache。
-- DecodeEngine 校验 decision 并组织一次或多层 token 执行。
+- Scheduler 只产生携带原始 snapshot/config 的 decision，不直接修改 Cache。
+- DecodeEngine 从权威状态重建 snapshot、重跑 canonical policy、exact compare decision，再组织一次或多层 token 执行。
 - PagedKVCache 是 block ownership、request lifecycle 和 seq_len 的唯一事实来源。
 - Kernel 只消费 tensor 和位置，不维护 request 状态。
 - Benchmark 通过公开 runtime API 执行，不复制 allocator 或事务语义。
@@ -92,7 +92,7 @@ Open transaction 中的 layer 可以读取 `committed_seq_len + 1` 的有效视�
 
 ## 6. Scheduler 与 Backpressure
 
-Scheduler 根据 logical capacity、physical free blocks、request lifetime commitment 和等待年龄选择 runnable subset。Decision 带有 `state_version`；Engine 在执行前拒绝 stale 或 forged decision。
+Scheduler 根据 logical capacity、physical free blocks、request lifetime commitment 和等待年龄选择 runnable subset。Decision 携带 `state_version`、原始 K/V-free metadata snapshot 与 config；Engine 在执行前重建 Engine/Cache-derived 字段并重跑 canonical policy，拒绝 stale、错配或 forged decision。
 
 容量不足是正常 backpressure，不是 Cache 异常。默认 lifetime FIFO + aging 策略优先保证：
 

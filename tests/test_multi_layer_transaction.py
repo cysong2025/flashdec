@@ -1,5 +1,7 @@
 """Reference coverage for multi-layer KV token transactions."""
 
+from dataclasses import replace
+
 import pytest
 
 
@@ -214,12 +216,92 @@ def test_transaction_rejects_out_of_order_missing_and_terminal_transitions():
     with pytest.raises(RuntimeError, match="requires layer 1"):
         cache.write_token_layer(transaction, 0, token, token)
     cache.write_token_layer(transaction, 1, token, token)
-    cache.commit_token(transaction)
+    committed = cache.commit_token(transaction)
 
     with pytest.raises(RuntimeError, match="already committed"):
         cache.commit_token(transaction)
     with pytest.raises(RuntimeError, match="already committed"):
         cache.abort_token(transaction)
+    with pytest.raises(RuntimeError, match="already committed"):
+        cache.transaction_view(committed)
+    assert cache.validate_invariants()
+
+
+def test_terminal_transaction_retention_drops_cache_tensors_and_is_bounded():
+    cache = _cache(num_layers=1, block_size=16, max_blocks=1)
+    cache._terminal_transaction_history_limit = 4
+    cache.add_request("request")
+    token = _values(1, 1)
+    handles = []
+
+    for transaction_index in range(12):
+        transaction = cache.begin_token(["request"])
+        handles.append(transaction)
+        if transaction_index % 3 == 2:
+            cache.abort_token(transaction)
+        else:
+            cache.write_token_layer(transaction, 0, token, token)
+            cache.commit_token(transaction)
+
+        metrics = cache.metrics()
+        assert metrics["retained_transaction_state_count"] == 0
+        assert metrics["terminal_transaction_history_count"] <= 4
+        assert metrics["terminal_transaction_history_limit"] == 4
+        assert cache.validate_invariants()
+
+    assert list(cache._terminal_transactions) == [9, 10, 11, 12]
+    assert all(
+        not isinstance(value, torch.Tensor)
+        for tombstone in cache._terminal_transactions.values()
+        for value in vars(tombstone).values()
+    )
+    with pytest.raises(RuntimeError, match="unknown token transaction"):
+        cache.abort_token(handles[0])
+    with pytest.raises(RuntimeError, match="already aborted"):
+        cache.abort_token(handles[-1])
+    with pytest.raises(RuntimeError, match="already committed"):
+        cache.commit_token(handles[-2])
+    forged = replace(handles[-2], request_ids=("forged",))
+    with pytest.raises(RuntimeError, match="stale or invalid"):
+        cache.commit_token(forged)
+
+
+@pytest.mark.parametrize("terminal_operation", ["commit", "abort"])
+def test_terminal_view_failure_does_not_publish_or_retire_transaction(
+    monkeypatch,
+    terminal_operation,
+):
+    cache = _cache(num_layers=1, block_size=1, max_blocks=1)
+    cache.add_request("request")
+    transaction = cache.begin_token(["request"])
+    token = _values(1, 1)
+    if terminal_operation == "commit":
+        cache.write_token_layer(transaction, 0, token, token)
+    transaction_view = cache._transaction_view
+
+    def fail_view(_transaction):
+        raise RuntimeError("injected terminal view failure")
+
+    monkeypatch.setattr(cache, "_transaction_view", fail_view)
+    terminal_call = getattr(cache, f"{terminal_operation}_token")
+    with pytest.raises(RuntimeError, match="injected terminal view failure"):
+        terminal_call(transaction)
+
+    assert cache.has_open_transaction
+    assert cache.request_state("request")["seq_len"] == 0
+    assert cache.request_block_ids("request") == (0,)
+    assert cache.metrics()["retained_transaction_state_count"] == 1
+    assert cache.metrics()["terminal_transaction_history_count"] == 0
+    assert cache.validate_invariants()
+
+    monkeypatch.setattr(cache, "_transaction_view", transaction_view)
+    closed = terminal_call(transaction)
+    assert closed.state == {
+        "commit": "committed",
+        "abort": "aborted",
+    }[terminal_operation]
+    assert cache.metrics()["retained_transaction_state_count"] == 0
+    assert cache.metrics()["terminal_transaction_history_count"] == 1
     assert cache.validate_invariants()
 
 

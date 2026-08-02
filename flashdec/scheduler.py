@@ -260,8 +260,10 @@ class SchedulingSnapshot:
 
 @dataclass(frozen=True)
 class SchedulerDecision:
-    """Pure scheduling output; applying it is a separate Engine operation."""
+    """Pure scheduling output bound to its policy and immutable input snapshot."""
 
+    snapshot: SchedulingSnapshot
+    scheduler_config: SchedulerConfig
     snapshot_version: int
     admit_ids: tuple[Hashable, ...]
     runnable_ids: tuple[Hashable, ...]
@@ -423,6 +425,8 @@ class BlockAwareScheduler:
             reason for reason in self._REASON_ORDER if reason in reasons
         )
         return SchedulerDecision(
+            snapshot=snapshot,
+            scheduler_config=config,
             snapshot_version=snapshot.state_version,
             admit_ids=tuple(item.request_id for item in admitted),
             runnable_ids=tuple(item.request_id for item in runnable),

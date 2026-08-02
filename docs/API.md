@@ -64,6 +64,10 @@ Cache 是 request seq_len、physical block ownership、shared-prefix residency �
 
 `begin_token()` 返回的是 detached snapshot。Cache 在 host allocator 完成 reservation 后会验证 position、block offset、physical block id 与 request block table 的一致性；`write_token_layer_fused_cuda()` 根据 transaction id 回查该内部状态，不使用调用方可修改的 snapshot 位置 tensor。这样 Cache-owned fused path 可以跳过 raw CUDA index 的 device reduction + `.item()`，但公开低层 `fused_rope_kv_append()` 仍保留完整的值域检查。private trusted raw primitive 不属于 `flashdec` 顶层 API。
 
+只有 open transaction 会在 Cache 内保留完整 allocator/device metadata。`commit_token()` / `abort_token()` 先成功构造返回 view，再发布或回滚状态，并立即删除完整内部 state；Cache 仅保留最多 256 条 `transaction_id/cache_version/request_ids/state` 轻量 tombstone，用于近期 double commit/abort 的明确诊断。超过上限的旧 handle 变为 `unknown token transaction`；`transaction_view()` 只接受 open handle，终态 snapshot 由 commit/abort 的返回值提供。调用方自己长期保存 detached view 仍会保存其中 tensor，这不属于 Cache 内部 retention。
+
+`metrics()` 通过 `retained_transaction_state_count`、`terminal_transaction_history_count` 和 `terminal_transaction_history_limit` 暴露该边界；`validate_invariants()` 要求完整 transaction state 至多一个且只能为 open，终态历史不得超过固定上限。
+
 Shared-prefix API 接收已经构建的 immutable full blocks，shape 为 `[num_layers, num_prefix_blocks, num_kv_heads, block_size, head_dim]`。多个 request 可以共享同一组 physical ids，prefix 后的 tail 始终私有；无 active owner 的 prefix 才能被显式或 LRU 淘汰。`prefix_cache_capacity_blocks=0` 是默认值，表示关闭该功能。完整所有权说明见[Shared Prefix Blocks 设计](design_shared_prefix_blocks.md)。
 
 ## RoPE 与 Append
@@ -155,7 +159,22 @@ Layer 必须按 `0..N-1` 顺序执行。`step_layer()` 的输入、写入或 dec
 
 `RequestSpec` 固定 initial context、最大生成 token 数、submission order 和可选 opaque `prefix_id`；`SchedulerConfig` 固定 active/batch 上限、reserve blocks 与 aging threshold。`BlockAwareScheduler.plan(snapshot)` 是纯函数式规划步骤，不修改 Engine 或 Cache。
 
-`SchedulerDecision` 必须由同一 `state_version` 的 Engine 应用。过期或伪造 decision 会在任何部分 mutation 前被拒绝。
+```python
+snapshot = engine.scheduling_snapshot(
+    logical_step,
+    waiting_wait_steps=wait_steps,
+    waiting_skip_counts=skip_counts,
+    active_service_wait_steps=service_wait_steps,
+)
+decision = scheduler.plan(snapshot)
+engine.apply_scheduler_decision(
+    decision,
+    scheduler=scheduler,
+    snapshot=snapshot,
+)
+```
+
+`SchedulerDecision` 携带生成它的完整 K/V-free metadata `SchedulingSnapshot` 与 `SchedulerConfig`。应用时必须显式提供同一 value-equal snapshot 和 config-equal scheduler；Engine 会保留调用方负责的 fairness counters，同时从当前 Engine/Cache 重建所有权威字段，再用 `BlockAwareScheduler(scheduler.config)` 重跑 canonical policy 并 exact compare。stale、错 snapshot/config、被修改 decision，以及被覆写 scheduler 产生的非 canonical decision，都会在任何 admission/rejection mutation 前被拒绝。这是单次 apply 的完整性约束，不是线程安全或不可信进程的安全认证；该 API 变更不兼容旧的单参数调用。
 
 ## Workload
 

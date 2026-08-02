@@ -96,7 +96,7 @@ v_cache[layer_idx, physical_block, :, block_offset, :]
 - `OPEN -> ABORTED`
 - terminal transaction 不能再次 write、commit 或 abort。
 
-整个 Cache 同时只允许一个 open batch transaction。这与单线程 `DecodeEngine.step()` 边界一致，不承诺 overlapping transaction、stream ownership 或并发锁语义。
+整个 Cache 同时只允许一个 open batch transaction。这与单线程 `DecodeEngine.step()` 边界一致，不承诺 overlapping transaction、stream ownership 或并发锁语义。COMMITTED/ABORTED 是公开返回 view 与近期重复操作诊断状态，不是完整内部 transaction 的长期驻留状态：终态转换后 Cache 立即删除含 `block_tables` 的完整 state，只保留容量有界的轻量 tombstone。
 
 ## 5. 数据模型
 
@@ -117,13 +117,28 @@ class KVTokenTransactionView:
 
 @dataclass
 class _KVTokenTransactionState:
-    view metadata
+    transaction_id: int
+    cache_version: int
+    request_ids: tuple[Hashable, ...]
+    positions: tuple[int, ...]
+    locations: tuple[tuple[int, int], ...]
+    block_tables: Tensor
     newly_allocated_by_request: dict[Hashable, int]
-    original_block_counts: dict[Hashable, int]
+    allocation_order: tuple[int, ...]
+    next_layer_idx: int
     written_layers: set[int]
+    state: str
+
+
+@dataclass(frozen=True)
+class _TerminalTransactionState:
+    transaction_id: int
+    cache_version: int
+    request_ids: tuple[Hashable, ...]
+    state: str                        # committed/aborted
 ```
 
-公开 view 不暴露 mutable request state 或 free list。positions/block tables 等 tensor 是供 attention 使用的快照；Cache write/commit/abort 必须根据 transaction id 回查内部 location，不能信任调用方可修改的 tensor 作为 ownership 依据。Cache 内部 state 记录 rollback 所需的最小信息。
+公开 view 不暴露 mutable request state 或 free list。positions/block tables 等 tensor 是供 attention 使用的快照；Cache write/commit/abort 必须根据 transaction id 回查内部 location，不能信任调用方可修改的 tensor 作为 ownership 依据。只有 open state 记录 rollback 与 device-backed block table；terminal tombstone 只保存 handle identity/state，不保存 Cache-owned device metadata tensor。`request_ids` 是 caller-provided hashable identity，可能自身包装任意对象，因此这里的保证特指 Cache 不保留 transaction positions/block tables 等内部 tensor。
 
 ## 6. Cache API
 
@@ -185,11 +200,11 @@ cache.commit_token(tx)
 
 commit 只有在全部 `num_layers` 已按顺序写入后才能执行：
 
-1. 对 batch 中每个 request 将 committed `seq_len += 1`。
-2. 清除 request in-flight marker。
-3. 将 reserved block 转为普通 committed ownership。
-4. transaction 进入 COMMITTED。
-5. 更新 transaction/token/allocator metrics 和 state version。
+1. 在 lifecycle mutation 前成功 materialize detached COMMITTED 返回 view；若构造失败，transaction 保持 OPEN，可重试或 abort。
+2. 对 batch 中每个 request 将 committed `seq_len += 1`。
+3. 清除 request in-flight marker，并将 reserved block 转为普通 committed ownership。
+4. 更新 transaction/token/allocator metrics 和 state version。
+5. 从完整 state 表删除 transaction，写入容量有界的 COMMITTED tombstone。
 
 整个 batch 一起 commit，不支持部分 request commit。
 
@@ -201,11 +216,11 @@ cache.abort_token(tx)
 
 abort：
 
-1. committed `seq_len` 保持 begin 前的值。
-2. 从 request block list 移除本 transaction 新增的 boundary block。
-3. 按 deterministic free-list 规则归还这些 block。
-4. 清除所有 request 的 in-flight marker。
-5. transaction 进入 ABORTED 并记录 rollback metrics/state version。
+1. 在 ownership mutation 前成功 materialize detached ABORTED 返回 view；若构造失败，transaction 与 reservation 保持 OPEN。
+2. committed `seq_len` 保持 begin 前的值。
+3. 从 request block list 移除本 transaction 新增的 boundary block，并按 deterministic free-list 规则归还。
+4. 清除所有 request 的 in-flight marker并记录 rollback metrics/state version。
+5. 从完整 state 表删除 transaction，写入容量有界的 ABORTED tombstone。
 
 已经写入旧 tail block 的 K/V 字节不需要恢复原值。它们位于 committed `seq_len` 之外，对普通 reader 不可见；下一次 transaction 会覆盖同一 offset。新 block 中的 partial 数据也无需清零，归还后的新 owner 由自身 seq_len 屏蔽未写区域。
 
@@ -233,6 +248,7 @@ except Exception:
 - caller 必须丢弃 abort transaction 已产生的中间 layer output。
 - commit 缺少任一 layer 时明确失败，transaction 保持 OPEN，调用方随后 abort。
 - invalid shape、重复 layer、越序 layer、stale handle、double commit/abort 都必须显式报错。
+- `transaction_view()` 只 materialize OPEN state；终态 snapshot 使用 commit/abort 的返回 view。近期终态 handle 通过 tombstone 报 already committed/aborted，超过历史上限后报 unknown。
 - CUDA extension/toolchain 应尽可能在 `begin_token()` 前完成 lazy load；begin 后的任何异常都走 abort。
 
 ## 8. Engine API 边界
@@ -338,6 +354,8 @@ written_layers == {0, ..., next_layer_idx - 1}
 
 无论 OPEN/COMMITTED/ABORTED，owned/free block 集合必须无重复、无遗漏。
 
+完整 transaction 表必须至多包含当前一个 OPEN state；不得保留 terminal device-backed state。终态 tombstone 按 transaction id 单调排列、key/id 一致、只含 committed/aborted，且数量不得超过固定 history limit。调用方持有的 detached view 可能继续持有 tensor，但不属于 Cache 内部 retention。
+
 ## 12. Metrics
 
 在现有 allocator/lifecycle metrics 上增加：
@@ -346,6 +364,9 @@ written_layers == {0, ..., next_layer_idx - 1}
 - `transaction_commit_count`
 - `transaction_abort_count`
 - `open_transaction_count`（0 或 1）
+- `retained_transaction_state_count`（与 open state 数一致，0 或 1）
+- `terminal_transaction_history_count`（当前轻量 tombstone 数）
+- `terminal_transaction_history_limit`（默认 256）
 - `pending_request_count`
 - `reserved_transaction_blocks`
 - `transaction_layer_write_count`
@@ -373,6 +394,9 @@ commit before all layers -> rejected
 duplicate/out-of-order layer -> rejected before write
 finish/cancel/append during open tx -> rejected
 stale/double commit/double abort -> rejected
+terminal transaction_view -> rejected; commit/abort return final snapshot
+bounded commit/abort churn -> no full-state or Cache-owned device-metadata retention
+terminal view materialization failure -> transaction remains OPEN and retryable
 single-layer compatibility wrapper -> existing reference unchanged
 request churn with commit/abort -> no leaked blocks
 scheduler snapshot during open transaction -> rejected
@@ -540,7 +564,7 @@ candidate 必须保持以下边界：
 
 - internal bundle 至少覆盖 positions、physical block ids、block offsets、block tables 与 effective seq lens；同一 transaction 内 tensor identity 稳定。
 - public `KVTokenTransactionView` 和 Engine public handle 始终是 detached snapshot，不得与 internal bundle alias；调用方篡改公开 tensor 不能改变真实 append/decode。
-- commit/abort 必须释放 internal GPU metadata；terminal transaction 只保留足以区分 committed/aborted 和拒绝重复操作的 host tombstone，不因历史 transaction 累积显存。
+- commit/abort 必须释放 internal GPU metadata；terminal transaction 只保留足以区分 committed/aborted 和拒绝重复操作的容量有界轻量 tombstone，不因历史 transaction 累积显存。
 - metadata 构建失败必须与 reservation failure 一样原子 rollback，不留下 open marker、block leak 或 state-version 偏移。
 - persistent 路径继续使用已验证的 trusted raw launch，不修改 kernel math、Scheduler、shared-prefix ownership 或 kernel 参数。
 

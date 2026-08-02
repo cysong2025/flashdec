@@ -371,21 +371,65 @@ class DecodeEngine:
             active=tuple(active),
         )
 
-    def apply_scheduler_decision(self, decision):
-        """Atomically apply admission/rejection from one fresh decision."""
-        from .scheduler import SchedulerDecision
+    def apply_scheduler_decision(self, decision, *, scheduler, snapshot):
+        """Atomically apply one policy- and snapshot-consistent decision.
+
+        The caller must provide the scheduler and exact immutable snapshot used
+        to create ``decision``.  Engine/Cache-derived snapshot fields are
+        rebuilt from authoritative state, while caller-owned fairness counters
+        are preserved.  The policy is then rerun and compared exactly before
+        any lifecycle or cache mutation occurs.
+        """
+        from .scheduler import (
+            BlockAwareScheduler,
+            SchedulerDecision,
+            SchedulingSnapshot,
+        )
 
         if not isinstance(decision, SchedulerDecision):
             raise TypeError("decision must be a SchedulerDecision")
+        if not isinstance(scheduler, BlockAwareScheduler):
+            raise TypeError("scheduler must be a BlockAwareScheduler")
+        if not isinstance(snapshot, SchedulingSnapshot):
+            raise TypeError("snapshot must be a SchedulingSnapshot")
         if not self._scheduler_managed:
             raise RuntimeError("apply_scheduler_decision requires scheduler-managed mode")
         self._require_no_open_step("apply a scheduler decision")
         self._require_cache_synchronized(stale=True)
-        if decision.snapshot_version != self._state_version:
+        if (
+            snapshot.state_version != self._state_version
+            or decision.snapshot_version != snapshot.state_version
+        ):
             self._stale_decision_count += 1
-            raise RuntimeError("stale scheduler decision")
+            raise RuntimeError("stale scheduler decision or snapshot")
         if self._pending_runnable_ids is not None:
             raise RuntimeError("a scheduler decision is already pending execution")
+
+        authoritative_snapshot = self.scheduling_snapshot(
+            snapshot.logical_step,
+            waiting_wait_steps={
+                item.request_id: item.wait_steps for item in snapshot.waiting
+            },
+            waiting_skip_counts={
+                item.request_id: item.skip_count for item in snapshot.waiting
+            },
+            active_service_wait_steps={
+                item.request_id: item.service_wait_steps for item in snapshot.active
+            },
+        )
+        if snapshot != authoritative_snapshot:
+            raise ValueError("scheduling snapshot does not match DecodeEngine state")
+        if decision.snapshot != snapshot:
+            raise ValueError("decision is not bound to the supplied scheduling snapshot")
+        if decision.scheduler_config != scheduler.config:
+            raise ValueError("decision is not bound to the supplied scheduler config")
+        # Re-run the canonical policy from the supplied immutable config rather
+        # than trusting an overridden/stateful ``plan`` method on a subclass.
+        expected_decision = BlockAwareScheduler(scheduler.config).plan(snapshot)
+        if decision != expected_decision:
+            raise ValueError(
+                "scheduler decision does not match the supplied policy and snapshot"
+            )
 
         waiting_ids = tuple(
             request_id

@@ -80,7 +80,7 @@ Python 3.10 和 3.12 均进入仓库级 dependency-free checks。GPU 数值与�
 
 DecodeEngine 支持 waiting/active/finished/cancelled lifecycle、deterministic row mapping、explicit backpressure、torch/native/fused append path、reference/Triton decode path，以及 multi-layer token transaction。
 
-Block-aware Scheduler 支持 lifetime block commitment、FIFO + aging、bounded runnable subset、deferred requests 和 versioned decision validation。它只返回 request ids，不持有 tensor 或 physical pages。
+Block-aware Scheduler 支持 lifetime block commitment、FIFO + aging、bounded runnable subset、deferred requests，以及 policy/snapshot-bound decision validation。Decision 携带 request ids、原始 K/V-free metadata snapshot 与 config；Scheduler 不持有 K/V tensor 或 physical pages。`apply_scheduler_decision()` 必须显式接收生成 decision 的 scheduler 与 snapshot，旧的单参数调用不兼容。
 
 不支持：
 

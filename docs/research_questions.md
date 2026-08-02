@@ -104,12 +104,12 @@ append-only 结果解释数据路径本身；complete-step workload 再验证 al
 
 ### 实现回答
 
-[`BlockAwareScheduler`](../flashdec/scheduler.py) 不持有 tensor 或 physical block，只消费版本化的 request/cache snapshot 并返回 request ids：
+[`BlockAwareScheduler`](../flashdec/scheduler.py) 不持有 K/V tensor 或 physical block，只消费版本化的 request/cache metadata snapshot；返回的 decision 携带 request ids、原始 snapshot 与 config：
 
 - admission 使用 lifetime block commitment，为请求的剩余生命周期保留逻辑容量；physical block 仍由 Cache 惰性分配。
 - FIFO + aging/drain barrier 限制小请求无限绕过较老请求。
 - runnable subset 服从 batch 上限并记录 deferred requests。
-- decision 绑定 Engine/Cache `state_version`；状态变化后旧 decision 被拒绝，不允许部分应用。
+- decision 绑定 Engine/Cache `state_version`、原始 snapshot 与 scheduler config；Engine 应用前从权威状态重建 snapshot，并按 config 重跑 canonical policy，任何错配都不允许部分应用。
 - `cancel_on_backpressure` 和 `greedy_step_only` 只作为对照策略，不共享默认策略的进展保证。
 
 算法、不变量与指标见[Scheduler 设计](design_scheduler.md)。
