@@ -191,6 +191,32 @@ python -m pytest -vv
 
 只有 focused 与 full 都通过，才进入 benchmark。pytest 总耗时只用于工程回归，不代表 kernel latency。
 
+### 2026-08-30 R6-A 回归记录
+
+代码提交 `87d8a34` 在 NVIDIA GeForce RTX 5070（SM 12.0）与 CUDA Toolkit/NVCC `12.8.93` 上完成一次 clean-checkout 回归。环境为 Python `3.12.3`、PyTorch `2.11.0+cu128`、Triton `3.6.0`，并设置 `FLASHINFER_CUDA_ARCH_LIST=12.0a`；`python -m pip check` 报告 `No broken requirements found`。
+
+```bash
+python scripts/run_validation.py --python "$(command -v python)" \
+  --phase local --phase focused
+
+python scripts/run_validation.py --python "$(command -v python)" \
+  --phase full
+
+python scripts/check_release.py \
+  --require-clean --require-evidence --require-public
+```
+
+结果如下：
+
+- local：48 个 dependency-free `unittest` 全部通过；
+- focused：`254 passed, 20 subtests passed in 78.53s`；
+- full：`501 passed, 100 subtests passed in 168.13s`；
+- release check：clean worktree、公开许可证与 canonical evidence gate 均为 `PASS`。
+
+本轮 focused 覆盖 transaction terminal-state 有界回收、detached handle provenance、scheduler decision 的 snapshot/config binding，以及 Engine 在任何 lifecycle/cache mutation 前的 authoritative snapshot 重建与 canonical replan。原始 `environment.log`、`local_focused.log`、`full.log` 和 `release_check.log` 保存在仓库外，不提交到 Git。
+
+该记录复用已验证的隔离 cu128 开发环境，因此属于当前代码的 GPU correctness/release regression，不构成全新环境安装保证，也不产生新的性能结论。正式性能数字继续绑定各自 canonical summary 中记录的 evidence commit。
+
 ## Non-instrumented multi-trial workload
 
 快速验证 runner/trial schema：
