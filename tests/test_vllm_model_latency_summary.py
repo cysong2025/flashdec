@@ -37,6 +37,7 @@ def _write_fixture(
         "max_num_batched_tokens",
         "gpu_memory_utilization",
         "compilation_mode",
+        "vllm_cache_root",
         "flashdec_num_splits",
         "warmup_iters",
         "num_iters",
@@ -61,8 +62,8 @@ def _write_fixture(
             ):
                 rows.append(
                     {
-                        "schema_version": 1,
-                        "git_commit": "abc123",
+                        "schema_version": 2,
+                        "git_commit": "abc1234",
                         "git_worktree_clean": True,
                         "device": "RTX 5070",
                         "torch_version": "2.11.0",
@@ -80,6 +81,7 @@ def _write_fixture(
                         "max_num_batched_tokens": 2048,
                         "gpu_memory_utilization": 0.78,
                         "compilation_mode": "default_inductor_cudagraph",
+                        "vllm_cache_root": "/tmp/vllm-cache/abc1234",
                         "flashdec_num_splits": "auto",
                         "warmup_iters": 3,
                         "num_iters": 5,
@@ -107,7 +109,24 @@ def test_summary_accepts_target_win_and_guardrail(tmp_path):
 
     assert "Overall external-model gate: **PASS**" in text
     assert "4.00%" in text
+    assert "Commit-scoped vLLM cache: `/tmp/vllm-cache/abc1234`" in text
     assert output.read_text(encoding="utf-8") == text
+
+
+def test_summary_rejects_cache_root_from_another_commit(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    for row in rows:
+        row["vllm_cache_root"] = "/tmp/vllm-cache/def5678"
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="must contain the Git commit"):
+        MODULE.summarize(source, output)
 
 
 def test_summary_rejects_missing_target_win(tmp_path):

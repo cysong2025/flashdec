@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Benchmark FlashDec against vLLM Triton attention on Qwen2.5 decode shapes."""
+"""Benchmark fused FlashDec KV append + attention against the vLLM baseline.
+
+The common timed operation is one current-token KV-cache append followed by
+single-token decode attention.  The native path calls
+``TritonAttentionImpl.do_kv_cache_update`` and then ``forward``; the FlashDec
+path performs the same append inside its fused ``forward`` implementation.
+"""
 
 from __future__ import annotations
 
@@ -23,12 +29,21 @@ from vllm.v1.attention.backends.triton_attn import (
 )
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MODEL_ID = "Qwen2.5-3B-Instruct"
 NUM_Q_HEADS = 16
 NUM_KV_HEADS = 2
 HEAD_DIM = 128
 BLOCK_SIZE = 16
+INPUT_SEED_BASE = 20260830
+COMPARISON_SCOPE = "current_token_kv_append_plus_single_token_decode_attention"
+CACHE_STATE_POLICY = (
+    "paired_deterministic_snapshot_reset_per_trial_idempotent_append"
+)
+TIMED_OPERATIONS = {
+    "vllm_triton_attn": "do_kv_cache_update_then_forward",
+    "flashdec": "fused_kv_append_forward",
+}
 
 
 @dataclass(frozen=True)
@@ -53,6 +68,7 @@ class _LayerScales:
         self._q_scale = one
         self._k_scale = one
         self._v_scale = one
+        self.kv_sharing_target_layer_name = None
 
 
 def _git_value(*args: str) -> str:
@@ -66,9 +82,26 @@ def _git_value(*args: str) -> str:
     return completed.stdout.strip() if completed.returncode == 0 else "unknown"
 
 
+def _case_seed(case: Case) -> int:
+    return INPUT_SEED_BASE + case.batch_size + case.context_len
+
+
+def _append_slot_indices(case: Case) -> tuple[int, ...]:
+    """Return physical slots for each request's current (last) token."""
+    logical_blocks = math.ceil(case.context_len / BLOCK_SIZE)
+    current_logical_block = (case.context_len - 1) // BLOCK_SIZE
+    token_offset = (case.context_len - 1) % BLOCK_SIZE
+    return tuple(
+        (request * logical_blocks + current_logical_block) * BLOCK_SIZE
+        + token_offset
+        for request in range(case.batch_size)
+    )
+
+
 def _make_case(case: Case, dtype: torch.dtype, device: torch.device):
-    torch.manual_seed(20260830 + case.batch_size + case.context_len)
-    torch.cuda.manual_seed_all(20260830 + case.batch_size + case.context_len)
+    seed = _case_seed(case)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     logical_blocks = math.ceil(case.context_len / BLOCK_SIZE)
     num_blocks = case.batch_size * logical_blocks
     query = torch.randn(
@@ -76,7 +109,17 @@ def _make_case(case: Case, dtype: torch.dtype, device: torch.device):
         device=device,
         dtype=dtype,
     )
-    kv_cache = torch.randn(
+    key = torch.randn(
+        (case.batch_size, NUM_KV_HEADS, HEAD_DIM),
+        device=device,
+        dtype=dtype,
+    )
+    value = torch.randn(
+        (case.batch_size, NUM_KV_HEADS, HEAD_DIM),
+        device=device,
+        dtype=dtype,
+    )
+    initial_kv_cache = torch.randn(
         (num_blocks, 2, BLOCK_SIZE, NUM_KV_HEADS, HEAD_DIM),
         device=device,
         dtype=dtype,
@@ -90,6 +133,14 @@ def _make_case(case: Case, dtype: torch.dtype, device: torch.device):
     query_start_loc = torch.arange(
         case.batch_size + 1, device=device, dtype=torch.int32
     )
+    append_slots = _append_slot_indices(case)
+    slot_mapping = torch.tensor(append_slots, device=device, dtype=torch.int64)
+    # The append destination is logically unallocated before this decode step.
+    # Zeroing it makes the physical starting snapshot deterministic and also
+    # ensures the correctness check proves that both paths really write K/V.
+    for slot in append_slots:
+        block_index, token_offset = divmod(slot, BLOCK_SIZE)
+        initial_kv_cache[block_index, :, token_offset].zero_()
     seq_threshold_3d = 64
     num_segments = 16
     metadata = TritonAttentionMetadata(
@@ -99,22 +150,20 @@ def _make_case(case: Case, dtype: torch.dtype, device: torch.device):
         max_seq_len=case.context_len,
         seq_lens=seq_lens,
         block_table=block_table,
-        slot_mapping=torch.empty(
-            (case.batch_size,), device=device, dtype=torch.int64
-        ),
+        slot_mapping=slot_mapping,
         seq_threshold_3D=seq_threshold_3d,
         num_par_softmax_segments=num_segments,
-        softmax_segm_output=torch.empty(
+        softmax_segm_output=torch.zeros(
             (seq_threshold_3d, NUM_Q_HEADS, num_segments, HEAD_DIM),
             device=device,
             dtype=torch.float32,
         ),
-        softmax_segm_max=torch.empty(
+        softmax_segm_max=torch.zeros(
             (seq_threshold_3d, NUM_Q_HEADS, num_segments),
             device=device,
             dtype=torch.float32,
         ),
-        softmax_segm_expsum=torch.empty(
+        softmax_segm_expsum=torch.zeros(
             (seq_threshold_3d, NUM_Q_HEADS, num_segments),
             device=device,
             dtype=torch.float32,
@@ -126,7 +175,7 @@ def _make_case(case: Case, dtype: torch.dtype, device: torch.device):
         prefix_kv_lens=None,
         suffix_kv_lens=None,
     )
-    return query, kv_cache, metadata
+    return query, key, value, initial_kv_cache, metadata
 
 
 def _make_impl(cls):
@@ -141,13 +190,35 @@ def _make_impl(cls):
     )
 
 
-def _run_once(impl, layer, query, kv_cache, metadata, output):
-    empty = query.new_empty((0,))
+def _run_native_once(
+    impl, layer, query, key, value, kv_cache, metadata, output
+):
+    impl.do_kv_cache_update(
+        layer,
+        key,
+        value,
+        kv_cache,
+        metadata.slot_mapping,
+    )
     return impl.forward(
         layer,
         query,
-        empty,
-        empty,
+        key,
+        value,
+        kv_cache,
+        metadata,
+        output,
+    )
+
+
+def _run_flashdec_once(
+    impl, layer, query, key, value, kv_cache, metadata, output
+):
+    return impl.forward(
+        layer,
+        query,
+        key,
+        value,
         kv_cache,
         metadata,
         output,
@@ -203,36 +274,88 @@ def main() -> None:
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     device_name = torch.cuda.get_device_name(device)
     rows = []
+    print(f"Comparison scope: {COMPARISON_SCOPE}", flush=True)
+    print(
+        f"Timed paths: native={TIMED_OPERATIONS['vllm_triton_attn']}; "
+        f"flashdec={TIMED_OPERATIONS['flashdec']}",
+        flush=True,
+    )
+    print(f"Cache state policy: {CACHE_STATE_POLICY}", flush=True)
 
     for case in selected:
-        query, kv_cache, metadata = _make_case(case, dtype, device)
+        query, key, value, initial_kv_cache, metadata = _make_case(
+            case, dtype, device
+        )
         native_impl = _make_impl(TritonAttentionImpl)
         flashdec_impl = _make_impl(FlashDecAttentionImpl)
         native_output = torch.empty_like(query)
         flashdec_output = torch.empty_like(query)
+        native_kv_cache = initial_kv_cache.clone()
+        flashdec_kv_cache = initial_kv_cache.clone()
 
-        _run_once(native_impl, layer, query, kv_cache, metadata, native_output)
-        _run_once(flashdec_impl, layer, query, kv_cache, metadata, flashdec_output)
-        torch.cuda.synchronize()
-        torch.testing.assert_close(
-            flashdec_output, native_output, rtol=3e-2, atol=3e-2
-        )
-
-        backends = (
-            (
-                "vllm_triton_attn",
-                lambda: _run_once(
-                    native_impl, layer, query, kv_cache, metadata, native_output
-                ),
-            ),
-            (
-                "flashdec",
-                lambda: _run_once(
-                    flashdec_impl, layer, query, kv_cache, metadata, flashdec_output
-                ),
-            ),
-        )
         for trial in range(1, args.trials + 1):
+            # Each paired trial starts from byte-identical, deterministic cache
+            # snapshots.  The untimed correctness call writes the current K/V
+            # once; subsequent warmup and measured writes are idempotent, so no
+            # cache state drifts between timed iterations.
+            native_kv_cache.copy_(initial_kv_cache)
+            flashdec_kv_cache.copy_(initial_kv_cache)
+            _run_native_once(
+                native_impl,
+                layer,
+                query,
+                key,
+                value,
+                native_kv_cache,
+                metadata,
+                native_output,
+            )
+            _run_flashdec_once(
+                flashdec_impl,
+                layer,
+                query,
+                key,
+                value,
+                flashdec_kv_cache,
+                metadata,
+                flashdec_output,
+            )
+            torch.cuda.synchronize()
+            torch.testing.assert_close(
+                flashdec_output, native_output, rtol=3e-2, atol=3e-2
+            )
+            torch.testing.assert_close(
+                flashdec_kv_cache, native_kv_cache, rtol=0.0, atol=0.0
+            )
+
+            backends = (
+                (
+                    "vllm_triton_attn",
+                    lambda: _run_native_once(
+                        native_impl,
+                        layer,
+                        query,
+                        key,
+                        value,
+                        native_kv_cache,
+                        metadata,
+                        native_output,
+                    ),
+                ),
+                (
+                    "flashdec",
+                    lambda: _run_flashdec_once(
+                        flashdec_impl,
+                        layer,
+                        query,
+                        key,
+                        value,
+                        flashdec_kv_cache,
+                        metadata,
+                        flashdec_output,
+                    ),
+                ),
+            )
             ordered = backends if trial % 2 else tuple(reversed(backends))
             for backend, fn in ordered:
                 p50, p90, p99 = _measure(fn, args.warmup, args.repeat)
@@ -247,6 +370,10 @@ def main() -> None:
                     "triton_version": triton.__version__,
                     "vllm_version": vllm_version,
                     "model_id": MODEL_ID,
+                    "comparison_scope": COMPARISON_SCOPE,
+                    "timed_operation": TIMED_OPERATIONS[backend],
+                    "cache_state_policy": CACHE_STATE_POLICY,
+                    "input_seed": _case_seed(case),
                     "flashdec_num_splits": os.environ.get(
                         "FLASHDEC_VLLM_NUM_SPLITS", "auto"
                     ),

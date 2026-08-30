@@ -27,6 +27,10 @@ def _write_fixture(path, regression_ratio=1.03):
         "triton_version",
         "vllm_version",
         "model_id",
+        "comparison_scope",
+        "timed_operation",
+        "cache_state_policy",
+        "input_seed",
         "flashdec_num_splits",
         "dtype",
         "case",
@@ -47,9 +51,13 @@ def _write_fixture(path, regression_ratio=1.03):
     rows = []
     for case, ratio in cases.items():
         for backend, p50 in (("vllm_triton_attn", 0.05), ("flashdec", 0.05 * ratio)):
+            timed_operation = {
+                "vllm_triton_attn": "do_kv_cache_update_then_forward",
+                "flashdec": "fused_kv_append_forward",
+            }[backend]
             rows.append(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "git_commit": "abc123",
                     "git_worktree_clean": True,
                     "device": "RTX 5070",
@@ -58,6 +66,15 @@ def _write_fixture(path, regression_ratio=1.03):
                     "triton_version": "3.6.0",
                     "vllm_version": "0.25.1",
                     "model_id": "Qwen2.5-3B-Instruct",
+                    "comparison_scope": (
+                        "current_token_kv_append_plus_single_token_decode_attention"
+                    ),
+                    "timed_operation": timed_operation,
+                    "cache_state_policy": (
+                        "paired_deterministic_snapshot_reset_per_trial_"
+                        "idempotent_append"
+                    ),
+                    "input_seed": 20260831,
                     "flashdec_num_splits": "auto",
                     "dtype": "bfloat16",
                     "case": case,
@@ -83,6 +100,8 @@ def test_summary_accepts_frozen_win_and_guardrail(tmp_path):
     text = MODULE.summarize(source, output)
 
     assert "Overall external-kernel gate: **PASS**" in text
+    assert "current-token KV-cache append plus single-token decode attention" in text
+    assert "full-output and full-cache" in text
     assert output.read_text(encoding="utf-8") == text
 
 
@@ -119,3 +138,33 @@ def test_summary_rejects_unstable_paired_ratios(tmp_path):
     assert "paired-ratio spread <= 0.15: FAIL" in output.read_text(
         encoding="utf-8"
     )
+
+
+def test_summary_rejects_mislabeled_timed_operation(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    rows[0]["timed_operation"] = "forward_only"
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="unexpected timed_operation"):
+        MODULE.summarize(source, output)
+
+
+def test_summary_rejects_mismatched_paired_seed(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    rows[0]["input_seed"] = "7"
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="same input_seed"):
+        MODULE.summarize(source, output)

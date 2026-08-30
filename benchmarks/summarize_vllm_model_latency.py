@@ -10,6 +10,8 @@ import statistics
 from collections import defaultdict
 from pathlib import Path
 
+from flashdec.benchmark import validate_vllm_cache_root
+
 
 BACKENDS = ("vllm_triton_attn", "flashdec")
 TARGET_CASE = "qwen_b8_i2048_o128"
@@ -40,6 +42,7 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         "dtype",
         "kv_cache_dtype",
         "compilation_mode",
+        "vllm_cache_root",
         "flashdec_num_splits",
         "warmup_iters",
         "num_iters",
@@ -79,6 +82,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
         "max_num_batched_tokens",
         "gpu_memory_utilization",
         "compilation_mode",
+        "vllm_cache_root",
         "flashdec_num_splits",
         "warmup_iters",
         "num_iters",
@@ -87,8 +91,9 @@ def summarize(input_path: Path, output_path: Path) -> str:
     for row in rows:
         if any(row.get(field) != first.get(field) for field in invariant_fields):
             raise ValueError("environment/model/protocol invariants differ across rows")
-        if row["schema_version"] != "1":
+        if row["schema_version"] != "2":
             raise ValueError("unsupported schema_version")
+        validate_vllm_cache_root(row["vllm_cache_root"], row["git_commit"])
         if row["git_worktree_clean"] != "True":
             raise ValueError("formal model evidence requires a clean worktree")
         if row["backend"] not in BACKENDS:
@@ -184,6 +189,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
             f"- Compilation: `{first['compilation_mode']}`; FlashDec split policy: "
             f"`{first['flashdec_num_splits']}`."
         ),
+        f"- Commit-scoped vLLM cache: `{first['vllm_cache_root']}`.",
         (
             f"- Per process: {first['warmup_iters']} warmup iterations and "
             f"{first['num_iters']} measured iterations."

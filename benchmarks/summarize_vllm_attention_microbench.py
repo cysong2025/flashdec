@@ -12,6 +12,14 @@ from pathlib import Path
 
 
 BACKENDS = ("vllm_triton_attn", "flashdec")
+COMPARISON_SCOPE = "current_token_kv_append_plus_single_token_decode_attention"
+CACHE_STATE_POLICY = (
+    "paired_deterministic_snapshot_reset_per_trial_idempotent_append"
+)
+TIMED_OPERATIONS = {
+    "vllm_triton_attn": "do_kv_cache_update_then_forward",
+    "flashdec": "fused_kv_append_forward",
+}
 REQUIRED_WIN_CASES = (
     "qwen_b8_ctx1024",
     "qwen_b8_ctx2048",
@@ -42,6 +50,10 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         "triton_version",
         "vllm_version",
         "model_id",
+        "comparison_scope",
+        "timed_operation",
+        "cache_state_policy",
+        "input_seed",
         "flashdec_num_splits",
         "dtype",
         "case",
@@ -70,6 +82,8 @@ def summarize(input_path: Path, output_path: Path) -> str:
         "triton_version",
         "vllm_version",
         "model_id",
+        "comparison_scope",
+        "cache_state_policy",
         "flashdec_num_splits",
         "dtype",
     )
@@ -77,10 +91,20 @@ def summarize(input_path: Path, output_path: Path) -> str:
     for row in rows:
         if any(row[field] != first[field] for field in invariant_fields):
             raise ValueError("environment/model invariants differ across rows")
-        if row["schema_version"] != "1":
+        if row["schema_version"] != "2":
             raise ValueError("unsupported schema_version")
         if row["backend"] not in BACKENDS:
             raise ValueError(f"unknown backend: {row['backend']}")
+        if row["comparison_scope"] != COMPARISON_SCOPE:
+            raise ValueError("unexpected comparison_scope")
+        if row["cache_state_policy"] != CACHE_STATE_POLICY:
+            raise ValueError("unexpected cache_state_policy")
+        if row["timed_operation"] != TIMED_OPERATIONS[row["backend"]]:
+            raise ValueError(
+                f"unexpected timed_operation for {row['backend']}"
+            )
+        if int(row["input_seed"]) < 0:
+            raise ValueError("input_seed must be non-negative")
         if row["correctness"] != "PASS":
             raise ValueError("correctness must PASS for every row")
         if float(row["p50_ms"]) <= 0:
@@ -94,6 +118,11 @@ def summarize(input_path: Path, output_path: Path) -> str:
         paired[key][row["backend"]] = row
     if any(set(pair) != set(BACKENDS) for pair in paired.values()):
         raise ValueError("every case/trial must contain both paired backends")
+    if any(
+        len({row["input_seed"] for row in pair.values()}) != 1
+        for pair in paired.values()
+    ):
+        raise ValueError("paired backends must use the same input_seed")
 
     by_case: dict[str, list[dict[str, dict[str, str]]]] = defaultdict(list)
     for (case, _trial), pair in paired.items():
@@ -149,7 +178,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
     )
 
     lines = [
-        "# R7 vLLM Qwen Attention Microbenchmark Summary",
+        "# R8 vLLM Qwen Fused-KV Attention Microbenchmark Summary",
         "",
         "## Validation",
         "",
@@ -159,12 +188,25 @@ def summarize(input_path: Path, output_path: Path) -> str:
         f"- Model shape contract: {first['model_id']} / {first['dtype']}.",
         f"- FlashDec split policy: `{first['flashdec_num_splits']}`.",
         (
+            "- Common timed operation: current-token KV-cache append plus "
+            "single-token decode attention."
+        ),
+        (
+            "- Native path: `do_kv_cache_update` then Triton attention "
+            "`forward`; FlashDec path: fused-KV `forward`."
+        ),
+        (
+            "- Inputs and append slots are deterministic. Each paired trial "
+            "resets separate backend caches from the same snapshot; timed "
+            "appends are idempotent."
+        ),
+        (
             "- PyTorch / Triton / vLLM / PyTorch CUDA: "
             f"{first['torch_version']} / {first['triton_version']} / "
             f"{first['vllm_version']} / {first['torch_cuda']}."
         ),
         f"- Git commit: `{first['git_commit']}`; clean at start: {first['git_worktree_clean']}.",
-        "- Every pair passed full-output cross-backend correctness.",
+        "- Every pair passed full-output and full-cache cross-backend correctness.",
         "",
         "## Paired Results",
         "",
@@ -209,10 +251,10 @@ def summarize(input_path: Path, output_path: Path) -> str:
             "## Boundary",
             "",
             (
-                "This gate compares only single-token decode attention inside the same "
-                "vLLM KV layout and metadata contract. It is necessary but not sufficient "
-                "for a model- or serving-level performance claim; those are measured "
-                "separately with Qwen2.5-3B."
+                "This gate compares current-token KV append plus single-token decode "
+                "attention inside the same vLLM KV layout and metadata contract. It is "
+                "necessary but not sufficient for a model- or serving-level "
+                "performance claim; those are measured separately with Qwen2.5-3B."
             ),
             "",
         ]

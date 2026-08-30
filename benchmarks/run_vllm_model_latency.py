@@ -19,8 +19,13 @@ import torch
 import triton
 import vllm
 
+from flashdec.benchmark import (
+    vllm_cache_root_for_commit,
+    write_vllm_cache_log_metadata,
+)
 
-SCHEMA_VERSION = 1
+
+SCHEMA_VERSION = 2
 MODEL_ID = "Qwen2.5-3B-Instruct"
 BACKENDS = (
     ("vllm_triton_attn", "TRITON_ATTN"),
@@ -69,6 +74,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-iters", type=int, default=3)
     parser.add_argument("--num-iters", type=int, default=5)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.78)
+    parser.add_argument(
+        "--vllm-cache-base",
+        type=Path,
+        help=(
+            "Base directory for commit-scoped vLLM caches; defaults to "
+            "FLASHDEC_VLLM_CACHE_BASE, then VLLM_CACHE_ROOT, then "
+            "~/.cache/vllm-flashdec"
+        ),
+    )
     parser.add_argument("--require-clean", action="store_true")
     parser.add_argument(
         "--case",
@@ -171,6 +185,11 @@ def main() -> None:
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     commit = _git_value("rev-parse", "HEAD")
     worktree_clean = _git_value("status", "--porcelain") == ""
+    cache_root = vllm_cache_root_for_commit(
+        commit,
+        cache_base=args.vllm_cache_base,
+    )
+    cache_root.mkdir(parents=True, exist_ok=True)
     model_path = args.model.resolve()
     common = {
         "schema_version": SCHEMA_VERSION,
@@ -193,6 +212,7 @@ def main() -> None:
         "max_num_batched_tokens": 2048,
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "compilation_mode": "default_inductor_cudagraph",
+        "vllm_cache_root": str(cache_root),
         "flashdec_num_splits": os.environ.get(
             "FLASHDEC_VLLM_NUM_SPLITS", "auto"
         ),
@@ -201,7 +221,9 @@ def main() -> None:
     }
     child_env = os.environ.copy()
     child_env["PYTHONHASHSEED"] = "20260830"
+    child_env["VLLM_CACHE_ROOT"] = str(cache_root)
     rows: list[dict[str, object]] = []
+    print(f"VLLM_CACHE_ROOT={cache_root}", flush=True)
 
     for case in selected:
         for trial in range(1, args.trials + 1):
@@ -221,6 +243,12 @@ def main() -> None:
                     output_json=output_json,
                 )
                 with log_path.open("w", encoding="utf-8") as log:
+                    write_vllm_cache_log_metadata(
+                        log,
+                        commit=commit,
+                        cache_root=cache_root,
+                        command=shlex.join(command),
+                    )
                     completed = subprocess.run(
                         command,
                         env=child_env,

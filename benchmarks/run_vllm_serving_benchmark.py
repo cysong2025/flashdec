@@ -23,8 +23,13 @@ import torch
 import triton
 import vllm
 
+from flashdec.benchmark import (
+    vllm_cache_root_for_commit,
+    write_vllm_cache_log_metadata,
+)
 
-SCHEMA_VERSION = 1
+
+SCHEMA_VERSION = 2
 MODEL_ID = "Qwen2.5-3B-Instruct"
 SERVED_MODEL_NAME = "qwen2.5-3b-instruct"
 BACKENDS = (
@@ -64,6 +69,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-concurrency", type=int, default=8)
     parser.add_argument("--port", type=int, default=8127)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.78)
+    parser.add_argument(
+        "--vllm-cache-base",
+        type=Path,
+        help=(
+            "Base directory for commit-scoped vLLM caches; defaults to "
+            "FLASHDEC_VLLM_CACHE_BASE, then VLLM_CACHE_ROOT, then "
+            "~/.cache/vllm-flashdec"
+        ),
+    )
     parser.add_argument("--require-clean", action="store_true")
     return parser.parse_args()
 
@@ -164,6 +178,8 @@ def _benchmark_command(
     *,
     trial: int,
     backend_name: str,
+    git_commit: str,
+    vllm_cache_root: Path,
     output_json: Path,
 ) -> list[str]:
     return [
@@ -212,7 +228,8 @@ def _benchmark_command(
         "--metric-percentiles",
         "50,90,99",
         "--metadata",
-        f"git_commit={_git_value('rev-parse', 'HEAD')}",
+        f"git_commit={git_commit}",
+        f"vllm_cache_root={vllm_cache_root}",
         f"attention_backend={backend_name}",
         f"trial={trial}",
         "--label",
@@ -292,10 +309,18 @@ def _run_pair_member(
         args,
         trial=trial,
         backend_name=backend_name,
+        git_commit=str(common["git_commit"]),
+        vllm_cache_root=Path(str(common["vllm_cache_root"])),
         output_json=output_json,
     )
 
     with server_log_path.open("w", encoding="utf-8") as server_log:
+        write_vllm_cache_log_metadata(
+            server_log,
+            commit=common["git_commit"],
+            cache_root=common["vllm_cache_root"],
+            command=shlex.join(server_command),
+        )
         process = subprocess.Popen(
             server_command,
             env=child_env,
@@ -307,6 +332,12 @@ def _run_pair_member(
         try:
             _wait_ready(process, args.port, timeout=240.0)
             with benchmark_log_path.open("w", encoding="utf-8") as benchmark_log:
+                write_vllm_cache_log_metadata(
+                    benchmark_log,
+                    commit=common["git_commit"],
+                    cache_root=common["vllm_cache_root"],
+                    command=shlex.join(benchmark_command),
+                )
                 completed = subprocess.run(
                     benchmark_command,
                     env=child_env,
@@ -373,10 +404,16 @@ def main() -> None:
     raw_dir.mkdir(parents=True, exist_ok=False)
     model_path = args.model.resolve()
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    commit = _git_value("rev-parse", "HEAD")
+    cache_root = vllm_cache_root_for_commit(
+        commit,
+        cache_base=args.vllm_cache_base,
+    )
+    cache_root.mkdir(parents=True, exist_ok=True)
     common = {
         "schema_version": SCHEMA_VERSION,
         "started_at": started_at,
-        "git_commit": _git_value("rev-parse", "HEAD"),
+        "git_commit": commit,
         "git_worktree_clean": _git_value("status", "--porcelain") == "",
         "device": torch.cuda.get_device_name(),
         "torch_version": torch.__version__,
@@ -394,6 +431,7 @@ def main() -> None:
         "max_num_batched_tokens": 2048,
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "compilation_mode": "default_inductor_cudagraph",
+        "vllm_cache_root": str(cache_root),
         "flashdec_num_splits": os.environ.get(
             "FLASHDEC_VLLM_NUM_SPLITS", "auto"
         ),
@@ -407,7 +445,9 @@ def main() -> None:
     }
     child_env = os.environ.copy()
     child_env["PYTHONHASHSEED"] = "20260830"
+    child_env["VLLM_CACHE_ROOT"] = str(cache_root)
     rows: list[dict[str, object]] = []
+    print(f"VLLM_CACHE_ROOT={cache_root}", flush=True)
 
     for trial in range(1, args.trials + 1):
         ordered = BACKENDS if trial % 2 else tuple(reversed(BACKENDS))

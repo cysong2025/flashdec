@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import csv
+import os
+import re
 import statistics
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping, TextIO
+
+
+_GIT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 
 
 @dataclass(frozen=True)
@@ -53,6 +59,62 @@ def git_commit(root=None):
     if result.returncode != 0 or not commit:
         raise RuntimeError("benchmark evidence requires a readable Git commit")
     return commit
+
+
+def vllm_cache_root_for_commit(
+    commit,
+    *,
+    cache_base=None,
+    environ: Mapping[str, str] | None = None,
+):
+    """Return an absolute, commit-scoped vLLM cache root.
+
+    ``FLASHDEC_VLLM_CACHE_BASE`` is the benchmark-specific override.  An
+    existing ``VLLM_CACHE_ROOT`` is treated as a *base*, never as the final
+    cache root, so the runner cannot accidentally reuse a graph compiled for
+    another FlashDec commit.
+    """
+    commit = str(commit).strip().lower()
+    if not _GIT_COMMIT_RE.fullmatch(commit):
+        raise ValueError("vLLM cache namespace requires a Git commit SHA")
+
+    env = os.environ if environ is None else environ
+    if cache_base is None:
+        cache_base = (
+            env.get("FLASHDEC_VLLM_CACHE_BASE")
+            or env.get("VLLM_CACHE_ROOT")
+            or Path.home() / ".cache" / "vllm-flashdec"
+        )
+    base = Path(cache_base).expanduser().resolve()
+    return base / commit
+
+
+def validate_vllm_cache_root(cache_root, commit):
+    """Validate that a recorded vLLM cache path is absolute and commit-bound."""
+    commit = str(commit).strip().lower()
+    if not _GIT_COMMIT_RE.fullmatch(commit):
+        raise ValueError("vLLM cache namespace requires a Git commit SHA")
+    path = Path(cache_root)
+    if not path.is_absolute():
+        raise ValueError("vLLM cache root must be absolute")
+    if commit not in (part.lower() for part in path.parts):
+        raise ValueError("vLLM cache root must contain the Git commit")
+    return path
+
+
+def write_vllm_cache_log_metadata(
+    stream: TextIO,
+    *,
+    commit,
+    cache_root,
+    command,
+):
+    """Write cache provenance before a vLLM child process emits its log."""
+    path = validate_vllm_cache_root(cache_root, commit)
+    stream.write(f"flashdec_git_commit={commit}\n")
+    stream.write(f"VLLM_CACHE_ROOT={path}\n")
+    stream.write(f"command={command}\n")
+    stream.flush()
 
 
 def percentile(values, q):
