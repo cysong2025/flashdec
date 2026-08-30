@@ -25,7 +25,10 @@ class FlashDecAttentionBackend(TritonAttentionBackend):
 
     @staticmethod
     def get_name() -> str:
-        return "FLASHDEC"
+        # vLLM 0.25.1 maps the selected class back through the registry using
+        # get_name(); third-party backends must therefore return their enum
+        # slot rather than a package-specific display label.
+        return "CUSTOM"
 
     @staticmethod
     def get_impl_cls() -> type["FlashDecAttentionImpl"]:
