@@ -156,6 +156,7 @@ def _paged_decode_gqa_kernel(
     GROUP_SIZE: tl.constexpr,
     GROUP_BLOCK: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
+    TOKEN_BLOCK: tl.constexpr,
     SM_SCALE: tl.constexpr,
     FUSE_KV_APPEND: tl.constexpr,
 ):
@@ -236,25 +237,31 @@ def _paged_decode_gqa_kernel(
         l_i = tl.zeros((GROUP_BLOCK,), dtype=tl.float32)
         acc = tl.zeros((GROUP_BLOCK, HEAD_DIM), dtype=tl.float32)
 
-    offs_t = tl.arange(0, BLOCK_SIZE)
-    num_logical_blocks = tl.cdiv(seq_len, BLOCK_SIZE)
-    for logical_block in tl.range(0, num_logical_blocks):
-        physical_block = tl.load(
+    offs_t = tl.arange(0, TOKEN_BLOCK)
+    num_token_blocks = tl.cdiv(seq_len, TOKEN_BLOCK)
+    for token_block in tl.range(0, num_token_blocks):
+        token_idxs = token_block * TOKEN_BLOCK + offs_t
+        if FUSE_KV_APPEND:
+            token_limit = seq_len - 1
+        else:
+            token_limit = seq_len
+        valid_tokens = token_idxs < token_limit
+        logical_blocks = token_idxs // BLOCK_SIZE
+        physical_blocks = tl.load(
             block_tables_ptr
             + seq_idx * block_tables_stride_seq
-            + logical_block * block_tables_stride_block
+            + logical_blocks * block_tables_stride_block,
+            mask=valid_tokens,
+            other=-1,
         )
-        token_idxs = logical_block * BLOCK_SIZE + offs_t
-        if FUSE_KV_APPEND:
-            valid_tokens = (token_idxs < seq_len - 1) & (physical_block >= 0)
-        else:
-            valid_tokens = (token_idxs < seq_len) & (physical_block >= 0)
+        page_offsets = token_idxs % BLOCK_SIZE
+        valid_tokens = valid_tokens & (physical_blocks >= 0)
 
         k = tl.load(
             k_ptr
-            + physical_block * k_stride_block
+            + physical_blocks[:, None] * k_stride_block
             + kv_head * k_stride_head
-            + offs_t[:, None] * k_stride_token
+            + page_offsets[:, None] * k_stride_token
             + offs_d[None, :] * k_stride_dim,
             mask=valid_tokens[:, None] & (offs_d[None, :] < HEAD_DIM),
             other=0.0,
@@ -270,9 +277,9 @@ def _paged_decode_gqa_kernel(
 
         v = tl.load(
             v_ptr
-            + physical_block * v_stride_block
+            + physical_blocks[:, None] * v_stride_block
             + kv_head * v_stride_head
-            + offs_t[:, None] * v_stride_token
+            + page_offsets[:, None] * v_stride_token
             + offs_d[None, :] * v_stride_dim,
             mask=valid_tokens[:, None] & (offs_d[None, :] < HEAD_DIM),
             other=0.0,
@@ -339,6 +346,7 @@ def _paged_decode_gqa_split_kernel(
     GROUP_SIZE: tl.constexpr,
     GROUP_BLOCK: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
+    TOKEN_BLOCK: tl.constexpr,
     NUM_SPLITS: tl.constexpr,
     SM_SCALE: tl.constexpr,
     FUSE_KV_APPEND: tl.constexpr,
@@ -360,10 +368,10 @@ def _paged_decode_gqa_split_kernel(
         other=0.0,
     )
     seq_len = tl.load(seq_lens_ptr + seq_idx)
-    num_logical_blocks = tl.cdiv(seq_len, BLOCK_SIZE)
-    blocks_per_split = tl.cdiv(num_logical_blocks, NUM_SPLITS)
+    num_token_blocks = tl.cdiv(seq_len, TOKEN_BLOCK)
+    blocks_per_split = tl.cdiv(num_token_blocks, NUM_SPLITS)
     first_block = split_idx * blocks_per_split
-    last_block = tl.minimum(first_block + blocks_per_split, num_logical_blocks)
+    last_block = tl.minimum(first_block + blocks_per_split, num_token_blocks)
 
     if FUSE_KV_APPEND:
         append_slot = tl.load(
@@ -371,7 +379,7 @@ def _paged_decode_gqa_split_kernel(
         )
         append_block = append_slot // BLOCK_SIZE
         append_offset = append_slot % BLOCK_SIZE
-        append_logical_block = (seq_len - 1) // BLOCK_SIZE
+        append_logical_block = (seq_len - 1) // TOKEN_BLOCK
         owns_append = (
             (append_logical_block >= first_block)
             & (append_logical_block < last_block)
@@ -430,23 +438,29 @@ def _paged_decode_gqa_split_kernel(
         m_i = tl.full((GROUP_BLOCK,), -float("inf"), dtype=tl.float32)
         l_i = tl.zeros((GROUP_BLOCK,), dtype=tl.float32)
         acc = tl.zeros((GROUP_BLOCK, HEAD_DIM), dtype=tl.float32)
-    offs_t = tl.arange(0, BLOCK_SIZE)
-    for logical_block in tl.range(first_block, last_block):
-        physical_block = tl.load(
+    offs_t = tl.arange(0, TOKEN_BLOCK)
+    for token_block in tl.range(first_block, last_block):
+        token_idxs = token_block * TOKEN_BLOCK + offs_t
+        if FUSE_KV_APPEND:
+            token_limit = seq_len - 1
+        else:
+            token_limit = seq_len
+        valid_tokens = token_idxs < token_limit
+        logical_blocks = token_idxs // BLOCK_SIZE
+        physical_blocks = tl.load(
             block_tables_ptr
             + seq_idx * block_tables_stride_seq
-            + logical_block * block_tables_stride_block
+            + logical_blocks * block_tables_stride_block,
+            mask=valid_tokens,
+            other=-1,
         )
-        token_idxs = logical_block * BLOCK_SIZE + offs_t
-        if FUSE_KV_APPEND:
-            valid_tokens = (token_idxs < seq_len - 1) & (physical_block >= 0)
-        else:
-            valid_tokens = (token_idxs < seq_len) & (physical_block >= 0)
+        page_offsets = token_idxs % BLOCK_SIZE
+        valid_tokens = valid_tokens & (physical_blocks >= 0)
         k = tl.load(
             k_ptr
-            + physical_block * k_stride_block
+            + physical_blocks[:, None] * k_stride_block
             + kv_head * k_stride_head
-            + offs_t[:, None] * k_stride_token
+            + page_offsets[:, None] * k_stride_token
             + offs_d[None, :] * k_stride_dim,
             mask=valid_tokens[:, None] & (offs_d[None, :] < HEAD_DIM),
             other=0.0,
@@ -460,9 +474,9 @@ def _paged_decode_gqa_split_kernel(
         l_new = l_i * alpha + tl.sum(probs, axis=1)
         v = tl.load(
             v_ptr
-            + physical_block * v_stride_block
+            + physical_blocks[:, None] * v_stride_block
             + kv_head * v_stride_head
-            + offs_t[:, None] * v_stride_token
+            + page_offsets[:, None] * v_stride_token
             + offs_d[None, :] * v_stride_dim,
             mask=valid_tokens[:, None] & (offs_d[None, :] < HEAD_DIM),
             other=0.0,
@@ -878,6 +892,7 @@ def paged_decode_attention_into(
             GROUP_SIZE=group_size,
             GROUP_BLOCK=16,
             BLOCK_SIZE=block_size,
+            TOKEN_BLOCK=32,
             NUM_SPLITS=num_splits,
             SM_SCALE=float(sm_scale),
             FUSE_KV_APPEND=fuse_kv_append,
@@ -953,6 +968,7 @@ def paged_decode_attention_into(
             GROUP_SIZE=group_size,
             GROUP_BLOCK=16,
             BLOCK_SIZE=block_size,
+            TOKEN_BLOCK=32,
             SM_SCALE=float(sm_scale),
             FUSE_KV_APPEND=fuse_kv_append,
             **launch_kwargs,
