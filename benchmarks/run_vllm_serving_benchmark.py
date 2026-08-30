@@ -85,8 +85,8 @@ def _validate_environment(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         raise ValueError("port must be <= 65535")
     if args.max_concurrency > 8:
         raise ValueError("frozen server configuration supports concurrency <= 8")
-    if args.input_len + args.output_len > 4096:
-        raise ValueError("input_len + output_len must not exceed 4096")
+    if args.input_len + args.output_len > 8192:
+        raise ValueError("input_len + output_len must not exceed 8192")
     if not 0.0 < args.gpu_memory_utilization < 1.0:
         raise ValueError("gpu-memory-utilization must be between zero and one")
     if not torch.cuda.is_available():
@@ -137,7 +137,7 @@ def _server_command(
         "--generation-config",
         "vllm",
         "--max-model-len",
-        "4096",
+        "8192",
         "--gpu-memory-utilization",
         str(gpu_memory_utilization),
         "--max-num-seqs",
@@ -389,7 +389,7 @@ def main() -> None:
         "model_manifest_sha256": _sha256(model_manifest),
         "dtype": "bfloat16",
         "kv_cache_dtype": "bfloat16",
-        "max_model_len": 4096,
+        "max_model_len": 8192,
         "max_num_seqs": 8,
         "max_num_batched_tokens": 2048,
         "gpu_memory_utilization": args.gpu_memory_utilization,
