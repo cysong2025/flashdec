@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -5,6 +7,7 @@ pytest.importorskip("triton")
 
 from flashdec.cache import PagedKVCache
 from flashdec.kernels.paged_decode import (
+    _vllm_paged_decode_attention_into,
     paged_decode_attention,
     paged_decode_attention_into,
 )
@@ -416,6 +419,139 @@ def test_paged_decode_attention_fuses_current_kv_append(
         torch.testing.assert_close(
             v_cache[block_id, :, token_offset], append_v[row]
         )
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize(
+    ("num_splits", "cache_layout"),
+    [(1, "NHD"), (8, "HND")],
+)
+def test_vllm_unchecked_launcher_handles_full_cache_and_graph_padding(
+    num_splits, cache_layout, dtype
+):
+    request_ids = [411, 422]
+    q_active, k_cache, v_cache, _, _, cache = _make_paged_inputs(
+        request_ids=request_ids,
+        target_seq_lens=[0, 256],
+        num_q_heads=16,
+        num_kv_heads=2,
+        head_dim=128,
+        block_size=16,
+        # Both requests cross a physical-page boundary on append.
+        max_blocks=18,
+        dtype=dtype,
+    )
+    append_k_active = torch.randn((2, 2, 128), device="cuda", dtype=dtype)
+    append_v_active = torch.randn_like(append_k_active)
+    cache.append(0, request_ids, append_k_active, append_v_active)
+    block_tables_active = cache.block_tables(request_ids)
+    seq_lens_active = cache.seq_lens_tensor(request_ids)
+
+    slots = []
+    for request_id in request_ids:
+        state = cache.request_state(request_id)
+        token_offset = (state["seq_len"] - 1) % cache.block_size
+        block_id = cache.request_block_ids(request_id)[-1]
+        slots.append(block_id * cache.block_size + token_offset)
+
+    expected_out = paged_decode_attention_ref(
+        q_active,
+        k_cache,
+        v_cache,
+        block_tables_active,
+        seq_lens_active,
+    )
+    expected_cache = torch.stack(
+        (k_cache.permute(0, 2, 1, 3), v_cache.permute(0, 2, 1, 3)),
+        dim=1,
+    ).contiguous()
+    if cache_layout == "NHD":
+        full_cache = expected_cache.clone()
+    else:
+        hnd_storage = torch.empty(
+            (
+                expected_cache.shape[0],
+                2,
+                2,
+                cache.block_size,
+                128,
+            ),
+            device="cuda",
+            dtype=dtype,
+        )
+        full_cache = hnd_storage.permute(0, 1, 3, 2, 4)
+        full_cache.copy_(expected_cache)
+        assert not full_cache.is_contiguous()
+
+    for request_id in request_ids:
+        state = cache.request_state(request_id)
+        token_offset = (state["seq_len"] - 1) % cache.block_size
+        block_id = cache.request_block_ids(request_id)[-1]
+        full_cache[block_id, :, token_offset].zero_()
+
+    # Four tensor rows model a static CUDA Graph buffer. The first two are
+    # active, the third is padding inside the launch grid (slot=-1), and the
+    # fourth lies beyond num_reqs and must remain untouched.
+    q = torch.cat(
+        (
+            q_active,
+            torch.randn((2, 16, 128), device="cuda", dtype=dtype),
+        )
+    )
+    append_k = torch.cat(
+        (
+            append_k_active,
+            torch.randn((2, 2, 128), device="cuda", dtype=dtype),
+        )
+    )
+    append_v = torch.cat(
+        (
+            append_v_active,
+            torch.randn((2, 2, 128), device="cuda", dtype=dtype),
+        )
+    )
+    block_tables = torch.cat(
+        (block_tables_active, torch.zeros_like(block_tables_active[:1]))
+    )
+    seq_lens_storage = torch.zeros((3, 2), device="cuda", dtype=torch.int32)
+    seq_lens_storage[:2, 1] = seq_lens_active
+    seq_lens_storage[2, 1] = 17
+    seq_lens = seq_lens_storage[:, 1]
+    assert not seq_lens.is_contiguous()
+    slot_mapping = torch.tensor(
+        [*slots, -1], device="cuda", dtype=torch.int64
+    )
+    workspace = (
+        torch.empty((4, 16, 16, 128), device="cuda", dtype=torch.float32),
+        torch.empty((4, 16, 16), device="cuda", dtype=torch.float32),
+        torch.empty((4, 16, 16), device="cuda", dtype=torch.float32),
+    )
+    out = torch.full_like(q, 37)
+
+    returned = _vllm_paged_decode_attention_into(
+        q,
+        append_k,
+        append_v,
+        full_cache,
+        block_tables,
+        seq_lens,
+        out,
+        slot_mapping,
+        *workspace,
+        num_reqs=3,
+        num_q_heads=16,
+        num_kv_heads=2,
+        head_dim=128,
+        block_size=16,
+        sm_scale=1.0 / math.sqrt(128),
+        num_splits=num_splits,
+    )
+
+    assert returned is out
+    _assert_close(out[:2], expected_out)
+    torch.testing.assert_close(out[2], torch.zeros_like(out[2]))
+    torch.testing.assert_close(out[3], torch.full_like(out[3], 37))
+    torch.testing.assert_close(full_cache, expected_cache)
 
 
 def test_paged_decode_attention_rejects_partial_fused_append_arguments():

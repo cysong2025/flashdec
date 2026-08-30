@@ -8,7 +8,6 @@ uniform single-token decoder attention over FP16/BF16 paged KV cache.
 
 from __future__ import annotations
 
-import math
 import os
 
 import torch
@@ -20,7 +19,7 @@ from vllm.v1.attention.backends.triton_attn import (
     TritonAttentionMetadata,
 )
 
-from .kernels.paged_decode import paged_decode_attention_into
+from .kernels.paged_decode import _vllm_paged_decode_attention_into
 
 
 class FlashDecAttentionBackend(TritonAttentionBackend):
@@ -55,8 +54,11 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
     def _supports_flashdec_decode(
         self,
         query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
         kv_cache: torch.Tensor,
         attn_metadata: TritonAttentionMetadata | None,
+        output: torch.Tensor,
         output_scale: torch.Tensor | None,
         output_block_scale: torch.Tensor | None,
     ) -> bool:
@@ -76,11 +78,24 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
             return False
         if query.dtype not in (torch.float16, torch.bfloat16):
             return False
-        if kv_cache.dtype != query.dtype or kv_cache.ndim != 5:
+        if kv_cache.dtype != query.dtype:
+            return False
+        if (
+            query.ndim != 3
+            or key.ndim != 3
+            or value.ndim != 3
+            or output.ndim != 3
+            or kv_cache.ndim != 5
+        ):
             return False
         if self.head_size != 128:
             return False
-        if kv_cache.shape[2] not in (16, 32):
+        if (
+            kv_cache.shape[1] != 2
+            or kv_cache.shape[2] not in (16, 32)
+            or kv_cache.shape[3] != self.num_kv_heads
+            or kv_cache.shape[4] != self.head_size
+        ):
             return False
         if self.alibi_slopes is not None or self.sinks is not None:
             return False
@@ -110,8 +125,11 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
         )
         if not owns_kv or not self._supports_flashdec_decode(
             query,
+            key,
+            value,
             kv_cache,
             attn_metadata,
+            output,
             output_scale,
             output_block_scale,
         ):
@@ -135,56 +153,46 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
                 output_block_scale,
             )
 
-        # Uniform single-token decode has one query token per request. Shapes
-        # are Python metadata only; no device-to-host read enters the hot path.
+        # Uniform single-token decode has one query token per metadata row. In
+        # CUDA Graph replay this row count includes padding; slot_mapping=-1
+        # makes those rows inert inside the kernel without a device-to-host read.
         num_reqs = attn_metadata.query_start_loc.shape[0] - 1
-        query_3d = query[:num_reqs].view(num_reqs, self.num_heads, self.head_size)
-        output_3d = output[:num_reqs].view(
-            num_reqs, self.num_heads, self.head_size
-        )
-        key_3d = key[:num_reqs].view(
-            num_reqs, self.num_kv_heads, self.head_size
-        )
-        value_3d = value[:num_reqs].view(
-            num_reqs, self.num_kv_heads, self.head_size
-        )
-
-        # vLLM's logical NHD cache halves are [block, token, kv_head, dim].
-        # Permutation creates the FlashDec [block, kv_head, token, dim] view;
-        # paged_decode_attention_into consumes its strides without a copy.
-        key_cache, value_cache = kv_cache.unbind(1)
-        key_view = key_cache.permute(0, 2, 1, 3)
-        value_view = value_cache.permute(0, 2, 1, 3)
-
-        logical_blocks = math.ceil(attn_metadata.max_seq_len / key_cache.shape[1])
+        block_size = kv_cache.shape[2]
+        logical_blocks = (
+            attn_metadata.max_seq_len + block_size - 1
+        ) // block_size
         requested_splits = self._requested_splits
         if requested_splits == 0:
             target_programs = 128
-            requested_splits = math.ceil(
-                target_programs / max(1, num_reqs * self.num_kv_heads)
-            )
+            programs_per_split = max(1, num_reqs * self.num_kv_heads)
+            requested_splits = (
+                target_programs + programs_per_split - 1
+            ) // programs_per_split
         num_splits = min(16, logical_blocks, max(1, requested_splits))
-        if attn_metadata.max_seq_len < 512:
+        if (
+            attn_metadata.max_seq_len < 512
+            or num_reqs > attn_metadata.softmax_segm_output.shape[0]
+        ):
             num_splits = 1
 
-        paged_decode_attention_into(
-            query_3d,
-            key_view,
-            value_view,
+        _vllm_paged_decode_attention_into(
+            query,
+            key,
+            value,
+            kv_cache,
             attn_metadata.block_table,
             attn_metadata.seq_lens,
-            output_3d,
+            output,
+            attn_metadata.slot_mapping,
+            attn_metadata.softmax_segm_output,
+            attn_metadata.softmax_segm_max,
+            attn_metadata.softmax_segm_expsum,
+            num_reqs=num_reqs,
+            num_q_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            head_dim=self.head_size,
+            block_size=block_size,
             sm_scale=self.scale,
-            block_size=key_cache.shape[1],
-            num_warps=2,
-            split_kv_workspace=(
-                attn_metadata.softmax_segm_output,
-                attn_metadata.softmax_segm_max,
-                attn_metadata.softmax_segm_expsum,
-            ),
             num_splits=num_splits,
-            append_k=key_3d,
-            append_v=value_3d,
-            slot_mapping=attn_metadata.slot_mapping,
         )
         return output
