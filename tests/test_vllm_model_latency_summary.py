@@ -14,7 +14,9 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
 
 
-def _write_fixture(path, target_ratio=0.96, guardrail_ratio=1.01):
+def _write_fixture(
+    path, target_ratio=0.96, guardrail_ratio=1.01, trials=(1, 2, 3)
+):
     fields = [
         "schema_version",
         "git_commit",
@@ -52,7 +54,7 @@ def _write_fixture(path, target_ratio=0.96, guardrail_ratio=1.01):
     }
     rows = []
     for case, ratio in cases.items():
-        for trial in (1, 2, 3):
+        for trial in trials:
             for backend, p50 in (
                 ("vllm_triton_attn", 1000.0),
                 ("flashdec", 1000.0 * ratio),
@@ -111,12 +113,12 @@ def test_summary_accepts_target_win_and_guardrail(tmp_path):
 def test_summary_rejects_missing_target_win(tmp_path):
     source = tmp_path / "input.csv"
     output = tmp_path / "summary.md"
-    _write_fixture(source, target_ratio=0.99)
+    _write_fixture(source, target_ratio=0.996)
 
     with pytest.raises(ValueError, match="performance gate failed"):
         MODULE.summarize(source, output)
 
-    assert "target <= 0.98x: FAIL" in output.read_text(encoding="utf-8")
+    assert "target <= 0.995x: FAIL" in output.read_text(encoding="utf-8")
 
 
 def test_summary_rejects_short_context_regression(tmp_path):
@@ -150,6 +152,15 @@ def test_summary_rejects_unstable_ratio(tmp_path):
     with pytest.raises(ValueError, match="performance gate failed"):
         MODULE.summarize(source, output)
 
-    assert "paired-ratio spread <= 0.08: FAIL" in output.read_text(
+    assert "paired-ratio spread <= 0.03: FAIL" in output.read_text(
         encoding="utf-8"
     )
+
+
+def test_summary_requires_three_paired_process_trials(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source, trials=(1, 2))
+
+    with pytest.raises(ValueError, match="at least 3"):
+        MODULE.summarize(source, output)

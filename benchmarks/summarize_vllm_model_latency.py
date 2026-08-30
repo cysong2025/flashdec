@@ -14,9 +14,10 @@ from pathlib import Path
 BACKENDS = ("vllm_triton_attn", "flashdec")
 TARGET_CASE = "qwen_b8_i2048_o128"
 GUARDRAIL_CASE = "qwen_b8_i128_o128"
-TARGET_RATIO_LIMIT = 0.98
-GUARDRAIL_RATIO_LIMIT = 1.03
-MAX_RATIO_SPREAD = 0.08
+TARGET_RATIO_LIMIT = 0.995
+GUARDRAIL_RATIO_LIMIT = 1.02
+MAX_RATIO_SPREAD = 0.03
+MIN_PAIRED_TRIALS = 3
 
 
 def _read_rows(path: Path) -> list[dict[str, str]]:
@@ -115,6 +116,11 @@ def summarize(input_path: Path, output_path: Path) -> str:
     missing_cases = required_cases - set(by_case)
     if missing_cases:
         raise ValueError(f"missing required model cases: {sorted(missing_cases)}")
+    if any(len(pairs) < MIN_PAIRED_TRIALS for pairs in by_case.values()):
+        raise ValueError(
+            f"formal model evidence requires at least {MIN_PAIRED_TRIALS} "
+            "paired process trials per case"
+        )
 
     results = []
     for case in sorted(by_case):
@@ -212,11 +218,16 @@ def summarize(input_path: Path, output_path: Path) -> str:
             "## Frozen Confirmatory Performance Gate",
             "",
             (
-                f"- B8 input2048/output128 target <= {TARGET_RATIO_LIMIT:.2f}x: "
+                "These pilot-informed thresholds were frozen before the "
+                "confirmatory three-trial run."
+            ),
+            (
+                f"- B8 input2048/output128 target <= {TARGET_RATIO_LIMIT:.3f}x: "
                 f"{'PASS' if target_pass else 'FAIL'}."
             ),
             (
-                f"- B8 input128/output128 guardrail <= {GUARDRAIL_RATIO_LIMIT:.2f}x: "
+                "- B8 input128/output128 guardrail <= "
+                f"{GUARDRAIL_RATIO_LIMIT:.2f}x: "
                 f"{'PASS' if guardrail_pass else 'FAIL'}."
             ),
             (
