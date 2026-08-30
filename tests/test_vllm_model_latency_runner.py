@@ -136,7 +136,7 @@ def test_decode_heavy_builtin_is_explicit_and_custom_cases_are_supported():
 
 def test_worker_rejects_prompt_shape_mismatch_even_with_matching_hash(tmp_path):
     dataset = {
-        "schema_version": 1,
+        "schema_version": WORKER.DATASET_SCHEMA_VERSION,
         "generation_protocol": WORKER.DATASET_GENERATION_PROTOCOL,
         "seed": 1,
         "case": "broken",
