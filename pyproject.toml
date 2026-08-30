@@ -50,7 +50,7 @@ baseline = [
   "flashinfer-python==0.6.15.post1",
 ]
 vllm = [
-  "vllm==0.25.1",
+  "vllm==0.26.0",
 ]
 
 [project.entry-points."vllm.general_plugins"]
