@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import importlib.util
 from pathlib import Path
 
@@ -29,6 +30,7 @@ def _write_fixture(
         "model_id",
         "model_path",
         "model_config_sha256",
+        "tokenizer_config_sha256",
         "model_manifest_sha256",
         "dtype",
         "kv_cache_dtype",
@@ -41,9 +43,28 @@ def _write_fixture(
         "flashdec_num_splits",
         "warmup_iters",
         "num_iters",
+        "dataset_seed",
+        "dataset_generation_protocol",
+        "sampling_seed",
+        "prompt_format",
+        "skip_tokenizer_init",
+        "sampling_n",
+        "sampling_temperature",
+        "sampling_min_tokens",
+        "sampling_max_tokens",
+        "sampling_ignore_eos",
+        "sampling_detokenize",
+        "timing_scope",
+        "vllm_engine_multiprocessing",
         "case",
+        "batch_size",
+        "input_len",
+        "output_len",
         "backend",
         "trial",
+        "dataset_path",
+        "dataset_sha256",
+        "output_token_ids_sha256",
         "avg_latency_ms",
         "p50_latency_ms",
         "p90_latency_ms",
@@ -55,6 +76,7 @@ def _write_fixture(
     }
     rows = []
     for case, ratio in cases.items():
+        dataset_sha256 = hashlib.sha256(case.encode("utf-8")).hexdigest()
         for trial in trials:
             for backend, p50 in (
                 ("vllm_triton_attn", 1000.0),
@@ -62,7 +84,7 @@ def _write_fixture(
             ):
                 rows.append(
                     {
-                        "schema_version": 2,
+                        "schema_version": 3,
                         "git_commit": "abc1234",
                         "git_worktree_clean": True,
                         "device": "RTX 5070",
@@ -73,6 +95,7 @@ def _write_fixture(
                         "model_id": "Qwen2.5-3B-Instruct",
                         "model_path": "/model",
                         "model_config_sha256": "config",
+                        "tokenizer_config_sha256": "tokenizer",
                         "model_manifest_sha256": "manifest",
                         "dtype": "bfloat16",
                         "kv_cache_dtype": "bfloat16",
@@ -85,9 +108,37 @@ def _write_fixture(
                         "flashdec_num_splits": "auto",
                         "warmup_iters": 3,
                         "num_iters": 5,
+                        "dataset_seed": 20260830,
+                        "dataset_generation_protocol": (
+                            "sha256-indexed-u64be-mod-model-tokenizer-"
+                            "nonspecial-v2"
+                        ),
+                        "sampling_seed": 20260830,
+                        "prompt_format": "token_ids",
+                        "skip_tokenizer_init": True,
+                        "sampling_n": 1,
+                        "sampling_temperature": 0.0,
+                        "sampling_min_tokens": 128,
+                        "sampling_max_tokens": 128,
+                        "sampling_ignore_eos": True,
+                        "sampling_detokenize": False,
+                        "timing_scope": (
+                            "wall-clock blocking LLM.generate call after "
+                            "full-length warmup; model load, engine startup, "
+                            "JIT/graph capture, and result hashing excluded"
+                        ),
+                        "vllm_engine_multiprocessing": True,
                         "case": case,
+                        "batch_size": 8,
+                        "input_len": 128 if "i128" in case else 2048,
+                        "output_len": 128,
                         "backend": backend,
                         "trial": trial,
+                        "dataset_path": f"/datasets/{case}.json",
+                        "dataset_sha256": dataset_sha256,
+                        "output_token_ids_sha256": hashlib.sha256(
+                            f"output:{case}".encode("utf-8")
+                        ).hexdigest(),
                         "avg_latency_ms": p50,
                         "p50_latency_ms": p50,
                         "p90_latency_ms": p50,
@@ -110,6 +161,8 @@ def test_summary_accepts_target_win_and_guardrail(tmp_path):
     assert "Overall external-model gate: **PASS**" in text
     assert "4.00%" in text
     assert "Commit-scoped vLLM cache: `/tmp/vllm-cache/abc1234`" in text
+    assert "fixed token IDs; seed `20260830`" in text
+    assert hashlib.sha256(b"qwen_b8_i2048_o128").hexdigest() in text
     assert output.read_text(encoding="utf-8") == text
 
 
@@ -182,4 +235,46 @@ def test_summary_requires_three_paired_process_trials(tmp_path):
     _write_fixture(source, trials=(1, 2))
 
     with pytest.raises(ValueError, match="at least 3"):
+        MODULE.summarize(source, output)
+
+
+def test_summary_rejects_different_dataset_for_paired_backend(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    for row in rows:
+        if (
+            row["case"] == "qwen_b8_i2048_o128"
+            and row["backend"] == "flashdec"
+            and row["trial"] == "2"
+        ):
+            row["dataset_sha256"] = "f" * 64
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="exact same dataset"):
+        MODULE.summarize(source, output)
+
+
+def test_summary_rejects_different_generated_tokens_for_paired_backend(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    for row in rows:
+        if (
+            row["case"] == "qwen_b8_i2048_o128"
+            and row["backend"] == "flashdec"
+            and row["trial"] == "2"
+        ):
+            row["output_token_ids_sha256"] = "f" * 64
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="exact same tokens"):
         MODULE.summarize(source, output)

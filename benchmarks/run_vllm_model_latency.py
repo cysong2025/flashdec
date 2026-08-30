@@ -7,17 +7,17 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
+import re
 import shlex
+import statistics
 import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-
-import torch
-import triton
-import vllm
+from typing import Any
 
 from flashdec.benchmark import (
     vllm_cache_root_for_commit,
@@ -25,7 +25,22 @@ from flashdec.benchmark import (
 )
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+DATASET_SCHEMA_VERSION = 2
+DATASET_GENERATION_PROTOCOL = (
+    "sha256-indexed-u64be-mod-model-tokenizer-nonspecial-v2"
+)
+DATASET_GENERATION_DESCRIPTION = (
+    "For every request/position, SHA-256 hashes the UTF-8 string "
+    "'flashdec-vllm-model-latency-v1|seed=<seed>|case=<case>|request=<index>"
+    "|position=<index>'. The first unsigned big-endian 64-bit word is reduced "
+    "modulo the count of vocabulary IDs that are not marked special by either "
+    "the model or tokenizer configuration, then maps to that ranked ID."
+)
+TIMING_SCOPE = (
+    "wall-clock blocking LLM.generate call after full-length warmup; "
+    "model load, engine startup, JIT/graph capture, and result hashing excluded"
+)
 MODEL_ID = "Qwen2.5-3B-Instruct"
 BACKENDS = (
     ("vllm_triton_attn", "TRITON_ATTN"),
@@ -39,11 +54,14 @@ class Case:
     batch_size: int
     input_len: int
     output_len: int
+    run_by_default: bool = True
 
 
 CASES = (
     Case("qwen_b8_i128_o128", 8, 128, 128),
     Case("qwen_b8_i2048_o128", 8, 2048, 128),
+    # Explicit opt-in until this decode-heavy case becomes a frozen formal gate.
+    Case("qwen_b8_i2048_o2048", 8, 2048, 2048, run_by_default=False),
 )
 
 
@@ -53,6 +71,159 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _canonical_json_bytes(payload: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _special_token_ids(
+    model_config: dict[str, Any],
+    tokenizer_config: dict[str, Any],
+    vocab_size: int,
+) -> list[int]:
+    values: set[int] = set()
+    for config in (model_config, tokenizer_config):
+        for key, value in config.items():
+            if not key.endswith("_token_id"):
+                continue
+            candidates = value if isinstance(value, list) else [value]
+            for candidate in candidates:
+                if (
+                    isinstance(candidate, int)
+                    and not isinstance(candidate, bool)
+                    and 0 <= candidate < vocab_size
+                ):
+                    values.add(candidate)
+
+    added_tokens = tokenizer_config.get("added_tokens_decoder", {})
+    if not isinstance(added_tokens, dict):
+        raise ValueError("tokenizer added_tokens_decoder must be a JSON object")
+    for raw_token_id, metadata in added_tokens.items():
+        if not isinstance(metadata, dict) or metadata.get("special") is not True:
+            continue
+        try:
+            token_id = int(raw_token_id)
+        except (TypeError, ValueError) as error:
+            raise ValueError("special added-token ID must be an integer") from error
+        if 0 <= token_id < vocab_size:
+            values.add(token_id)
+    return sorted(values)
+
+
+def _allowed_token_id(rank: int, excluded_token_ids: list[int]) -> int:
+    """Map an allowed-vocabulary rank without materializing the vocabulary."""
+
+    token_id = rank
+    for excluded in excluded_token_ids:
+        if excluded <= token_id:
+            token_id += 1
+        else:
+            break
+    return token_id
+
+
+def _generate_dataset(
+    case: Case,
+    *,
+    seed: int,
+    vocab_size: int,
+    excluded_token_ids: list[int],
+) -> dict[str, Any]:
+    if seed < 0 or seed >= 2**64:
+        raise ValueError("dataset seed must fit an unsigned 64-bit integer")
+    if vocab_size <= 0:
+        raise ValueError("model vocab_size must be positive")
+    excluded = sorted(set(excluded_token_ids))
+    if any(value < 0 or value >= vocab_size for value in excluded):
+        raise ValueError("excluded token ID lies outside the vocabulary")
+    allowed_count = vocab_size - len(excluded)
+    if allowed_count <= 0:
+        raise ValueError("vocabulary contains no usable prompt token IDs")
+
+    prompts: list[list[int]] = []
+    for request_index in range(case.batch_size):
+        prompt: list[int] = []
+        for position in range(case.input_len):
+            material = (
+                "flashdec-vllm-model-latency-v1"
+                f"|seed={seed}|case={case.name}"
+                f"|request={request_index}|position={position}"
+            ).encode("utf-8")
+            value = int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+            prompt.append(_allowed_token_id(value % allowed_count, excluded))
+        prompts.append(prompt)
+    return {
+        "schema_version": DATASET_SCHEMA_VERSION,
+        "generation_protocol": DATASET_GENERATION_PROTOCOL,
+        "generation_description": DATASET_GENERATION_DESCRIPTION,
+        "seed": seed,
+        "case": case.name,
+        "batch_size": case.batch_size,
+        "input_len": case.input_len,
+        "output_len": case.output_len,
+        "vocab_size": vocab_size,
+        "excluded_token_ids": excluded,
+        "prompt_token_ids": prompts,
+    }
+
+
+def _write_dataset(path: Path, dataset: dict[str, Any]) -> str:
+    if path.exists():
+        raise FileExistsError(f"refusing to overwrite {path}")
+    encoded = _canonical_json_bytes(dataset)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(encoded)
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _parse_case_spec(spec: str) -> Case:
+    parts = spec.split(":")
+    if len(parts) != 4:
+        raise ValueError("case-spec must be NAME:BATCH:INPUT_LEN:OUTPUT_LEN")
+    name = parts[0]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+        raise ValueError("case name may contain only letters, digits, '.', '_', '-'")
+    try:
+        batch_size, input_len, output_len = (int(value) for value in parts[1:])
+    except ValueError as error:
+        raise ValueError("case-spec shape values must be integers") from error
+    if min(batch_size, input_len, output_len) <= 0:
+        raise ValueError("case-spec shape values must be positive")
+    return Case(name, batch_size, input_len, output_len, run_by_default=False)
+
+
+def _resolve_cases(
+    selected_names: list[str] | None,
+    case_specs: list[str] | None,
+) -> list[Case]:
+    by_name = {case.name: case for case in CASES}
+    custom_names: list[str] = []
+    for spec in case_specs or []:
+        case = _parse_case_spec(spec)
+        if case.name in by_name:
+            raise ValueError(f"duplicate case name: {case.name}")
+        by_name[case.name] = case
+        custom_names.append(case.name)
+
+    if selected_names:
+        unknown = set(selected_names) - set(by_name)
+        if unknown:
+            raise ValueError(f"unknown cases: {sorted(unknown)}")
+        names = list(dict.fromkeys(selected_names))
+    elif custom_names:
+        names = custom_names
+    else:
+        names = [case.name for case in CASES if case.run_by_default]
+    return [by_name[name] for name in names]
 
 
 def _git_value(*args: str) -> str:
@@ -73,7 +244,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--warmup-iters", type=int, default=3)
     parser.add_argument("--num-iters", type=int, default=5)
+    parser.add_argument("--dataset-seed", type=int, default=20260830)
+    parser.add_argument("--sampling-seed", type=int, default=20260830)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.78)
+    parser.add_argument("--max-model-len", type=int, default=4096)
+    parser.add_argument("--max-num-seqs", type=int, default=8)
+    parser.add_argument("--max-num-batched-tokens", type=int, default=2048)
     parser.add_argument(
         "--vllm-cache-base",
         type=Path,
@@ -87,100 +263,277 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--case",
         action="append",
-        choices=[case.name for case in CASES],
-        help="Run only selected cases; may be repeated.",
+        help=(
+            "Run only a named built-in or --case-spec case; may be repeated. "
+            "The decode-heavy qwen_b8_i2048_o2048 built-in is opt-in."
+        ),
+    )
+    parser.add_argument(
+        "--case-spec",
+        action="append",
+        metavar="NAME:BATCH:INPUT_LEN:OUTPUT_LEN",
+        help=(
+            "Define a deterministic token-ID case. If --case is omitted, only "
+            "the custom cases are run; may be repeated."
+        ),
     )
     return parser.parse_args()
 
 
-def _validate_environment(args: argparse.Namespace) -> tuple[Path, Path, Path]:
+def _validate_environment(
+    args: argparse.Namespace,
+) -> tuple[Path, Path, Path, Path]:
     if args.output.exists():
         raise FileExistsError(f"refusing to overwrite {args.output}")
     if args.trials <= 0 or args.warmup_iters < 0 or args.num_iters <= 0:
         raise ValueError("trials/num-iters must be positive and warmup non-negative")
+    if min(
+        args.max_model_len,
+        args.max_num_seqs,
+        args.max_num_batched_tokens,
+    ) <= 0:
+        raise ValueError("vLLM capacity limits must be positive")
+    if any(
+        seed < 0 or seed >= 2**64
+        for seed in (args.dataset_seed, args.sampling_seed)
+    ):
+        raise ValueError("dataset/sampling seeds must fit unsigned 64-bit integers")
     if not 0.0 < args.gpu_memory_utilization < 1.0:
         raise ValueError("gpu-memory-utilization must be between zero and one")
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA GPU is required")
     if os.environ.get("VLLM_USE_FLASHINFER_SAMPLER") != "0":
         raise RuntimeError("set VLLM_USE_FLASHINFER_SAMPLER=0")
     if os.environ.get("VLLM_WSL2_ENABLE_PIN_MEMORY") != "1":
         raise RuntimeError("set VLLM_WSL2_ENABLE_PIN_MEMORY=1")
     if os.environ.get("VLLM_PLUGINS") != "flashdec":
         raise RuntimeError("set VLLM_PLUGINS=flashdec")
+    if os.environ.get("VLLM_ENABLE_V1_MULTIPROCESSING") != "1":
+        raise RuntimeError("set VLLM_ENABLE_V1_MULTIPROCESSING=1")
     if args.require_clean and _git_value("status", "--porcelain"):
         raise RuntimeError("--require-clean needs a clean Git worktree")
 
     model_config = args.model / "config.json"
+    tokenizer_config = args.model / "tokenizer_config.json"
     model_manifest = args.model / "SHA256SUMS"
-    if not model_config.is_file() or not model_manifest.is_file():
-        raise FileNotFoundError("model config.json and SHA256SUMS are required")
-    vllm_executable = Path(sys.executable).with_name("vllm")
-    if not vllm_executable.is_file():
-        raise FileNotFoundError(f"vLLM CLI not found: {vllm_executable}")
-    return model_config, model_manifest, vllm_executable
+    if (
+        not model_config.is_file()
+        or not tokenizer_config.is_file()
+        or not model_manifest.is_file()
+    ):
+        raise FileNotFoundError(
+            "model config.json, tokenizer_config.json, and SHA256SUMS are required"
+        )
+    worker = Path(__file__).with_name("run_vllm_model_latency_worker.py")
+    if not worker.is_file():
+        raise FileNotFoundError(f"model-latency worker not found: {worker}")
+    return model_config, tokenizer_config, model_manifest, worker
 
 
 def _command(
     *,
-    executable: Path,
+    worker: Path,
     model: Path,
-    case: Case,
+    dataset: Path,
+    dataset_sha256: str,
     backend: str,
     warmup_iters: int,
     num_iters: int,
+    sampling_seed: int,
     gpu_memory_utilization: float,
+    max_model_len: int,
+    max_num_seqs: int,
+    max_num_batched_tokens: int,
     output_json: Path,
 ) -> list[str]:
     return [
-        str(executable),
-        "bench",
-        "latency",
+        sys.executable,
+        str(worker),
+        "--backend",
+        backend,
         "--model",
         str(model),
-        "--tokenizer",
-        str(model),
-        "--dtype",
-        "bfloat16",
-        "--kv-cache-dtype",
-        "bfloat16",
-        "--attention-backend",
-        backend,
-        "--input-len",
-        str(case.input_len),
-        "--output-len",
-        str(case.output_len),
-        "--batch-size",
-        str(case.batch_size),
-        "--n",
-        "1",
-        "--num-iters-warmup",
+        "--dataset",
+        str(dataset),
+        "--dataset-sha256",
+        dataset_sha256,
+        "--warmup-iters",
         str(warmup_iters),
         "--num-iters",
         str(num_iters),
-        "--seed",
-        "20260830",
+        "--sampling-seed",
+        str(sampling_seed),
         "--gpu-memory-utilization",
         str(gpu_memory_utilization),
         "--max-model-len",
-        "4096",
+        str(max_model_len),
         "--max-num-seqs",
-        "8",
+        str(max_num_seqs),
         "--max-num-batched-tokens",
-        "2048",
-        "--disable-detokenize",
-        "--no-enforce-eager",
-        "--output-json",
+        str(max_num_batched_tokens),
+        "--output",
         str(output_json),
     ]
 
 
+def _validate_worker_result(
+    result: dict[str, Any],
+    *,
+    case: Case,
+    backend_arg: str,
+    dataset_path: Path,
+    dataset_sha256: str,
+    dataset_seed: int,
+    sampling_seed: int,
+    warmup_iters: int,
+    num_iters: int,
+    expected_environment: dict[str, str] | None = None,
+) -> tuple[list[float], float, float, float, str]:
+    expected = {
+        "schema_version": 1,
+        "backend_arg": backend_arg,
+        "case": case.name,
+        "batch_size": case.batch_size,
+        "input_len": case.input_len,
+        "output_len": case.output_len,
+        "dataset_path": str(dataset_path.resolve()),
+        "dataset_sha256": dataset_sha256,
+        "dataset_seed": dataset_seed,
+        "dataset_generation_protocol": DATASET_GENERATION_PROTOCOL,
+        "prompt_format": "token_ids",
+        "skip_tokenizer_init": True,
+        "sampling_seed": sampling_seed,
+        "sampling_n": 1,
+        "sampling_temperature": 0.0,
+        "sampling_min_tokens": case.output_len,
+        "sampling_max_tokens": case.output_len,
+        "sampling_ignore_eos": True,
+        "sampling_detokenize": False,
+        "warmup_iters": warmup_iters,
+        "num_iters": num_iters,
+        "timing_scope": TIMING_SCOPE,
+        "vllm_engine_multiprocessing": True,
+    }
+    for field, value in expected.items():
+        if result.get(field) != value:
+            raise ValueError(
+                f"worker result {field!r} differs: expected {value!r}, "
+                f"got {result.get(field)!r}"
+            )
+    for field, value in (expected_environment or {}).items():
+        if result.get(field) != value:
+            raise ValueError(
+                f"worker environment {field!r} differs: expected {value!r}, "
+                f"got {result.get(field)!r}"
+            )
+
+    latencies = [float(value) for value in result.get("latencies_s", [])]
+    if len(latencies) != num_iters or any(
+        not math.isfinite(value) or value <= 0 for value in latencies
+    ):
+        raise ValueError("worker returned invalid latency samples")
+    warmup_hashes = result.get("warmup_output_sha256")
+    measured_hashes = result.get("measured_output_sha256")
+    if not isinstance(warmup_hashes, list) or len(warmup_hashes) != warmup_iters:
+        raise ValueError("worker returned invalid warmup output hashes")
+    if not isinstance(measured_hashes, list) or len(measured_hashes) != num_iters:
+        raise ValueError("worker returned invalid measured output hashes")
+    for digest in [*warmup_hashes, *measured_hashes]:
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("worker returned an invalid output SHA-256")
+    output_sha256 = result.get("output_token_ids_sha256")
+    if not isinstance(output_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", output_sha256
+    ):
+        raise ValueError("worker returned an invalid canonical output SHA-256")
+    if set([*warmup_hashes, *measured_hashes]) != {output_sha256}:
+        raise ValueError(
+            "worker fixed-greedy outputs differ within one process"
+        )
+
+    avg_s = float(result["avg_latency_s"])
+    p50_s = float(result["percentiles_s"]["50"])
+    p90_s = float(result["percentiles_s"]["90"])
+    if any(
+        not math.isfinite(value) or value <= 0
+        for value in (avg_s, p50_s, p90_s)
+    ):
+        raise ValueError("worker returned non-positive latency aggregates")
+    ordered = sorted(latencies)
+
+    def percentile(percent: float) -> float:
+        rank = (len(ordered) - 1) * percent / 100.0
+        lower = math.floor(rank)
+        upper = math.ceil(rank)
+        fraction = rank - lower
+        return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+    expected_aggregates = (
+        statistics.fmean(latencies),
+        percentile(50.0),
+        percentile(90.0),
+    )
+    for name, actual, expected_value in zip(
+        ("average", "p50", "p90"),
+        (avg_s, p50_s, p90_s),
+        expected_aggregates,
+    ):
+        if not math.isclose(actual, expected_value, rel_tol=1e-12, abs_tol=1e-12):
+            raise ValueError(
+                f"worker {name} latency aggregate does not match raw samples"
+            )
+    return latencies, avg_s, p50_s, p90_s, output_sha256
+
+
 def main() -> None:
     args = _parse_args()
-    model_config, model_manifest, executable = _validate_environment(args)
-    selected = [case for case in CASES if not args.case or case.name in args.case]
+    (
+        model_config,
+        tokenizer_config,
+        model_manifest,
+        worker,
+    ) = _validate_environment(args)
+    selected = _resolve_cases(args.case, args.case_spec)
+    for case in selected:
+        if case.batch_size > args.max_num_seqs:
+            raise ValueError(f"{case.name} batch_size exceeds max-num-seqs")
+        if case.input_len + case.output_len > args.max_model_len:
+            raise ValueError(f"{case.name} sequence length exceeds max-model-len")
+
+    config = json.loads(model_config.read_text(encoding="utf-8"))
+    tokenizer = json.loads(tokenizer_config.read_text(encoding="utf-8"))
+    vocab_size = config.get("vocab_size")
+    if not isinstance(vocab_size, int) or isinstance(vocab_size, bool):
+        raise ValueError("model config must contain an integer vocab_size")
+    excluded_token_ids = _special_token_ids(config, tokenizer, vocab_size)
+
+    # Heavyweight imports remain inside the GPU-only entry point so pure
+    # dataset/command tests do not require a local vLLM installation.
+    import torch
+    import triton
+    import vllm
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA GPU is required")
+
     raw_dir = args.output.parent / f"{args.output.stem}_raw"
     raw_dir.mkdir(parents=True, exist_ok=False)
+    dataset_dir = raw_dir / "datasets"
+    datasets: dict[str, tuple[Path, str]] = {}
+    for case in selected:
+        dataset_path = dataset_dir / f"{case.name}.json"
+        dataset = _generate_dataset(
+            case,
+            seed=args.dataset_seed,
+            vocab_size=vocab_size,
+            excluded_token_ids=excluded_token_ids,
+        )
+        dataset_sha256 = _write_dataset(dataset_path, dataset)
+        datasets[case.name] = (dataset_path, dataset_sha256)
+        print(
+            f"DATASET case={case.name} seed={args.dataset_seed} "
+            f"protocol={DATASET_GENERATION_PROTOCOL} sha256={dataset_sha256} "
+            f"path={dataset_path.resolve()}",
+            flush=True,
+        )
 
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     commit = _git_value("rev-parse", "HEAD")
@@ -204,12 +557,13 @@ def main() -> None:
         "model_id": MODEL_ID,
         "model_path": str(model_path),
         "model_config_sha256": _sha256(model_config),
+        "tokenizer_config_sha256": _sha256(tokenizer_config),
         "model_manifest_sha256": _sha256(model_manifest),
         "dtype": "bfloat16",
         "kv_cache_dtype": "bfloat16",
-        "max_model_len": 4096,
-        "max_num_seqs": 8,
-        "max_num_batched_tokens": 2048,
+        "max_model_len": args.max_model_len,
+        "max_num_seqs": args.max_num_seqs,
+        "max_num_batched_tokens": args.max_num_batched_tokens,
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "compilation_mode": "default_inductor_cudagraph",
         "vllm_cache_root": str(cache_root),
@@ -218,14 +572,26 @@ def main() -> None:
         ),
         "warmup_iters": args.warmup_iters,
         "num_iters": args.num_iters,
+        "dataset_seed": args.dataset_seed,
+        "dataset_generation_protocol": DATASET_GENERATION_PROTOCOL,
+        "sampling_seed": args.sampling_seed,
+        "prompt_format": "token_ids",
+        "skip_tokenizer_init": True,
+        "sampling_n": 1,
+        "sampling_temperature": 0.0,
+        "sampling_ignore_eos": True,
+        "sampling_detokenize": False,
+        "timing_scope": TIMING_SCOPE,
+        "vllm_engine_multiprocessing": True,
     }
     child_env = os.environ.copy()
-    child_env["PYTHONHASHSEED"] = "20260830"
+    child_env["PYTHONHASHSEED"] = "0"
     child_env["VLLM_CACHE_ROOT"] = str(cache_root)
     rows: list[dict[str, object]] = []
     print(f"VLLM_CACHE_ROOT={cache_root}", flush=True)
 
     for case in selected:
+        dataset_path, dataset_sha256 = datasets[case.name]
         for trial in range(1, args.trials + 1):
             ordered = BACKENDS if trial % 2 else tuple(reversed(BACKENDS))
             for run_order, (backend_name, backend_arg) in enumerate(ordered, 1):
@@ -233,13 +599,18 @@ def main() -> None:
                 output_json = raw_dir / f"{stem}.json"
                 log_path = raw_dir / f"{stem}.log"
                 command = _command(
-                    executable=executable,
+                    worker=worker,
                     model=model_path,
-                    case=case,
+                    dataset=dataset_path.resolve(),
+                    dataset_sha256=dataset_sha256,
                     backend=backend_arg,
                     warmup_iters=args.warmup_iters,
                     num_iters=args.num_iters,
+                    sampling_seed=args.sampling_seed,
                     gpu_memory_utilization=args.gpu_memory_utilization,
+                    max_model_len=args.max_model_len,
+                    max_num_seqs=args.max_num_seqs,
+                    max_num_batched_tokens=args.max_num_batched_tokens,
                     output_json=output_json,
                 )
                 with log_path.open("w", encoding="utf-8") as log:
@@ -259,16 +630,33 @@ def main() -> None:
                     )
                 if completed.returncode != 0:
                     raise RuntimeError(
-                        f"vLLM benchmark failed ({completed.returncode}); see {log_path}"
+                        f"vLLM benchmark failed ({completed.returncode}); "
+                        f"see {log_path}"
                     )
                 result = json.loads(output_json.read_text(encoding="utf-8"))
-                latencies = [float(value) for value in result["latencies"]]
-                if len(latencies) != args.num_iters or any(
-                    value <= 0 for value in latencies
-                ):
-                    raise ValueError(f"invalid latency samples in {output_json}")
-                p50_s = float(result["percentiles"]["50"])
-                p90_s = float(result["percentiles"]["90"])
+                (
+                    _latencies,
+                    avg_s,
+                    p50_s,
+                    p90_s,
+                    output_sha256,
+                ) = _validate_worker_result(
+                    result,
+                    case=case,
+                    backend_arg=backend_arg,
+                    dataset_path=dataset_path,
+                    dataset_sha256=dataset_sha256,
+                    dataset_seed=args.dataset_seed,
+                    sampling_seed=args.sampling_seed,
+                    warmup_iters=args.warmup_iters,
+                    num_iters=args.num_iters,
+                    expected_environment={
+                        "device": common["device"],
+                        "torch_version": common["torch_version"],
+                        "torch_cuda": common["torch_cuda"],
+                        "vllm_version": common["vllm_version"],
+                    },
+                )
                 row = {
                     **common,
                     "case": case.name,
@@ -279,7 +667,12 @@ def main() -> None:
                     "backend_arg": backend_arg,
                     "trial": trial,
                     "run_order": run_order,
-                    "avg_latency_ms": f"{float(result['avg_latency']) * 1000.0:.6f}",
+                    "dataset_path": str(dataset_path.resolve()),
+                    "dataset_sha256": dataset_sha256,
+                    "output_token_ids_sha256": output_sha256,
+                    "sampling_min_tokens": case.output_len,
+                    "sampling_max_tokens": case.output_len,
+                    "avg_latency_ms": f"{avg_s * 1000.0:.6f}",
                     "p50_latency_ms": f"{p50_s * 1000.0:.6f}",
                     "p90_latency_ms": f"{p90_s * 1000.0:.6f}",
                     "output_tokens_per_s": (

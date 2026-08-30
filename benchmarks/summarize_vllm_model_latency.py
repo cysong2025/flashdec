@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import re
 import statistics
 from collections import defaultdict
 from pathlib import Path
@@ -20,6 +21,13 @@ TARGET_RATIO_LIMIT = 0.995
 GUARDRAIL_RATIO_LIMIT = 1.02
 MAX_RATIO_SPREAD = 0.03
 MIN_PAIRED_TRIALS = 3
+DATASET_GENERATION_PROTOCOL = (
+    "sha256-indexed-u64be-mod-model-tokenizer-nonspecial-v2"
+)
+TIMING_SCOPE = (
+    "wall-clock blocking LLM.generate call after full-length warmup; "
+    "model load, engine startup, JIT/graph capture, and result hashing excluded"
+)
 
 
 def _read_rows(path: Path) -> list[dict[str, str]]:
@@ -38,6 +46,7 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         "vllm_version",
         "model_id",
         "model_config_sha256",
+        "tokenizer_config_sha256",
         "model_manifest_sha256",
         "dtype",
         "kv_cache_dtype",
@@ -46,9 +55,28 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         "flashdec_num_splits",
         "warmup_iters",
         "num_iters",
+        "dataset_seed",
+        "dataset_generation_protocol",
+        "sampling_seed",
+        "prompt_format",
+        "skip_tokenizer_init",
+        "sampling_n",
+        "sampling_temperature",
+        "sampling_min_tokens",
+        "sampling_max_tokens",
+        "sampling_ignore_eos",
+        "sampling_detokenize",
+        "timing_scope",
+        "vllm_engine_multiprocessing",
         "case",
+        "batch_size",
+        "input_len",
+        "output_len",
         "backend",
         "trial",
+        "dataset_path",
+        "dataset_sha256",
+        "output_token_ids_sha256",
         "avg_latency_ms",
         "p50_latency_ms",
         "p90_latency_ms",
@@ -74,6 +102,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
         "model_id",
         "model_path",
         "model_config_sha256",
+        "tokenizer_config_sha256",
         "model_manifest_sha256",
         "dtype",
         "kv_cache_dtype",
@@ -86,18 +115,75 @@ def summarize(input_path: Path, output_path: Path) -> str:
         "flashdec_num_splits",
         "warmup_iters",
         "num_iters",
+        "dataset_seed",
+        "dataset_generation_protocol",
+        "sampling_seed",
+        "prompt_format",
+        "skip_tokenizer_init",
+        "sampling_n",
+        "sampling_temperature",
+        "sampling_ignore_eos",
+        "sampling_detokenize",
+        "timing_scope",
+        "vllm_engine_multiprocessing",
     )
     first = rows[0]
+    case_datasets: dict[str, tuple[str, ...]] = {}
+    case_outputs: dict[str, str] = {}
     for row in rows:
         if any(row.get(field) != first.get(field) for field in invariant_fields):
             raise ValueError("environment/model/protocol invariants differ across rows")
-        if row["schema_version"] != "2":
+        if row["schema_version"] != "3":
             raise ValueError("unsupported schema_version")
         validate_vllm_cache_root(row["vllm_cache_root"], row["git_commit"])
         if row["git_worktree_clean"] != "True":
             raise ValueError("formal model evidence requires a clean worktree")
         if row["backend"] not in BACKENDS:
             raise ValueError(f"unknown backend: {row['backend']}")
+        if row["dataset_generation_protocol"] != DATASET_GENERATION_PROTOCOL:
+            raise ValueError("unsupported deterministic dataset protocol")
+        if row["prompt_format"] != "token_ids":
+            raise ValueError("model latency evidence must use token-ID prompts")
+        if row["skip_tokenizer_init"] != "True":
+            raise ValueError("model latency evidence must skip tokenizer initialization")
+        if (
+            row["sampling_n"] != "1"
+            or float(row["sampling_temperature"]) != 0.0
+            or row["sampling_min_tokens"] != row["output_len"]
+            or row["sampling_max_tokens"] != row["output_len"]
+            or row["sampling_ignore_eos"] != "True"
+            or row["sampling_detokenize"] != "False"
+        ):
+            raise ValueError("model latency evidence must use fixed greedy decoding")
+        if row["timing_scope"] != TIMING_SCOPE:
+            raise ValueError("unsupported model latency timing scope")
+        if row["vllm_engine_multiprocessing"] != "True":
+            raise ValueError("formal model latency requires vLLM engine multiprocessing")
+        if not re.fullmatch(r"[0-9a-f]{64}", row["dataset_sha256"]):
+            raise ValueError("invalid dataset SHA-256")
+        if not re.fullmatch(r"[0-9a-f]{64}", row["output_token_ids_sha256"]):
+            raise ValueError("invalid generated-token SHA-256")
+        if not Path(row["dataset_path"]).is_absolute():
+            raise ValueError("dataset path must be absolute")
+        dataset_invariants = (
+            row["batch_size"],
+            row["input_len"],
+            row["output_len"],
+            row["dataset_path"],
+            row["dataset_sha256"],
+        )
+        previous = case_datasets.setdefault(row["case"], dataset_invariants)
+        if previous != dataset_invariants:
+            raise ValueError(
+                "every backend/trial for a case must use the exact same dataset"
+            )
+        previous_output = case_outputs.setdefault(
+            row["case"], row["output_token_ids_sha256"]
+        )
+        if previous_output != row["output_token_ids_sha256"]:
+            raise ValueError(
+                "every backend/trial for a case must generate the exact same tokens"
+            )
         if min(
             float(row["avg_latency_ms"]),
             float(row["p50_latency_ms"]),
@@ -181,6 +267,14 @@ def summarize(input_path: Path, output_path: Path) -> str:
         f"- Model: {first['model_id']} / {first['dtype']}.",
         f"- Model config SHA-256: `{first['model_config_sha256']}`.",
         (
+            f"- Prompt dataset: fixed token IDs; seed `{first['dataset_seed']}`; "
+            f"protocol `{first['dataset_generation_protocol']}`."
+        ),
+        (
+            "- Decoding: greedy (`temperature=0`, `n=1`), fixed output length "
+            "(`ignore_eos=True`), and detokenization disabled."
+        ),
+        (
             "- PyTorch / Triton / vLLM / PyTorch CUDA: "
             f"{first['torch_version']} / {first['triton_version']} / "
             f"{first['vllm_version']} / {first['torch_cuda']}."
@@ -195,6 +289,16 @@ def summarize(input_path: Path, output_path: Path) -> str:
             f"{first['num_iters']} measured iterations."
         ),
         f"- Git commit: `{first['git_commit']}`; clean at start: True.",
+        "- Per-case prompt dataset identities:",
+        *(
+            f"  - `{case}`: `{values[4]}` (`{values[3]}`)."
+            for case, values in sorted(case_datasets.items())
+        ),
+        "- Per-case generated-token identities:",
+        *(
+            f"  - `{case}`: `{digest}`."
+            for case, digest in sorted(case_outputs.items())
+        ),
         "",
         "## Paired Results",
         "",

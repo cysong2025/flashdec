@@ -86,6 +86,7 @@ REQUIRED_PATHS = (
     "benchmarks/run_vllm_model_correctness.py",
     "benchmarks/summarize_vllm_model_correctness.py",
     "benchmarks/run_vllm_model_latency.py",
+    "benchmarks/run_vllm_model_latency_worker.py",
     "benchmarks/summarize_vllm_model_latency.py",
     "benchmarks/run_vllm_serving_benchmark.py",
     "benchmarks/summarize_vllm_serving_benchmark.py",
@@ -128,6 +129,7 @@ REQUIRED_PATHS = (
     "tests/test_vllm_attention_microbench_summary.py",
     "tests/test_vllm_model_correctness_summary.py",
     "tests/test_vllm_model_latency_summary.py",
+    "tests/test_vllm_model_latency_runner.py",
     "tests/test_vllm_serving_benchmark_summary.py",
     "tests/test_public_results_chart.py",
 )
