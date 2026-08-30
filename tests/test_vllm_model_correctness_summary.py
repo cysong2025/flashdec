@@ -45,18 +45,34 @@ def test_correctness_summary_accepts_identical_tokens(tmp_path):
 
     text = MODULE.summarize(native, flashdec, output)
 
-    assert "equal: 1/1" in text
+    assert "First-step greedy top-1 tokens equal: 1/1" in text
+    assert "Full greedy token sequences equal: 1/1" in text
     assert "**PASS**" in text
 
 
-def test_correctness_summary_rejects_token_mismatch(tmp_path):
+def test_correctness_summary_accepts_late_autoregressive_divergence(tmp_path):
     native = tmp_path / "native.json"
     flashdec = tmp_path / "flashdec.json"
     output = tmp_path / "summary.md"
     native.write_text(json.dumps(_payload("TRITON_ATTN")), encoding="utf-8")
     flashdec.write_text(json.dumps(_payload("CUSTOM", (1, 4, 3))), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="token mismatch"):
+    text = MODULE.summarize(native, flashdec, output)
+
+    assert "First-step greedy top-1 tokens equal: 1/1" in text
+    assert "Full greedy token sequences equal: 0/1" in text
+    assert "Shared-prefix tokens before autoregressive divergence: 1/3" in text
+    assert "**PASS**" in text
+
+
+def test_correctness_summary_rejects_first_token_mismatch(tmp_path):
+    native = tmp_path / "native.json"
+    flashdec = tmp_path / "flashdec.json"
+    output = tmp_path / "summary.md"
+    native.write_text(json.dumps(_payload("TRITON_ATTN")), encoding="utf-8")
+    flashdec.write_text(json.dumps(_payload("CUSTOM", (4, 2, 3))), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="first-step"):
         MODULE.summarize(native, flashdec, output)
 
     assert "**FAIL**" in output.read_text(encoding="utf-8")
