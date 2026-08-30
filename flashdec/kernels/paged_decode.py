@@ -14,6 +14,9 @@ _KV_LAYOUT_AXES = {
     "dim_major": (3, 2),
 }
 
+_VLLM_DEFAULT_SPLIT_LAUNCH_OPTIONS = {"num_warps": 4}
+_VLLM_QWEN_SPLIT_LAUNCH_OPTIONS = {"num_warps": 4, "num_stages": 3}
+
 
 def _layout_axes(kv_layout):
     try:
@@ -765,6 +768,21 @@ def _vllm_paged_decode_attention_into(
     cache_stride_dim = kv_cache.stride(4)
 
     if num_splits > 1:
+        # This exact Qwen tile was measured independently on the RTX 5070.
+        # Keep the general internal launcher on its established 16-row tile.
+        use_qwen_group_tile = (
+            num_q_heads == 16
+            and num_kv_heads == 2
+            and group_size == 8
+            and head_dim == 128
+            and block_size == 16
+        )
+        split_group_block = 8 if use_qwen_group_tile else 16
+        split_launch_options = (
+            _VLLM_QWEN_SPLIT_LAUNCH_OPTIONS
+            if use_qwen_group_tile
+            else _VLLM_DEFAULT_SPLIT_LAUNCH_OPTIONS
+        )
         split_grid = (num_reqs, num_kv_heads, num_splits)
         _paged_decode_gqa_split_kernel[split_grid](
             q,
@@ -809,7 +827,7 @@ def _vllm_paged_decode_attention_into(
             slot_mapping.stride(0),
             HEAD_DIM=head_dim,
             GROUP_SIZE=group_size,
-            GROUP_BLOCK=16,
+            GROUP_BLOCK=split_group_block,
             BLOCK_SIZE=block_size,
             TOKEN_BLOCK=32,
             NUM_SPLITS=num_splits,
@@ -817,7 +835,7 @@ def _vllm_paged_decode_attention_into(
             FUSE_KV_APPEND=True,
             CACHE_K_PLANE=0,
             CACHE_V_PLANE=1,
-            num_warps=4,
+            **split_launch_options,
         )
         # Reduction is independent per query head. A one-head CTA avoids the
         # generic GROUP_BLOCK=16 padding that otherwise leaves half the rows
