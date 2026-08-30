@@ -417,7 +417,11 @@ def _paged_decode_gqa_split_kernel(
             q.to(tl.float32) * append_k[None, :].to(tl.float32), axis=1
         ) * SM_SCALE
         m_i = tl.where(owns_append, append_score, -float("inf"))
-        l_i = tl.where(owns_append, 1.0, 0.0).to(tl.float32)
+        l_i = tl.where(
+            owns_append,
+            tl.full((GROUP_BLOCK,), 1.0, dtype=tl.float32),
+            tl.zeros((GROUP_BLOCK,), dtype=tl.float32),
+        )
         append_acc = tl.broadcast_to(
             append_v[None, :], (GROUP_BLOCK, HEAD_DIM)
         ).to(tl.float32)
