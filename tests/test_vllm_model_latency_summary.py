@@ -129,7 +129,7 @@ def test_summary_rejects_short_context_regression(tmp_path):
     with pytest.raises(ValueError, match="performance gate failed"):
         MODULE.summarize(source, output)
 
-    assert "guardrail <= 1.03x: FAIL" in output.read_text(encoding="utf-8")
+    assert "guardrail <= 1.02x: FAIL" in output.read_text(encoding="utf-8")
 
 
 def test_summary_rejects_unstable_ratio(tmp_path):
