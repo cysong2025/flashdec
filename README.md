@@ -86,6 +86,7 @@ Scheduler 产生携带原始 K/V-free metadata snapshot 与 config 的容量决�
 - 真实 Qwen evidence 保留 Amdahl 边界：固定批量模型 p50 只改善 `0.16%–0.41%`，未达到预注册模型目标；在线 median/p90 TPOT 分别改善约 `0.31%/0.27%`，但 throughput 中位数 `1.0019x` 略低于 `1.002x` 门槛，因此整体 serving gate 为 `FAIL`。不能把约 20% kernel 收益写成约 20% serving 加速。
 - 外部基线证据提交 `d7d4feb` 的 GPU full regression 为 `453 passed, 94 subtests passed`；GitHub Actions 运行不依赖 GPU 的仓库检查子集。测试计数绑定具体 commit 和环境，不作为滚动徽章。
 - R6-A hardening 提交 `87d8a34` 在同一 RTX 5070/CUDA 12.8 开发环境完成当前代码回归：focused 为 `254 passed, 20 subtests passed`，full 为 `501 passed, 100 subtests passed`，clean-tree public release check 为 `PASS`。这组结果验证事务回收与 scheduler decision 边界，不替代绑定历史提交的性能矩阵。
+- R7 证据提交 `61836b6` 的 vLLM/cu130 专项为 `21 passed`；cu128 全仓库为 `531 passed, 1 skipped, 100 subtests passed`，唯一 skip 是 cu128 环境未安装 vLLM。两套环境 `pip check` 与 clean-tree public release gate 均为 `PASS`。测试计数只证明对应提交的 correctness，不改变上述性能门槛结果。
 
 图中数据由受版本控制的 Markdown summaries 派生。来源、trial 范围、ratio 方向和负结果见[结果索引](benchmarks/results/README.md)与[数据快照](benchmarks/results/public_results_snapshot.json)。
 

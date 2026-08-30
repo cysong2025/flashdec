@@ -217,6 +217,37 @@ python scripts/check_release.py \
 
 该记录复用已验证的隔离 cu128 开发环境，因此属于当前代码的 GPU correctness/release regression，不构成全新环境安装保证，也不产生新的性能结论。正式性能数字继续绑定各自 canonical summary 中记录的 evidence commit。
 
+### 2026-08-30 R7 vLLM/Qwen 闭环记录
+
+证据提交 `61836b6` 在同一 RTX 5070 上分别使用 vLLM/cu130 与核心 cu128 环境复核。vLLM 环境补充的 `pytest==9.1.1` 只作为测试工具安装，没有重新解析项目、Torch 或 CUDA dependencies；安装前后 `python -m pip check` 都为 `No broken requirements found`。
+
+```bash
+# vLLM/cu130 environment
+python -m pytest -q -ra \
+  tests/test_vllm_plugin.py \
+  tests/test_vllm_backend.py \
+  tests/test_vllm_attention_microbench_summary.py \
+  tests/test_vllm_model_correctness_summary.py \
+  tests/test_vllm_model_latency_summary.py \
+  tests/test_vllm_serving_benchmark_summary.py
+
+# core cu128 environment
+python -m pytest -q -ra
+python scripts/check_docs.py
+python scripts/check_release.py \
+  --require-clean --require-evidence --require-public
+```
+
+结果：
+
+- vLLM/cu130 专项：`21 passed, 14 dependency deprecation warnings`；
+- core cu128 full：`531 passed, 1 skipped, 100 subtests passed in 10.73s`；
+- 唯一 skip：cu128 环境未安装 vLLM；对应 case 已由 cu130 专项实际执行；
+- docs check：`PASS (52 files)`；
+- clean-tree public release check：`PASS`。
+
+原始 full、pip-check、docs-check 与 release-check logs 保存在仓库外的 R7 result directory。该回归证明 plugin/backend/summary 与核心 runtime 在两个固定环境中通过，不会把未通过的 model-latency 或 serving-throughput 性能门槛改写为通过。
+
 ## Non-instrumented multi-trial workload
 
 快速验证 runner/trial schema：
