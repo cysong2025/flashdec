@@ -188,13 +188,14 @@ def test_runner_rejects_inconsistent_worker_output_hashes(tmp_path):
         "num_iters": 1,
         "timing_scope": RUNNER.TIMING_SCOPE,
         "vllm_engine_multiprocessing": True,
+        "accuracy_prefix_len": RUNNER.ACCURACY_PREFIX_LEN,
         "latencies_s": [1.0],
         "avg_latency_s": 1.0,
         "percentiles_s": {"50": 1.0, "90": 1.0},
         "warmup_output_sha256": ["b" * 64],
         "measured_output_sha256": ["c" * 64],
         "output_token_ids_sha256": "c" * 64,
-        "output_first_token_ids": [1],
+        "output_token_ids": [[1, 2]],
     }
 
     with pytest.raises(ValueError, match="outputs differ"):
@@ -209,3 +210,19 @@ def test_runner_rejects_inconsistent_worker_output_hashes(tmp_path):
             warmup_iters=1,
             num_iters=1,
         )
+
+
+def test_cross_backend_parity_requires_first_custom_decode_decision():
+    parity = RUNNER._cross_backend_parity(
+        ((1, 2, 3, 4), (5, 6, 7, 8)),
+        ((1, 2, 9, 4), (5, 6, 7, 8)),
+    )
+
+    assert parity == {
+        "cross_backend_exact_sequences": 1,
+        "cross_backend_common_prefix_tokens": 6,
+        "cross_backend_min_common_prefix_tokens": 2,
+        "cross_backend_generated_tokens": 8,
+        "cross_backend_full_hash_equal": False,
+        "cross_backend_accuracy_prefix_pass": True,
+    }

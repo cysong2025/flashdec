@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import math
 import re
 import statistics
@@ -16,12 +15,23 @@ from flashdec.benchmark import validate_vllm_cache_root
 
 
 BACKENDS = ("vllm_triton_attn", "flashdec")
+BACKEND_ARGS = {
+    "vllm_triton_attn": "TRITON_ATTN",
+    "flashdec": "CUSTOM",
+}
 TARGET_CASE = "qwen_b8_i2048_o128"
 GUARDRAIL_CASE = "qwen_b8_i128_o128"
+FORMAL_CASE_SHAPES = {
+    GUARDRAIL_CASE: (8, 128, 128),
+    TARGET_CASE: (8, 2048, 128),
+}
+FORMAL_TRIALS = {1, 2, 3}
+FORMAL_WARMUP_ITERS = 3
+FORMAL_NUM_ITERS = 5
+ACCURACY_PREFIX_LEN = 2
 TARGET_RATIO_LIMIT = 0.995
 GUARDRAIL_RATIO_LIMIT = 1.02
 MAX_RATIO_SPREAD = 0.03
-MIN_PAIRED_TRIALS = 3
 DATASET_GENERATION_PROTOCOL = (
     "sha256-indexed-u64be-mod-model-tokenizer-nonspecial-v2"
 )
@@ -38,6 +48,7 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         raise ValueError("input CSV is empty")
     required = {
         "schema_version",
+        "started_at",
         "git_commit",
         "git_worktree_clean",
         "device",
@@ -46,11 +57,16 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         "triton_version",
         "vllm_version",
         "model_id",
+        "model_path",
         "model_config_sha256",
         "tokenizer_config_sha256",
         "model_manifest_sha256",
         "dtype",
         "kv_cache_dtype",
+        "max_model_len",
+        "max_num_seqs",
+        "max_num_batched_tokens",
+        "gpu_memory_utilization",
         "compilation_mode",
         "vllm_cache_root",
         "flashdec_num_splits",
@@ -69,20 +85,31 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         "sampling_detokenize",
         "timing_scope",
         "vllm_engine_multiprocessing",
+        "accuracy_prefix_len",
         "case",
         "batch_size",
         "input_len",
         "output_len",
         "backend",
+        "backend_arg",
         "trial",
+        "run_order",
         "dataset_path",
         "dataset_sha256",
         "output_token_ids_sha256",
-        "first_output_token_ids_json",
+        "cross_backend_exact_sequences",
+        "cross_backend_common_prefix_tokens",
+        "cross_backend_min_common_prefix_tokens",
+        "cross_backend_generated_tokens",
+        "cross_backend_full_hash_equal",
+        "cross_backend_accuracy_prefix_pass",
         "avg_latency_ms",
         "p50_latency_ms",
         "p90_latency_ms",
         "output_tokens_per_s",
+        "raw_json",
+        "log",
+        "command",
     }
     missing = required - set(rows[0])
     if missing:
@@ -94,6 +121,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
     rows = _read_rows(input_path)
     invariant_fields = (
         "schema_version",
+        "started_at",
         "git_commit",
         "git_worktree_clean",
         "device",
@@ -128,11 +156,12 @@ def summarize(input_path: Path, output_path: Path) -> str:
         "sampling_detokenize",
         "timing_scope",
         "vllm_engine_multiprocessing",
+        "accuracy_prefix_len",
     )
     first = rows[0]
     case_datasets: dict[str, tuple[str, ...]] = {}
-    case_first_tokens: dict[str, tuple[int, ...]] = {}
     case_output_hashes: dict[str, set[str]] = defaultdict(set)
+    backend_output_hashes: dict[tuple[str, str], set[str]] = defaultdict(set)
     for row in rows:
         if any(row.get(field) != first.get(field) for field in invariant_fields):
             raise ValueError("environment/model/protocol invariants differ across rows")
@@ -143,6 +172,37 @@ def summarize(input_path: Path, output_path: Path) -> str:
             raise ValueError("formal model evidence requires a clean worktree")
         if row["backend"] not in BACKENDS:
             raise ValueError(f"unknown backend: {row['backend']}")
+        if row["backend_arg"] != BACKEND_ARGS[row["backend"]]:
+            raise ValueError("backend/backend_arg mapping differs from formal protocol")
+        if row["model_id"] != "Qwen2.5-3B-Instruct":
+            raise ValueError("formal model latency requires Qwen2.5-3B-Instruct")
+        if row["vllm_version"] != "0.25.1":
+            raise ValueError("formal model latency requires vLLM 0.25.1")
+        if row["dtype"] != "bfloat16" or row["kv_cache_dtype"] != "bfloat16":
+            raise ValueError("formal model latency requires BF16 model and KV cache")
+        if (
+            row["max_model_len"] != "4096"
+            or row["max_num_seqs"] != "8"
+            or row["max_num_batched_tokens"] != "2048"
+            or not math.isclose(float(row["gpu_memory_utilization"]), 0.78)
+            or row["compilation_mode"] != "default_inductor_cudagraph"
+            or row["flashdec_num_splits"] != "auto"
+        ):
+            raise ValueError("capacity/compilation settings differ from formal protocol")
+        if (
+            row["warmup_iters"] != str(FORMAL_WARMUP_ITERS)
+            or row["num_iters"] != str(FORMAL_NUM_ITERS)
+            or row["dataset_seed"] != "20260830"
+            or row["sampling_seed"] != "20260830"
+        ):
+            raise ValueError("trial strength or seeds differ from formal protocol")
+        for hash_field in (
+            "model_config_sha256",
+            "tokenizer_config_sha256",
+            "model_manifest_sha256",
+        ):
+            if not re.fullmatch(r"[0-9a-f]{64}", row[hash_field]):
+                raise ValueError(f"invalid {hash_field}")
         if row["dataset_generation_protocol"] != DATASET_GENERATION_PROTOCOL:
             raise ValueError("unsupported deterministic dataset protocol")
         if row["prompt_format"] != "token_ids":
@@ -162,12 +222,24 @@ def summarize(input_path: Path, output_path: Path) -> str:
             raise ValueError("unsupported model latency timing scope")
         if row["vllm_engine_multiprocessing"] != "True":
             raise ValueError("formal model latency requires vLLM engine multiprocessing")
+        if row["accuracy_prefix_len"] != str(ACCURACY_PREFIX_LEN):
+            raise ValueError("unsupported cross-backend accuracy prefix length")
         if not re.fullmatch(r"[0-9a-f]{64}", row["dataset_sha256"]):
             raise ValueError("invalid dataset SHA-256")
         if not re.fullmatch(r"[0-9a-f]{64}", row["output_token_ids_sha256"]):
             raise ValueError("invalid generated-token SHA-256")
         if not Path(row["dataset_path"]).is_absolute():
             raise ValueError("dataset path must be absolute")
+        if not Path(row["raw_json"]).is_absolute() or not Path(row["log"]).is_absolute():
+            raise ValueError("raw JSON and log paths must be absolute")
+        if not row["command"].strip():
+            raise ValueError("worker command must be recorded")
+        expected_shape = FORMAL_CASE_SHAPES.get(row["case"])
+        actual_shape = tuple(
+            int(row[field]) for field in ("batch_size", "input_len", "output_len")
+        )
+        if expected_shape is None or actual_shape != expected_shape:
+            raise ValueError("case name/shape differs from the frozen formal matrix")
         dataset_invariants = (
             row["batch_size"],
             row["input_len"],
@@ -180,57 +252,121 @@ def summarize(input_path: Path, output_path: Path) -> str:
             raise ValueError(
                 "every backend/trial for a case must use the exact same dataset"
             )
-        try:
-            first_tokens_raw = json.loads(row["first_output_token_ids_json"])
-        except json.JSONDecodeError as error:
-            raise ValueError("invalid first-output token JSON") from error
-        if (
-            not isinstance(first_tokens_raw, list)
-            or len(first_tokens_raw) != int(row["batch_size"])
-            or any(
-                not isinstance(token_id, int)
-                or isinstance(token_id, bool)
-                or token_id < 0
-                for token_id in first_tokens_raw
-            )
-        ):
-            raise ValueError("invalid first-output token IDs")
-        first_tokens = tuple(first_tokens_raw)
-        previous_first_tokens = case_first_tokens.setdefault(
-            row["case"], first_tokens
-        )
-        if previous_first_tokens != first_tokens:
-            raise ValueError(
-                "every backend/trial for a case must agree on first output tokens"
-            )
         case_output_hashes[row["case"]].add(row["output_token_ids_sha256"])
-        if min(
-            float(row["avg_latency_ms"]),
-            float(row["p50_latency_ms"]),
-            float(row["p90_latency_ms"]),
-        ) <= 0:
+        backend_output_hashes[(row["case"], row["backend"])].add(
+            row["output_token_ids_sha256"]
+        )
+        latency_values = tuple(
+            float(row[field])
+            for field in ("avg_latency_ms", "p50_latency_ms", "p90_latency_ms")
+        )
+        output_tps = float(row["output_tokens_per_s"])
+        if any(not math.isfinite(value) or value <= 0 for value in latency_values):
             raise ValueError("latencies must be positive")
+        if not math.isfinite(output_tps) or output_tps <= 0:
+            raise ValueError("output throughput must be finite and positive")
+        expected_tps = actual_shape[0] * actual_shape[2] * 1000.0 / latency_values[1]
+        if not math.isclose(output_tps, expected_tps, rel_tol=1e-5, abs_tol=1e-3):
+            raise ValueError("output throughput does not match p50 latency")
 
     paired: dict[tuple[str, int], dict[str, dict[str, str]]] = defaultdict(dict)
+    if any(len(hashes) != 1 for hashes in backend_output_hashes.values()):
+        raise ValueError(
+            "each case/backend must produce one deterministic full-output hash "
+            "across independent processes"
+        )
     for row in rows:
-        key = (row["case"], int(row["trial"]))
+        trial = int(row["trial"])
+        if trial not in FORMAL_TRIALS:
+            raise ValueError("trial IDs differ from the frozen formal protocol")
+        expected_order = (
+            ("vllm_triton_attn", "flashdec")
+            if trial % 2
+            else ("flashdec", "vllm_triton_attn")
+        )
+        if int(row["run_order"]) != expected_order.index(row["backend"]) + 1:
+            raise ValueError("backend run order differs from the frozen AB/BA protocol")
+        key = (row["case"], trial)
         if row["backend"] in paired[key]:
             raise ValueError(f"duplicate backend row for {key}")
         paired[key][row["backend"]] = row
     if any(set(pair) != set(BACKENDS) for pair in paired.values()):
         raise ValueError("every case/trial must contain both paired backends")
 
+    parity_by_case: dict[str, list[dict[str, int | bool]]] = defaultdict(list)
+    for (case, _trial), pair in paired.items():
+        native_row = pair["vllm_triton_attn"]
+        flashdec_row = pair["flashdec"]
+        parity_fields = (
+            "cross_backend_exact_sequences",
+            "cross_backend_common_prefix_tokens",
+            "cross_backend_min_common_prefix_tokens",
+            "cross_backend_generated_tokens",
+            "cross_backend_full_hash_equal",
+            "cross_backend_accuracy_prefix_pass",
+        )
+        if any(native_row[field] != flashdec_row[field] for field in parity_fields):
+            raise ValueError("paired rows disagree on cross-backend parity metrics")
+        batch_size = int(native_row["batch_size"])
+        output_len = int(native_row["output_len"])
+        exact_sequences = int(native_row["cross_backend_exact_sequences"])
+        common_prefix_tokens = int(
+            native_row["cross_backend_common_prefix_tokens"]
+        )
+        min_common_prefix = int(
+            native_row["cross_backend_min_common_prefix_tokens"]
+        )
+        generated_tokens = int(native_row["cross_backend_generated_tokens"])
+        if native_row["cross_backend_full_hash_equal"] not in ("True", "False"):
+            raise ValueError("invalid full-rollout hash parity flag")
+        if native_row["cross_backend_accuracy_prefix_pass"] not in (
+            "True",
+            "False",
+        ):
+            raise ValueError("invalid accuracy-prefix parity flag")
+        full_hash_equal = (
+            native_row["output_token_ids_sha256"]
+            == flashdec_row["output_token_ids_sha256"]
+        )
+        accuracy_prefix_pass = min_common_prefix >= ACCURACY_PREFIX_LEN
+        if (
+            generated_tokens != batch_size * output_len
+            or not 0 <= exact_sequences <= batch_size
+            or not 0 <= min_common_prefix <= output_len
+            or not 0 <= common_prefix_tokens <= generated_tokens
+            or (native_row["cross_backend_full_hash_equal"] == "True")
+            != full_hash_equal
+            or (native_row["cross_backend_accuracy_prefix_pass"] == "True")
+            != accuracy_prefix_pass
+            or (exact_sequences == batch_size) != full_hash_equal
+        ):
+            raise ValueError("cross-backend parity metrics are internally inconsistent")
+        parity_by_case[case].append(
+            {
+                "exact_sequences": exact_sequences,
+                "common_prefix_tokens": common_prefix_tokens,
+                "min_common_prefix": min_common_prefix,
+                "generated_tokens": generated_tokens,
+                "accuracy_prefix_pass": accuracy_prefix_pass,
+            }
+        )
+
     by_case: dict[str, list[dict[str, dict[str, str]]]] = defaultdict(list)
     for (case, _trial), pair in paired.items():
         by_case[case].append(pair)
-    required_cases = {TARGET_CASE, GUARDRAIL_CASE}
-    missing_cases = required_cases - set(by_case)
-    if missing_cases:
-        raise ValueError(f"missing required model cases: {sorted(missing_cases)}")
-    if any(len(pairs) < MIN_PAIRED_TRIALS for pairs in by_case.values()):
+    required_cases = set(FORMAL_CASE_SHAPES)
+    if set(by_case) != required_cases:
         raise ValueError(
-            f"formal model evidence requires at least {MIN_PAIRED_TRIALS} "
-            "paired process trials per case"
+            "formal summary requires exactly the frozen model cases: "
+            f"{sorted(required_cases)}"
+        )
+    if any(
+        {trial for (case_name, trial) in paired if case_name == case}
+        != FORMAL_TRIALS
+        for case in required_cases
+    ):
+        raise ValueError(
+            "formal model evidence requires exactly the frozen paired trials"
         )
 
     results = []
@@ -271,7 +407,12 @@ def summarize(input_path: Path, output_path: Path) -> str:
         result["ratio_max"] - result["ratio_min"] <= MAX_RATIO_SPREAD
         for result in results
     )
-    gate_pass = target_pass and guardrail_pass and stability_pass
+    accuracy_pass = all(
+        parity["accuracy_prefix_pass"]
+        for values in parity_by_case.values()
+        for parity in values
+    )
+    gate_pass = target_pass and guardrail_pass and stability_pass and accuracy_pass
     geo_ratio = math.exp(
         statistics.mean(math.log(result["ratio"]) for result in results)
     )
@@ -316,10 +457,11 @@ def summarize(input_path: Path, output_path: Path) -> str:
         ),
         "- Per-case generated-token identities:",
         *(
-            f"  - `{case}`: first tokens `{list(case_first_tokens[case])}`; "
-            f"{len(case_output_hashes[case])} unique full-rollout SHA-256 "
-            "(descriptive only)."
-            for case in sorted(case_first_tokens)
+            f"  - `{case}`: minimum cross-backend common prefix "
+            f"`{min(value['min_common_prefix'] for value in parity_by_case[case])}` "
+            f"tokens/request; {len(case_output_hashes[case])} unique full-rollout "
+            "SHA-256 (descriptive only)."
+            for case in sorted(parity_by_case)
         ),
         "",
         "## Paired Results",
@@ -366,6 +508,11 @@ def summarize(input_path: Path, output_path: Path) -> str:
                 f"- Every case paired-ratio spread <= {MAX_RATIO_SPREAD:.2f}: "
                 f"{'PASS' if stability_pass else 'FAIL'}."
             ),
+            (
+                f"- Every request shares at least {ACCURACY_PREFIX_LEN} output "
+                "tokens across backends (the second token exercises custom "
+                f"decode): {'PASS' if accuracy_pass else 'FAIL'}."
+            ),
             f"- Geometric-mean p50 ratio: {geo_ratio:.4f}x.",
             f"- Overall external-model gate: **{'PASS' if gate_pass else 'FAIL'}**.",
             "",
@@ -378,8 +525,10 @@ def summarize(input_path: Path, output_path: Path) -> str:
                 "does not claim online TTFT/TPOT behavior."
             ),
             (
-                "First-step greedy tokens must match from identical prompt state. "
-                "Full autoregressive rollout hashes are descriptive because one "
+                "The first two greedy tokens must match from identical prompt state; "
+                "the second generated token is the first decision after a custom "
+                "single-token decode step. Full autoregressive rollout hashes are "
+                "descriptive because one "
                 "near-tied floating-point choice can change all later inputs."
             ),
             "",

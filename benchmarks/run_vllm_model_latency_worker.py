@@ -25,6 +25,7 @@ DATASET_GENERATION_PROTOCOL = (
     "sha256-indexed-u64be-mod-model-tokenizer-nonspecial-v2"
 )
 RESULT_SCHEMA_VERSION = 1
+ACCURACY_PREFIX_LEN = 2
 TIMING_SCOPE = (
     "wall-clock blocking LLM.generate call after full-length warmup; "
     "model load, engine startup, JIT/graph capture, and result hashing excluded"
@@ -262,7 +263,6 @@ def main() -> None:
             "one worker process"
         )
     output_token_ids_sha256 = measured_output_sha256[0]
-    output_first_token_ids = [tokens[0] for tokens in token_ids]
 
     payload = {
         "schema_version": RESULT_SCHEMA_VERSION,
@@ -290,6 +290,7 @@ def main() -> None:
         "num_iters": args.num_iters,
         "timing_scope": TIMING_SCOPE,
         "vllm_engine_multiprocessing": True,
+        "accuracy_prefix_len": ACCURACY_PREFIX_LEN,
         "latencies_s": latencies_s,
         "avg_latency_s": statistics.fmean(latencies_s),
         "percentiles_s": {
@@ -299,7 +300,7 @@ def main() -> None:
         "warmup_output_sha256": warmup_output_sha256,
         "measured_output_sha256": measured_output_sha256,
         "output_token_ids_sha256": output_token_ids_sha256,
-        "output_first_token_ids": output_first_token_ids,
+        "output_token_ids": token_ids,
         "device": torch.cuda.get_device_name(),
         "torch_version": torch.__version__,
         "torch_cuda": torch.version.cuda,

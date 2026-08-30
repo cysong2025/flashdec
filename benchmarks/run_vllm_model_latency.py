@@ -42,6 +42,7 @@ TIMING_SCOPE = (
     "model load, engine startup, JIT/graph capture, and result hashing excluded"
 )
 MODEL_ID = "Qwen2.5-3B-Instruct"
+ACCURACY_PREFIX_LEN = 2
 BACKENDS = (
     ("vllm_triton_attn", "TRITON_ATTN"),
     ("flashdec", "CUSTOM"),
@@ -386,7 +387,14 @@ def _validate_worker_result(
     warmup_iters: int,
     num_iters: int,
     expected_environment: dict[str, str] | None = None,
-) -> tuple[list[float], float, float, float, str, tuple[int, ...]]:
+) -> tuple[
+    list[float],
+    float,
+    float,
+    float,
+    str,
+    tuple[tuple[int, ...], ...],
+]:
     expected = {
         "schema_version": 1,
         "backend_arg": backend_arg,
@@ -411,6 +419,7 @@ def _validate_worker_result(
         "num_iters": num_iters,
         "timing_scope": TIMING_SCOPE,
         "vllm_engine_multiprocessing": True,
+        "accuracy_prefix_len": ACCURACY_PREFIX_LEN,
     }
     for field, value in expected.items():
         if result.get(field) != value:
@@ -448,18 +457,30 @@ def _validate_worker_result(
         raise ValueError(
             "worker fixed-greedy outputs differ within one process"
         )
-    first_token_ids = result.get("output_first_token_ids")
+    output_token_ids = result.get("output_token_ids")
     if (
-        not isinstance(first_token_ids, list)
-        or len(first_token_ids) != case.batch_size
+        not isinstance(output_token_ids, list)
+        or len(output_token_ids) != case.batch_size
         or any(
-            not isinstance(token_id, int)
-            or isinstance(token_id, bool)
-            or token_id < 0
-            for token_id in first_token_ids
+            not isinstance(tokens, list)
+            or len(tokens) != case.output_len
+            or any(
+                not isinstance(token_id, int)
+                or isinstance(token_id, bool)
+                or token_id < 0
+                for token_id in tokens
+            )
+            for tokens in output_token_ids
         )
     ):
-        raise ValueError("worker returned invalid first output token IDs")
+        raise ValueError("worker returned invalid output token IDs")
+    canonical_output = json.dumps(
+        output_token_ids,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if hashlib.sha256(canonical_output).hexdigest() != output_sha256:
+        raise ValueError("worker output token IDs do not match their SHA-256")
 
     avg_s = float(result["avg_latency_s"])
     p50_s = float(result["percentiles_s"]["50"])
@@ -498,8 +519,53 @@ def _validate_worker_result(
         p50_s,
         p90_s,
         output_sha256,
-        tuple(first_token_ids),
+        tuple(tuple(tokens) for tokens in output_token_ids),
     )
+
+
+def _cross_backend_parity(
+    native_tokens: tuple[tuple[int, ...], ...],
+    flashdec_tokens: tuple[tuple[int, ...], ...],
+    *,
+    accuracy_prefix_len: int = ACCURACY_PREFIX_LEN,
+) -> dict[str, int | bool]:
+    if len(native_tokens) != len(flashdec_tokens) or not native_tokens:
+        raise ValueError("cross-backend output batches must be equal and non-empty")
+    common_prefixes: list[int] = []
+    exact_sequences = 0
+    generated_tokens = 0
+    for native_sequence, flashdec_sequence in zip(
+        native_tokens, flashdec_tokens, strict=True
+    ):
+        if len(native_sequence) != len(flashdec_sequence) or not native_sequence:
+            raise ValueError(
+                "cross-backend output sequences must be equal-length and non-empty"
+            )
+        common_prefix = next(
+            (
+                index
+                for index, (native_token, flashdec_token) in enumerate(
+                    zip(native_sequence, flashdec_sequence, strict=True)
+                )
+                if native_token != flashdec_token
+            ),
+            len(native_sequence),
+        )
+        common_prefixes.append(common_prefix)
+        exact_sequences += native_sequence == flashdec_sequence
+        generated_tokens += len(native_sequence)
+    full_equal = exact_sequences == len(native_tokens)
+    min_common_prefix = min(common_prefixes)
+    return {
+        "cross_backend_exact_sequences": exact_sequences,
+        "cross_backend_common_prefix_tokens": sum(common_prefixes),
+        "cross_backend_min_common_prefix_tokens": min_common_prefix,
+        "cross_backend_generated_tokens": generated_tokens,
+        "cross_backend_full_hash_equal": full_equal,
+        "cross_backend_accuracy_prefix_pass": (
+            min_common_prefix >= accuracy_prefix_len
+        ),
+    }
 
 
 def main() -> None:
@@ -602,11 +668,16 @@ def main() -> None:
         "sampling_detokenize": False,
         "timing_scope": TIMING_SCOPE,
         "vllm_engine_multiprocessing": True,
+        "accuracy_prefix_len": ACCURACY_PREFIX_LEN,
     }
     child_env = os.environ.copy()
     child_env["PYTHONHASHSEED"] = "0"
     child_env["VLLM_CACHE_ROOT"] = str(cache_root)
     rows: list[dict[str, object]] = []
+    paired_outputs: dict[
+        tuple[str, int],
+        dict[str, tuple[dict[str, object], tuple[tuple[int, ...], ...]]],
+    ] = {}
     print(f"VLLM_CACHE_ROOT={cache_root}", flush=True)
 
     for case in selected:
@@ -659,7 +730,7 @@ def main() -> None:
                     p50_s,
                     p90_s,
                     output_sha256,
-                    first_token_ids,
+                    output_token_ids,
                 ) = _validate_worker_result(
                     result,
                     case=case,
@@ -690,9 +761,6 @@ def main() -> None:
                     "dataset_path": str(dataset_path.resolve()),
                     "dataset_sha256": dataset_sha256,
                     "output_token_ids_sha256": output_sha256,
-                    "first_output_token_ids_json": json.dumps(
-                        first_token_ids, separators=(",", ":")
-                    ),
                     "sampling_min_tokens": case.output_len,
                     "sampling_max_tokens": case.output_len,
                     "avg_latency_ms": f"{avg_s * 1000.0:.6f}",
@@ -706,6 +774,37 @@ def main() -> None:
                     "command": shlex.join(command),
                 }
                 rows.append(row)
+                pair_key = (case.name, trial)
+                pair_outputs = paired_outputs.setdefault(pair_key, {})
+                pair_outputs[backend_name] = (row, output_token_ids)
+                if len(pair_outputs) == len(BACKENDS):
+                    native_row, native_tokens = pair_outputs["vllm_triton_attn"]
+                    flashdec_row, flashdec_tokens = pair_outputs["flashdec"]
+                    parity = _cross_backend_parity(
+                        native_tokens,
+                        flashdec_tokens,
+                    )
+                    if parity["cross_backend_full_hash_equal"] != (
+                        native_row["output_token_ids_sha256"]
+                        == flashdec_row["output_token_ids_sha256"]
+                    ):
+                        raise ValueError(
+                            "cross-backend token equality disagrees with output hashes"
+                        )
+                    native_row.update(parity)
+                    flashdec_row.update(parity)
+                    print(
+                        f"PARITY case={case.name} trial={trial} "
+                        "min_common_prefix="
+                        f"{parity['cross_backend_min_common_prefix_tokens']} "
+                        "common_prefix="
+                        f"{parity['cross_backend_common_prefix_tokens']}/"
+                        f"{parity['cross_backend_generated_tokens']} "
+                        "exact_sequences="
+                        f"{parity['cross_backend_exact_sequences']}/"
+                        f"{case.batch_size}",
+                        flush=True,
+                    )
                 print(
                     case.name,
                     backend_name,
