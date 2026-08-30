@@ -39,6 +39,7 @@ __all__ = [
     "load_cuda_kv_append_extension",
     "load_fused_rope_kv_append_extension",
     "paged_decode_attention",
+    "paged_decode_attention_into",
     "paged_decode_attention_ref",
     "rope_paged_kv_append",
     "rope_paged_kv_append_ref",
@@ -228,10 +229,17 @@ def __getattr__(name):
         from .reference import dense_decode_attention_ref
 
         return dense_decode_attention_ref
-    if name in ("decode", "paged_decode_attention"):
-        from .kernels.paged_decode import paged_decode_attention
+    if name in ("decode", "paged_decode_attention", "paged_decode_attention_into"):
+        from .kernels.paged_decode import (
+            paged_decode_attention,
+            paged_decode_attention_into,
+        )
 
-        return paged_decode_attention
+        return {
+            "decode": paged_decode_attention,
+            "paged_decode_attention": paged_decode_attention,
+            "paged_decode_attention_into": paged_decode_attention_into,
+        }[name]
     if name == "paged_decode_attention_ref":
         from .paged_reference import paged_decode_attention_ref
 

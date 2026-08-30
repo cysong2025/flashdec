@@ -46,7 +46,6 @@ def _paged_decode_attention_kernel(
     out_stride_seq: tl.constexpr,
     out_stride_head: tl.constexpr,
     out_stride_dim: tl.constexpr,
-    MAX_BLOCKS_PER_SEQ: tl.constexpr,
     HEAD_DIM: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
@@ -69,7 +68,8 @@ def _paged_decode_attention_kernel(
     acc = tl.zeros((HEAD_DIM,), dtype=tl.float32)
 
     offs_t = tl.arange(0, BLOCK_SIZE)
-    for logical_block in range(0, MAX_BLOCKS_PER_SEQ):
+    num_logical_blocks = tl.cdiv(seq_len, BLOCK_SIZE)
+    for logical_block in tl.range(0, num_logical_blocks):
         physical_block = tl.load(
             block_tables_ptr
             + seq_idx * block_tables_stride_seq
@@ -235,6 +235,50 @@ def paged_decode_attention(
         block_size = k_cache.shape[token_axis]
     else:
         block_size = int(block_size)
+    out = torch.empty_like(q)
+    return paged_decode_attention_into(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+        out,
+        sm_scale=sm_scale,
+        block_size=block_size,
+        num_warps=num_warps,
+        kv_layout=kv_layout,
+        num_stages=num_stages,
+    )
+
+
+def paged_decode_attention_into(
+    q,
+    k_cache,
+    v_cache,
+    block_tables,
+    seq_lens,
+    out,
+    sm_scale=None,
+    block_size=None,
+    num_warps=2,
+    kv_layout="token_major",
+    num_stages=None,
+):
+    """Write paged single-token decode attention into ``out``.
+
+    Unlike :func:`paged_decode_attention`, this entry point performs no output
+    allocation. K/V and block-table tensors may be strided views; their strides
+    are passed to Triton directly instead of materializing a cache-sized copy.
+    This is the integration path used by runtimes that own their KV storage.
+    """
+    token_axis, dim_axis = _layout_axes(kv_layout)
+    if block_size is None:
+        if k_cache.dim() != 4:
+            raise ValueError("k_cache must be a 4D tensor")
+        block_size = k_cache.shape[token_axis]
+    else:
+        block_size = int(block_size)
+
     _validate_inputs(
         q,
         k_cache,
@@ -246,48 +290,49 @@ def paged_decode_attention(
         num_stages,
         kv_layout,
     )
+    if out.shape != q.shape:
+        raise ValueError("out must have the same shape as q")
+    if out.dtype != q.dtype:
+        raise ValueError("out must have the same dtype as q")
+    if out.device != q.device:
+        raise ValueError("out must be on the same device as q")
 
-    q_contig = q.contiguous()
-    k_contig = k_cache.contiguous()
-    v_contig = v_cache.contiguous()
-    block_tables_contig = block_tables.contiguous()
+    # seq_lens is indexed as a dense vector by the kernel. The other inputs
+    # carry explicit strides, which avoids copies for vLLM's NHD cache views.
     seq_lens_contig = seq_lens.contiguous()
-    num_seqs, num_q_heads, head_dim = q_contig.shape
-    _, num_kv_heads = k_contig.shape[:2]
-    max_blocks_per_seq = block_tables_contig.shape[1]
+    num_seqs, num_q_heads, head_dim = q.shape
+    _, num_kv_heads = k_cache.shape[:2]
     group_size = num_q_heads // num_kv_heads
     if sm_scale is None:
         sm_scale = 1.0 / math.sqrt(head_dim)
 
-    out = torch.empty_like(q_contig)
     grid = (num_seqs, num_q_heads)
     launch_kwargs = {"num_warps": num_warps}
     if num_stages is not None:
         launch_kwargs["num_stages"] = num_stages
     _paged_decode_attention_kernel[grid](
-        q_contig,
-        k_contig,
-        v_contig,
-        block_tables_contig,
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
         seq_lens_contig,
         out,
-        q_contig.stride(0),
-        q_contig.stride(1),
-        q_contig.stride(2),
-        k_contig.stride(0),
-        k_contig.stride(1),
-        k_contig.stride(token_axis),
-        k_contig.stride(dim_axis),
-        v_contig.stride(0),
-        v_contig.stride(1),
-        v_contig.stride(token_axis),
-        v_contig.stride(dim_axis),
-        block_tables_contig.stride(0),
-        block_tables_contig.stride(1),
+        q.stride(0),
+        q.stride(1),
+        q.stride(2),
+        k_cache.stride(0),
+        k_cache.stride(1),
+        k_cache.stride(token_axis),
+        k_cache.stride(dim_axis),
+        v_cache.stride(0),
+        v_cache.stride(1),
+        v_cache.stride(token_axis),
+        v_cache.stride(dim_axis),
+        block_tables.stride(0),
+        block_tables.stride(1),
         out.stride(0),
         out.stride(1),
         out.stride(2),
-        MAX_BLOCKS_PER_SEQ=max_blocks_per_seq,
         HEAD_DIM=head_dim,
         GROUP_SIZE=group_size,
         BLOCK_SIZE=block_size,

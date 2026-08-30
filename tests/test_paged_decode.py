@@ -4,7 +4,10 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("triton")
 
 from flashdec.cache import PagedKVCache
-from flashdec.kernels.paged_decode import paged_decode_attention
+from flashdec.kernels.paged_decode import (
+    paged_decode_attention,
+    paged_decode_attention_into,
+)
 from flashdec.paged_reference import paged_decode_attention_ref
 
 
@@ -201,6 +204,99 @@ def test_paged_decode_attention_supports_custom_scale(dtype):
     expected = paged_decode_attention_ref(q, k_cache, v_cache, block_tables, seq_lens, sm_scale=0.25)
 
     _assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_paged_decode_attention_into_supports_strided_nhd_cache_view(dtype):
+    q, k_cache, v_cache, block_tables, seq_lens, _ = _make_paged_inputs(
+        request_ids=[71, 72],
+        target_seq_lens=[17, 31],
+        num_q_heads=16,
+        num_kv_heads=2,
+        head_dim=128,
+        block_size=16,
+        dtype=dtype,
+    )
+    # vLLM's NHD cache view is [block, token, head, dim]. Reinterpret it as
+    # FlashDec token-major [block, head, token, dim] without materializing a
+    # cache-sized contiguous copy.
+    k_nhd = k_cache.permute(0, 2, 1, 3).contiguous()
+    v_nhd = v_cache.permute(0, 2, 1, 3).contiguous()
+    k_view = k_nhd.permute(0, 2, 1, 3)
+    v_view = v_nhd.permute(0, 2, 1, 3)
+    assert not k_view.is_contiguous()
+    assert not v_view.is_contiguous()
+
+    out = torch.empty_like(q)
+    returned = paged_decode_attention_into(
+        q,
+        k_view,
+        v_view,
+        block_tables,
+        seq_lens,
+        out,
+        block_size=16,
+    )
+    expected = paged_decode_attention_ref(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+    )
+
+    assert returned is out
+    _assert_close(out, expected)
+
+
+def test_paged_decode_attention_dynamic_loop_ignores_unused_invalid_blocks():
+    q, k_cache, v_cache, block_tables, seq_lens, _ = _make_paged_inputs(
+        request_ids=[81],
+        target_seq_lens=[7],
+        num_q_heads=2,
+        num_kv_heads=1,
+        head_dim=64,
+        block_size=8,
+        dtype=torch.float16,
+    )
+    extended_table = torch.full((1, 64), 2**30, device="cuda", dtype=torch.int32)
+    extended_table[:, : block_tables.shape[1]] = block_tables
+
+    actual = paged_decode_attention(
+        q,
+        k_cache,
+        v_cache,
+        extended_table,
+        seq_lens,
+        block_size=8,
+    )
+    expected = paged_decode_attention_ref(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+    )
+
+    _assert_close(actual, expected)
+
+
+def test_paged_decode_attention_into_validates_output_contract():
+    q = torch.randn((1, 1, 64), device="cuda", dtype=torch.float16)
+    k_cache = torch.randn((1, 1, 8, 64), device="cuda", dtype=torch.float16)
+    v_cache = torch.randn_like(k_cache)
+    block_tables = torch.tensor([[0]], device="cuda", dtype=torch.int32)
+    seq_lens = torch.tensor([7], device="cuda", dtype=torch.int32)
+
+    with pytest.raises(ValueError, match="same shape"):
+        paged_decode_attention_into(
+            q,
+            k_cache,
+            v_cache,
+            block_tables,
+            seq_lens,
+            torch.empty((1, 64), device="cuda", dtype=torch.float16),
+        )
 
 
 def test_paged_decode_attention_rejects_unsupported_head_dim():

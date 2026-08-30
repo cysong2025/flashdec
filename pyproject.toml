@@ -48,6 +48,12 @@ cuda-extension = [
 baseline = [
   "flashinfer-python==0.6.15.post1",
 ]
+vllm = [
+  "vllm==0.25.1",
+]
+
+[project.entry-points."vllm.general_plugins"]
+flashdec = "flashdec.vllm_plugin:register"
 
 [project.urls]
 Repository = "https://github.com/cysong2025/flashdec"
