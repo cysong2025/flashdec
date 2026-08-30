@@ -19,7 +19,7 @@ FlashDec 的文档按“研究问题 → 系统设计 → 实验方法 → 可�
 | 有限 KV 容量下如何保证 admission 安全、进展和公平？ | [Scheduler](design_scheduler.md) | [Policy matrix](../benchmarks/results/scheduler_capacity_progress_summary.md) |
 | 多层 token 如何原子写入、提交或回滚？ | [Multi-layer transaction](design_multi_layer_kv_transaction.md) · [Integrated workload](design_integrated_scheduled_multi_layer.md) | [Multi-layer matrix](../benchmarks/results/multi_layer_transaction_summary.md) · [Trusted transaction](../benchmarks/results/trusted_transaction_summary.md) · [Persistent-metadata 负结果](../benchmarks/results/persistent_metadata_candidate_summary.md) · [Integrated lifecycle](../benchmarks/results/integrated_runtime_lifecycle_summary.md) |
 | Shared prefix 如何改变 ownership、capacity 与 admission？ | [Shared Prefix Blocks](design_shared_prefix_blocks.md) | [8-trial confirmation](../benchmarks/results/shared_prefix_capacity_summary.md) |
-| Kernel 优化能否传递到完整 step，外部基线如何公平比较？ | [Dynamic workload](design_dynamic_workload.md) · [FlashInfer baseline](design_flashinfer_baseline.md) | [Stage attribution](../benchmarks/results/decode_engine_stage_profile_summary.md) · [FlashInfer comparison](../benchmarks/results/flashinfer_paged_decode_baseline_summary.md) |
+| Kernel 优化能否传递到完整 step，外部基线如何公平比较？ | [Dynamic workload](design_dynamic_workload.md) · [FlashInfer baseline](design_flashinfer_baseline.md) · [vLLM backend](design_vllm_backend.md) | [Stage attribution](../benchmarks/results/decode_engine_stage_profile_summary.md) · [FlashInfer comparison](../benchmarks/results/flashinfer_paged_decode_baseline_summary.md) · [vLLM Qwen kernel/model/serving](../benchmarks/results/README.md#r7-vllm-qwen外部比较) |
 
 ## 系统与数据路径设计
 
@@ -33,6 +33,7 @@ FlashDec 的文档按“研究问题 → 系统设计 → 实验方法 → 可�
 - [Multi-layer KV Token Transaction](design_multi_layer_kv_transaction.md)
 - [Shared Prefix Blocks](design_shared_prefix_blocks.md)
 - [Integrated Scheduled Multi-layer Workload](design_integrated_scheduled_multi_layer.md)
+- [vLLM Out-of-tree Attention Backend](design_vllm_backend.md)
 
 ## 实验、性能与复现
 
@@ -40,6 +41,7 @@ FlashDec 的文档按“研究问题 → 系统设计 → 实验方法 → 可�
 - [性能报告](performance_report.md)
 - [Dynamic Workload 方法](design_dynamic_workload.md)
 - [FlashInfer 有限基线设计](design_flashinfer_baseline.md)
+- [vLLM Qwen 外部比较设计](design_vllm_backend.md)
 - [兼容性](compatibility.md)
 - [复现指南](reproducibility.md)
 - [Benchmark 命令](../benchmarks/README.md)

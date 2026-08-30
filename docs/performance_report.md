@@ -22,6 +22,7 @@
 | Shared prefix 带来什么 | 75% hit 节省 `68.8%`/`5.5 MiB` context KV capacity，admission `9/16 → 16/16`；latency 无稳定方向 | [shared-prefix confirmation](../benchmarks/results/shared_prefix_capacity_summary.md) |
 | Trusted validation 是否值得 | trusted/checked complete-token p50 `1.7307x`；persistent metadata 只有 13/16 组稳定，未采用 | [trusted](../benchmarks/results/trusted_transaction_summary.md) · [negative candidate](../benchmarks/results/persistent_metadata_candidate_summary.md) |
 | 与 FlashInfer 的共同 kernel 对比如何 | FlashDec/FlashInfer p50 ratio `1.2003x/1.2284x`，方向有利于 FlashInfer；不外推到 runtime | [FlashInfer baseline](../benchmarks/results/flashinfer_paged_decode_baseline_summary.md) |
+| 与 vLLM/Qwen 的外部优化如何 | B8 decode-attention p50 降低约 20%；完整模型和 serving 只有小幅正向观测，两个整体门槛均未完全通过 | [vLLM kernel](../benchmarks/results/vllm_qwen_attention_summary.md) · [model](../benchmarks/results/vllm_qwen_model_latency_summary.md) · [serving](../benchmarks/results/vllm_qwen_serving_summary.md) |
 
 ## Paged-decode kernel
 
@@ -127,9 +128,55 @@ commit `d7d4feb` 的 72-row matrix 固定 Python 3.12.3、PyTorch `2.11.0+cu128`
 
 大于 1 表示 FlashInfer latency 更低。绝对 p99 有 7/16 个 range 重叠，且两组 tensor-core p99 中位数方向反转；每 row 只有 50 repeats。这个实验不能比较 scheduler、KV ownership、transaction、prefix cache 或完整 serving。
 
+## vLLM Qwen2.5-3B 外部比较
+
+R7 使用 `vLLM==0.25.1` 的 `CUSTOM` out-of-tree attention backend。vLLM 继续拥有模型、prefill、KV cache、scheduler、sampling 和 HTTP server；FlashDec 只替换符合条件的 uniform single-token decoder attention，不支持的路径回退 vLLM Triton。实现合同见 [vLLM backend 设计](design_vllm_backend.md)。证据环境为 RTX 5070、Qwen2.5-3B BF16、PyTorch `2.11.0+cu130`、Triton `3.6.0` 和 PyTorch CUDA 13.0。
+
+### Attention kernel gate：通过
+
+commit `1cc25d4` 的 50-row matrix 包含 5 个 case、两个 backend 和每 case 5 个交替顺序的 paired trials。`triton.testing.do_bench` 使用 100 ms warmup、500 ms measurement；每个 pair 在计时前完成 full-output cross-backend correctness。
+
+| case | vLLM Triton p50 | FlashDec p50 | FlashDec/vLLM |
+| --- | ---: | ---: | ---: |
+| B1 / ctx128 | `0.009696 ms` | `0.009952 ms` | `1.0264x` |
+| B1 / ctx1024 | `0.013792 ms` | `0.013792 ms` | `1.0000x` |
+| B4 / ctx1024 | `0.017888 ms` | `0.017888 ms` | `1.0000x` |
+| B8 / ctx1024 | `0.030144 ms` | `0.024192 ms` | `0.8025x` |
+| B8 / ctx2048 | `0.048608 ms` | `0.038528 ms` | `0.7926x` |
+
+B8 两个预注册目标均低于 `0.90x`；B1/B4 和全 case `1.05x` guardrail 通过。这里可以宣称在冻结的 Qwen decode shapes 上，FlashDec attention p50 相对 vLLM Triton 降低 `19.75%` 和 `20.74%`。它不能被外推为模型或服务加速。
+
+### 模型级固定批量：小幅改善，目标失败
+
+commit `46c4a4b` 的默认 Inductor/CUDA Graph 运行采用两个 B8 case、每 backend 3 个独立进程、每进程 3 次 warmup 与 5 次 measured `LLM.generate`。模型加载和 compilation 排除在 latency 外。
+
+| case | vLLM p50 | FlashDec p50 | paired ratio | 冻结结论 |
+| --- | ---: | ---: | ---: | --- |
+| input128/output128 | `1557.505 ms` | `1551.073 ms` | `0.9958x` | guardrail PASS |
+| input2048/output128 | `3224.064 ms` | `3218.875 ms` | `0.9976x` | `<=0.995x` target FAIL |
+
+两个 case 的绝对方向都略有改善，但目标 case 只有约 `0.16%` 的 p50 降幅，不能写成通过模型性能门槛。整体 external-model gate 为 `FAIL`。
+
+### 在线 serving：TPOT 通过，吞吐目标略失
+
+commit `7dcb19c` 的标准 `vllm bench serve` 比较固定 128 prompts、concurrency 8、input4096/output128、request rate `inf`、8 warmups、prefix cache off 和 3 个独立 server pairs。所有 run 都完成 128/128 requests 且零失败。
+
+| metric | vLLM Triton | FlashDec | paired ratio | gate |
+| --- | ---: | ---: | ---: | --- |
+| median TPOT | `31.9200 ms` | `31.8152 ms` | `0.9969x` | PASS (`<=0.998x`) |
+| p90 TPOT | `35.3043 ms` | `35.1923 ms` | `0.9973x` | PASS (`<=1.02x`) |
+| median TTFT | `1113.221 ms` | `1113.990 ms` | `1.0007x` | PASS (`<=1.05x`) |
+| output throughput | `197.816 tok/s` | `197.751 tok/s` | `1.0019x` | FAIL (`>=1.002x`) |
+
+TPOT 三轮 paired ratio 都低于 1，median/p90 分别改善约 `0.31%/0.27%`；throughput paired median 提高约 `0.19%`，但比冻结目标低约 `0.01` 个百分点，因此 overall external-serving gate 必须保持 `FAIL`。这组结果说明 kernel 优化已经传到真实服务 decode latency，但 Amdahl 效应使整体收益很小。
+
+### 正确性与解释边界
+
+固定 8 个 prompts 的第一步 greedy top-1 为 8/8 一致。完整 32-token rollout 为 5/8 一致，共享前缀为 217/256 tokens；跨实现不同 reduction 顺序可能在近似并列 logits 处改变一个 token，随后所有自回归输入不同。逐元素 kernel tolerance、第一步 top-1 与完整 rollout 是三个不同证据层，不能互相替代。诊断运行中 split 与 non-split FlashDec 的 8/8 完整 rollout 一致，未发现 split 优化引入额外序列分歧。
+
 ## 证据边界
 
-- 代表环境为 RTX 5070 与 CUDA 12.8；其他硬件必须重新测量。
+- 核心/FlashInfer 代表环境为 RTX 5070 与 CUDA 12.8；vLLM/Qwen 证据使用同一 GPU 与 PyTorch CUDA 13.0。其他硬件或软件栈必须重新测量。
 - 正式 Markdown summary 可提交，原始 CSV/log/profile 默认留在仓库外或由 `.gitignore` 排除。
 - 测试计数证明某个 commit 的 correctness，不是性能指标。
 - 当前 `0.0.0` 不承诺稳定安装、API 或生产 serving 行为。

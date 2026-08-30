@@ -48,6 +48,10 @@ benchmark 记录至少包含：
 - `summarize_integrated_scheduled_multi_layer.py`：重建 dependency-free reference，严格验证 24-row matrix、observed/reference digest、transaction/prefix accounting、reuse 与 zero-used cleanup，再输出绝对 latency/TPS range。
 - `run_flashinfer_baseline.py`：固定 `flashinfer-python==0.6.15.post1` 的有限 paged-decode 对比；同一 HND physical KV、page table、Q、scale 和 CUDA-event timing 下运行 FlashDec Triton、FlashInfer FA2 CUDA-core 与 tensor-core 三条预注册路径。
 - `summarize_flashinfer_baseline.py`：严格验证 72-row case/dtype/backend/trial matrix、formal `3/10/50` sampling、runner command、版本、128 MiB workspace、clean worktree、布局、normalized tolerance ratio、page-table identity、轮转顺序和计时边界；报告绝对 p50/p90/p99 与 FlashInfer 相对 FlashDec 的 p50/TPS ratio range，logical workload GB/s 明确不是 DRAM bandwidth，不设置事后胜负门。
+- `run_vllm_attention_microbench.py` / `summarize_vllm_attention_microbench.py`：在 vLLM 0.25.1 KV/metadata contract 内比较原生 Triton 与 FlashDec Qwen decode attention，使用时间窗口测量、完整 output parity 和冻结性能门槛。
+- `run_vllm_model_correctness.py` / `summarize_vllm_model_correctness.py`：固定 Qwen prompts/seed，分别启动原生与 `CUSTOM` backend，验证第一步 greedy top-1 并描述完整 rollout 分叉。
+- `run_vllm_model_latency.py` / `summarize_vllm_model_latency.py`：独立进程、交替 backend、默认 Inductor/CUDA Graph 的固定批量 `LLM.generate` A/B。
+- `run_vllm_serving_benchmark.py` / `summarize_vllm_serving_benchmark.py`：管理独立 vLLM server 生命周期，运行标准 `vllm bench serve`，严格验证 TPOT、TTFT、throughput、零失败和配对稳定性门槛。
 
 通用 benchmark/profile 默认配置为 `block_size=32, num_warps=2`。FP16 的少数小 shape 可显式使用 `block_size=16` 对照。
 
@@ -371,3 +375,71 @@ python benchmarks/summarize_flashinfer_baseline.py \
 ```
 
 完整矩阵为 `4 cases x 2 dtypes x 3 backends x 3 trials = 72 rows`。commit `d7d4feb` 记录 focused `93 passed, 37 subtests passed`、quick、formal、full `453 passed, 94 subtests passed` 与 clean-tree evidence check。它只比较共同 paged-decode kernel：输入、page table、layout 语义与 CUDA-event timing 对齐，FlashInfer plan/JIT 排除在计时外；不比较 scheduler、KV ownership、transaction 或完整 serving。固定 cu128/SM120a 环境、quick 命令与安装步骤见[FlashInfer 复现章节](../docs/reproducibility.md#flashinfer-有限外部基线)，canonical evidence 见[FlashInfer 摘要](results/flashinfer_paged_decode_baseline_summary.md)。
+
+## vLLM Qwen2.5-3B 外部比较
+
+R7 必须在固定 `vLLM==0.25.1` 环境执行，并显式启用 plugin：
+
+```bash
+export VLLM_PLUGINS=flashdec
+export VLLM_USE_FLASHINFER_SAMPLER=0
+export VLLM_WSL2_ENABLE_PIN_MEMORY=1
+export MODEL_DIR=/home/<user>/models/Qwen2.5-3B-Instruct
+export RESULT_DIR=/home/<user>/flashdec_results/r7_$(git rev-parse --short HEAD)_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$RESULT_DIR"
+```
+
+Attention formal gate：
+
+```bash
+python benchmarks/run_vllm_attention_microbench.py \
+  --trials 5 --warmup 100 --repeat 500 \
+  --output "$RESULT_DIR/vllm_attention.csv"
+
+python benchmarks/summarize_vllm_attention_microbench.py \
+  "$RESULT_DIR/vllm_attention.csv" \
+  --output "$RESULT_DIR/vllm_attention_summary.md"
+```
+
+模型正确性需要两个独立 backend 进程：
+
+```bash
+python benchmarks/run_vllm_model_correctness.py \
+  --backend TRITON_ATTN --model "$MODEL_DIR" \
+  --output "$RESULT_DIR/model_correctness_triton.json"
+
+python benchmarks/run_vllm_model_correctness.py \
+  --backend CUSTOM --model "$MODEL_DIR" \
+  --output "$RESULT_DIR/model_correctness_flashdec.json"
+
+python benchmarks/summarize_vllm_model_correctness.py \
+  "$RESULT_DIR/model_correctness_triton.json" \
+  "$RESULT_DIR/model_correctness_flashdec.json" \
+  --output "$RESULT_DIR/model_correctness_summary.md"
+```
+
+固定批量模型和在线 serving formal：
+
+```bash
+python benchmarks/run_vllm_model_latency.py \
+  --model "$MODEL_DIR" \
+  --output "$RESULT_DIR/model_latency.csv" \
+  --trials 3 --warmup-iters 3 --num-iters 5 --require-clean
+
+python benchmarks/summarize_vllm_model_latency.py \
+  "$RESULT_DIR/model_latency.csv" \
+  --output "$RESULT_DIR/model_latency_summary.md"
+
+python benchmarks/run_vllm_serving_benchmark.py \
+  --model "$MODEL_DIR" \
+  --output "$RESULT_DIR/serving.csv" \
+  --trials 3 --num-prompts 128 --num-warmups 8 \
+  --input-len 4096 --output-len 128 --max-concurrency 8 \
+  --port 8127 --require-clean
+
+python benchmarks/summarize_vllm_serving_benchmark.py \
+  "$RESULT_DIR/serving.csv" \
+  --output "$RESULT_DIR/serving_summary.md"
+```
+
+正式 R7 中 attention 与 model-correctness summary 返回 0；model-latency 与 serving summarizer 在写出完整报告后按冻结门槛返回非零。复现者应把这个非零结果视为被验证的负结果，不能删除失败项或降低 threshold 后覆盖原报告。四份 canonical evidence 见[结果索引](results/README.md#r7-vllm-qwen外部比较)，完整实现边界见 [vLLM backend 设计](../docs/design_vllm_backend.md)。

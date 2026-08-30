@@ -23,8 +23,22 @@
 | Persistent metadata candidate | [160-row/80-pair negative result](persistent_metadata_candidate_summary.md) | 仅 13/16 分组稳定，未采用 |
 | Integrated runtime invariants | [24-row matrix](integrated_runtime_lifecycle_summary.md) | scheduler/transaction/prefix/rollback/reuse lifecycle 全部通过 |
 | FlashInfer kernel baseline | [72-row/3-trial matrix](flashinfer_paged_decode_baseline_summary.md) | 共同 paged-decode kernel scope；不比较完整 runtime |
+| vLLM Qwen attention | [50-row/25-pair matrix](vllm_qwen_attention_summary.md) | B8 ctx1024/2048 external-kernel gate 通过 |
+| Qwen cross-backend correctness | [8-prompt generation](vllm_qwen_model_correctness_summary.md) | 第一 token 8/8 一致；完整 rollout 5/8 只作描述 |
+| Qwen fixed-batch model | [12-row/6-pair matrix](vllm_qwen_model_latency_summary.md) | 两个 case 小幅改善，但预注册 target 失败 |
+| Qwen online serving | [6-row/3-server-pair matrix](vllm_qwen_serving_summary.md) | TPOT 目标通过，throughput 目标略失，整体 gate 失败 |
 
 `docs/performance_report.md` 也是正式证据，用于把上述结果放回统一的计时和不可外推边界。
+
+## R7 vLLM Qwen外部比较
+
+R7 是与旧 FlashInfer comparison 不同的环境和问题：它固定 `vLLM==0.25.1`、PyTorch `2.11.0+cu130` 和 Qwen2.5-3B BF16，复用 vLLM 的模型、KV cache、scheduler 与 API server，只替换 eligible single-token decode attention。
+
+- [attention kernel](vllm_qwen_attention_summary.md) 是可交付的性能通过项：B8/ctx1024 与 B8/ctx2048 p50 分别为 vLLM Triton 的 `0.8025x` 与 `0.7926x`。
+- [model correctness](vllm_qwen_model_correctness_summary.md) 证明第一步 greedy top-1 为 8/8；长 rollout 的浮点分叉按原样保留。
+- [fixed-batch model](vllm_qwen_model_latency_summary.md) 和 [online serving](vllm_qwen_serving_summary.md) 都保留冻结门槛失败，不能从 kernel 数字推导完整模型或服务的同幅度收益。
+
+四份 summary 分别绑定其被测 clean commit。后续文档/summary 提交不会改变当时的二进制路径；若修改 `flashdec/vllm_backend.py`、paged-decode kernel 或协议，必须生成新的 evidence commit 和结果，不能覆盖这些历史文件。
 
 ## 公开结果概览
 

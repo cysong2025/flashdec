@@ -106,6 +106,8 @@ Boundary workload 使用 cancel 和 greedy baseline 展示了仅看当前 step �
 
 Paged decode 的通用配置是 token-major、`block_size=32`、`num_warps=2`、`num_stages=None`；该选择来自 block size、layout、warp 和 staging 的受控实验。Fused CUDA 路径把 RoPE、位置映射和 K/V 写入放在更少的 launch 中；attention 仍由相同的 Triton paged decode kernel 完成。
 
+可选 [vLLM out-of-tree backend](design_vllm_backend.md) 不改变核心 Cache/Engine ownership。它在 vLLM 自有 KV cache 与 metadata contract 上创建零拷贝 strided view，只对 eligible single-token decode 调用 grouped-GQA split-KV kernel；prefill、mixed batch 和 unsupported feature 回退 vLLM Triton。由此产生的 external-kernel、完整 Qwen model 和 online serving evidence 分层报告。
+
 因此性能证据分为三层：
 
 - kernel/event time：解释设备端工作。
@@ -119,4 +121,5 @@ Profiler 数据不与 release latency 混用。所有性能结论绑定硬件、
 - 支持单 GPU、单 token decode 和顺序 multi-layer transaction。
 - 支持 FP16/BF16 paged decode；append reference 另支持 FP32。
 - 支持调用方预构建的 immutable full-block shared prefix，以及调用方提供的 multi-layer prompt/context K/V 原子导入；不执行模型 prefill forward，也不包含 prefix 内容构建/hash、admission-time prefix eviction、抢占、swap/offload 或生产级并发服务。
+- 可选 vLLM plugin 能在外部 runtime 中运行真实模型与 HTTP serving，但这些能力仍由 vLLM 提供，不属于 FlashDec 核心 ownership/API。
 - CUDA extension 使用 lazy JIT，首次运行含构建成本。

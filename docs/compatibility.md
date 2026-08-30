@@ -18,6 +18,8 @@
 
 Python 3.10 和 3.12 均进入仓库级 dependency-free checks。GPU 数值与性能证据来自上表环境；其他组合需要重新运行 correctness，不能直接继承性能结论。
 
+R7 vLLM/Qwen 外部证据使用独立环境：Python 3.12.3、`vLLM==0.25.1`、PyTorch `2.11.0+cu130`、PyTorch CUDA 13.0 和 Triton 3.6.0，同一 RTX 5070。它不替换上表核心/CUDA-extension 的 cu128 环境；两组性能数字不能跨环境直接相除。
+
 ## Paged-decode kernel
 
 | Capability | Supported range |
@@ -82,13 +84,34 @@ DecodeEngine 支持 waiting/active/finished/cancelled lifecycle、deterministic 
 
 Block-aware Scheduler 支持 lifetime block commitment、FIFO + aging、bounded runnable subset、deferred requests，以及 policy/snapshot-bound decision validation。Decision 携带 request ids、原始 K/V-free metadata snapshot 与 config；Scheduler 不持有 K/V tensor 或 physical pages。`apply_scheduler_decision()` 必须显式接收生成 decision 的 scheduler 与 snapshot，旧的单参数调用不兼容。
 
-不支持：
+核心 runtime 不支持：
 
 - 完整 Transformer forward、prefill 或 logits/sampling；
 - HTTP/RPC serving 与 streaming；
 - priority API、生产级抢占、continuous batching service loop；
 - tensor/pipeline parallel、多 GPU 或多机；
 - CUDA Graph capture contract。
+
+可选 vLLM plugin 复用 vLLM 的完整模型、prefill、continuous batching、sampling、HTTP streaming 和 CUDA Graph；这些是外部 runtime 能力，不是 FlashDec 核心实现。FlashDec fast path 仍只覆盖符合 [vLLM backend 合同](design_vllm_backend.md)的 single-token decode。
+
+## vLLM out-of-tree backend
+
+| Capability | 已验证范围 |
+| --- | --- |
+| vLLM | exactly `0.25.1` |
+| Model | Qwen2.5-3B-Instruct BF16 |
+| Attention shape | 16 query heads / 2 KV heads / head dimension 128 |
+| KV layout | vLLM NHD cache 的零拷贝 strided view |
+| Decode | uniform single-token decoder batch |
+| CUDA Graph | vLLM default PIECEWISE/FULL capture |
+| Fallback | prefill、mixed batch 和 unsupported features 回退 vLLM Triton |
+
+限制：
+
+- backend registry 与 metadata contract 绑定 vLLM 0.25.1；升级必须重新验证。
+- FlashDec fast path 不支持 quantized KV、ALiBi、sinks、sliding window、logit soft cap、decode LSE、output scale 或非 decoder attention。
+- TP/PP、多机、speculative decoding 和其他模型没有正式证据。
+- WSL 证据协议设置 `VLLM_WSL2_ENABLE_PIN_MEMORY=1` 与 `VLLM_USE_FLASHINFER_SAMPLER=0`；它们不表示核心 kernel 依赖 FlashInfer sampler。
 
 ## FlashInfer baseline environment
 

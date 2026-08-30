@@ -564,6 +564,68 @@ python scripts/check_release.py --require-clean --require-evidence
 
 结果先写入仓库外的 `$RESULT_DIR`，避免未审核的 formal summary 改变被测 worktree。commit `d7d4feb` 按该流程在 RTX 5070 得到 post-schema focused `93 passed, 37 subtests passed`、3-row quick、72-row/3-trial formal、full `453 passed, 94 subtests passed` 与 clean-tree evidence check `PASS`。审核后的精简结果见 [canonical summary](../benchmarks/results/flashinfer_paged_decode_baseline_summary.md)；它绑定 `2026-07-26T15:28:08+08:00`、固定 cu128 环境、`12.0a`、clean commit 与完整 runner command。公平性与不可比边界见 [FlashInfer 基线设计](design_flashinfer_baseline.md)。
 
+## vLLM Qwen2.5-3B 外部比较
+
+R7 使用与核心 cu128/FlashInfer 环境隔离的 vLLM 环境。正式证据固定为 Python 3.12.3、`vLLM==0.25.1`、PyTorch `2.11.0+cu130`、Triton 3.6.0、PyTorch CUDA 13.0、RTX 5070 和本地 Qwen2.5-3B-Instruct BF16 weights。`vllm` extra 是版本声明，不建议在已有 Torch 环境中让 pip 自由解析整套 CUDA 依赖；优先复用已验证的 vLLM environment，再使用 `--no-deps` editable install。
+
+```bash
+source /home/<user>/projects/QwenServe-12G/.venv/bin/activate
+cd /home/<user>/projects/flashdec
+
+python -m pip install --no-deps -e .
+python -m pip check
+
+export MODEL_DIR=/home/<user>/models/Qwen2.5-3B-Instruct
+test -f "$MODEL_DIR/config.json"
+test -f "$MODEL_DIR/SHA256SUMS"
+(cd "$MODEL_DIR" && sha256sum --check SHA256SUMS)
+
+python -c "import torch, triton, vllm; print(torch.__version__, torch.version.cuda, triton.__version__, vllm.__version__); print(torch.cuda.get_device_name(), torch.cuda.get_device_capability())"
+```
+
+固定运行环境：
+
+```bash
+export VLLM_PLUGINS=flashdec
+export VLLM_USE_FLASHINFER_SAMPLER=0
+export VLLM_WSL2_ENABLE_PIN_MEMORY=1
+export RESULT_DIR=/home/<user>/flashdec_results/r7_$(git rev-parse --short HEAD)_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$RESULT_DIR"
+git status --short
+```
+
+`VLLM_USE_FLASHINFER_SAMPLER=0` 只关闭该环境中独立的 FlashInfer sampling path；attention A/B 仍严格使用 `TRITON_ATTN` 与 `CUSTOM`。`VLLM_WSL2_ENABLE_PIN_MEMORY=1` 是 vLLM V2 runner 在 WSL 的固定设置。正式 runner 要求 clean worktree，原始 JSON/CSV/log 写入仓库外 `$RESULT_DIR`。
+
+先验证 backend registry、fallback、split correctness 与 strict summaries：
+
+```bash
+python -m pytest -q -ra \
+  tests/test_vllm_plugin.py \
+  tests/test_vllm_backend.py \
+  tests/test_vllm_attention_microbench_summary.py \
+  tests/test_vllm_model_correctness_summary.py \
+  tests/test_vllm_model_latency_summary.py \
+  tests/test_vllm_serving_benchmark_summary.py
+```
+
+完整 attention、model correctness、fixed-batch model 和 online serving 命令见 [benchmark 命令](../benchmarks/README.md#vllm-qwen25-3b-外部比较)。正式协议包含：
+
+- attention：5 cases × 2 backends × 5 trials = 50 rows，100/500 ms time-window sampling；
+- model correctness：8 个固定 prompts、greedy、32 output tokens、两个独立 backend processes；
+- model latency：2 cases × 2 backends × 3 processes = 12 rows，每进程 3 warmups/5 measurements；
+- serving：128 prompts、concurrency 8、input4096/output128、8 warmups、3 个独立 server pairs，标准 `vllm bench serve`。
+
+R7 的审核结果必须连同负结果一起解释：
+
+| 层次 | 结果 |
+| --- | --- |
+| attention | external-kernel gate `PASS`；B8 ctx1024/2048 为 `0.8025x/0.7926x` |
+| generation correctness | 第一 token 8/8 一致；split/non-split 诊断为 8/8 完整 rollout 一致 |
+| fixed-batch model | 两个 case 都略快，但 target `0.9976x <= 0.995x` 失败 |
+| online serving | median/p90 TPOT gate 通过；throughput `1.0019x >= 1.002x` 失败 |
+
+model-latency 与 serving summarizer 会先写出完整 summary，再因冻结门槛失败返回非零；这不是 runner 故障。不得通过删除 gate、四舍五入或覆盖 summary 把它改为通过。canonical summaries 见 [R7 结果索引](../benchmarks/results/README.md#r7-vllm-qwen外部比较)，fast-path/fallback/数值边界见 [vLLM backend 设计](design_vllm_backend.md)。
+
 ## 结果文件与提交规则
 
 默认忽略：

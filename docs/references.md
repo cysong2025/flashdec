@@ -52,6 +52,15 @@ FlashDec 区分逻辑 workload GB/s、CUDA-event latency、同步 wall time 与 
 
 外部基线只使用固定版本 FlashInfer 的公开 `BatchDecodeWithPagedKVCacheWrapper`，并在共同 paged-decode shape、输入、page table 和 CUDA-event timing scope 下比较。详细公平性契约与不可比项见[FlashInfer baseline 设计](design_flashinfer_baseline.md)。
 
+## vLLM out-of-tree backend 与 benchmark
+
+- [vLLM attention backend API](https://docs.vllm.ai/en/latest/api/vllm/v1/attention/backend/)
+- [vLLM backend registry](https://docs.vllm.ai/en/stable/api/vllm/v1/attention/backends/registry/)
+- [vLLM benchmark CLI](https://docs.vllm.ai/en/stable/benchmarking/cli/)
+- [vLLM source](https://github.com/vllm-project/vllm)
+
+R7 固定 `vLLM==0.25.1`，并以该安装版本的 registry、Triton metadata 和 CLI 源码作为最终 API 依据。FlashDec plugin 只替换 eligible decode attention；模型与 serving A/B 使用同一个 vLLM runtime。设计、fallback 与性能边界见 [vLLM backend 设计](design_vllm_backend.md)。
+
 ## 引用与证据规则
 
 1. 数学与 API 以论文、官方文档和对应版本源码为准。

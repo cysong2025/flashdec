@@ -207,10 +207,14 @@ FlashDec 分离四类观察边界：
 | Append-only | RoPE/KV append fusion 是否减少 GPU 数据路径？ | allocator CPU wall、attention、完整 lifecycle |
 | Complete token | 优化是否穿透 Engine、allocator 与 attention？ | 外部 Q/K/V 生成、prompt prefill |
 | Integrated workload | 调度、事务、prefix、rollback 与 reuse 能否组成正确轨迹？ | 生产流量与长期尾延迟外推 |
+| External vLLM kernel | 同一 vLLM KV/metadata contract 下 attention 是否更快？ | 模型其他层、scheduler、HTTP |
+| External Qwen model/serving | kernel 收益是否传到真实模型与 TPOT？ | 多 GPU、分布式流量、其他模型 |
 
 正式 latency 来自 non-instrumented CUDA event 或明确同步的 wall interval；profiler 只做阶段归因。Runner 固定 commit、seed、shape、dtype、warmup/repeat/trial 和 backend order，strict summarizer 校验矩阵、配对输入、状态轨迹和不变量后才生成摘要。
 
 外部基线将 FlashInfer 固定为 `flashinfer-python==0.6.15.post1`。FlashDec Triton、FlashInfer FA2 CUDA-core 与 tensor-core 共用逻辑 Q/K/V pages、page table、`seq_lens`、`sm_scale`、dtype 和 seed；FlashDec token-major view 与 FlashInfer HND view 不需要在计时区间内转换。公平性契约见[FlashInfer baseline 设计](design_flashinfer_baseline.md)。
+
+第二条外部路径固定 `vLLM==0.25.1` 与 Qwen2.5-3B BF16。vLLM 的 `CUSTOM` out-of-tree backend 继续使用原生 KV cache 与 metadata；FlashDec 对 eligible uniform single-token decode 使用 grouped-GQA split-KV，对 prefill、mixed batch 和不支持的 feature 回退原生 Triton。attention、固定批量模型和在线 serving 分别计时，不用 kernel 数字替代 model/TPOT/throughput。合同见 [vLLM backend 设计](design_vllm_backend.md)。
 
 ### 正式证据
 
@@ -218,13 +222,17 @@ FlashDec 分离四类观察边界：
 - [DecodeEngine stage attribution](../benchmarks/results/decode_engine_stage_profile_summary.md)
 - [Rejected persistent-metadata candidate](../benchmarks/results/persistent_metadata_candidate_summary.md)
 - [FlashInfer paged-decode baseline](../benchmarks/results/flashinfer_paged_decode_baseline_summary.md)
+- [vLLM Qwen attention](../benchmarks/results/vllm_qwen_attention_summary.md)
+- [Qwen cross-backend correctness](../benchmarks/results/vllm_qwen_model_correctness_summary.md)
+- [Qwen fixed-batch model](../benchmarks/results/vllm_qwen_model_latency_summary.md)
+- [Qwen online serving](../benchmarks/results/vllm_qwen_serving_summary.md)
 - [综合性能报告](performance_report.md)
 
-共同 kernel matrix 中，FlashInfer 的 p50 方向一致领先；该事实与 FlashDec 对 allocator、transaction、scheduler 和 shared-prefix 的系统研究并不冲突，因为这些能力位于 external-baseline timing scope 之外。
+FlashInfer 的共同 kernel matrix 中 p50 方向一致领先；vLLM Qwen matrix 中 FlashDec 在 B8/ctx1024 与 B8/ctx2048 的 attention p50 降低约 20%。后者传到完整模型和服务后只剩小幅正向观测：模型 target 与 serving throughput target 均未通过。正负结果共同说明外部比较必须按计时层次解释。
 
 ### 边界
 
-该基线不能回答哪个 serving runtime 端到端更快，也不能覆盖调度、KV ownership、prefix caching、事务或网络层。三轮 `[min,max]` 是观测范围而非置信区间；小样本 p99 不能被包装成生产尾延迟。复现实验前应同时阅读[性能报告](performance_report.md)和[复现指南](reproducibility.md)。
+FlashInfer 基线不能回答哪个 serving runtime 端到端更快。vLLM/Qwen serving 证据覆盖一个本地单 GPU HTTP workload，但不能外推到其他模型、并发、硬件、TP/PP 或多机。三轮 `[min,max]` 是观测范围而非置信区间；小样本 tail 不能被包装成生产尾延迟。复现实验前应同时阅读[性能报告](performance_report.md)和[复现指南](reproducibility.md)。
 
 ## 结论
 

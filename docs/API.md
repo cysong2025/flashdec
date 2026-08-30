@@ -185,6 +185,18 @@ engine.apply_scheduler_decision(
 
 Multi-layer 正式 workload 位于 `benchmarks/run_multi_layer_engine.py`，它是证据生成工具，不属于顶层 runtime API。
 
+## 可选 vLLM integration
+
+`flashdec.vllm_plugin` 通过 vLLM general-plugin entry point 注册 `CUSTOM` attention backend。它不是 `import flashdec` 顶层 API，也不会让核心包强制 import vLLM。使用固定兼容环境安装后，通过配置选择：
+
+```bash
+export VLLM_PLUGINS=flashdec
+vllm serve /home/<user>/models/Qwen2.5-3B-Instruct \
+  --attention-backend CUSTOM
+```
+
+vLLM 继续拥有 KV cache、metadata、prefill、model runner、scheduler 和 API server；FlashDec 只处理 eligible single-token decoder attention，其他调用回退原生 Triton。支持条件、WSL 环境变量、split policy 和版本边界见 [vLLM backend 设计](design_vllm_backend.md)。
+
 ## 错误与边界
 
 - 参数或状态错误使用 `TypeError`、`ValueError` 或 `RuntimeError`，不静默修正 request 轨迹。

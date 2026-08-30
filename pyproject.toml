@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "flashdec"
 version = "0.0.0"
-description = "Single-GPU LLM decode research prototype with paged KV cache, Triton attention, CUDA append, scheduling, shared prefixes, and multi-layer transactions."
+description = "Single-GPU LLM decode research prototype with paged KV cache, Triton/CUDA kernels, transactions, scheduling, and an optional vLLM attention backend."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -19,6 +19,7 @@ keywords = [
   "triton",
   "cuda",
   "paged-attention",
+  "vllm",
   "kv-cache",
   "request-scheduling",
   "prefix-caching",
