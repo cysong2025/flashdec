@@ -299,6 +299,47 @@ def test_paged_decode_attention_into_validates_output_contract():
         )
 
 
+@pytest.mark.parametrize("num_splits", [2, 8, 16])
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_paged_decode_attention_split_kv_matches_reference(num_splits, dtype):
+    q, k_cache, v_cache, block_tables, seq_lens, _ = _make_paged_inputs(
+        request_ids=[91, 92],
+        target_seq_lens=[257, 193],
+        num_q_heads=16,
+        num_kv_heads=2,
+        head_dim=128,
+        block_size=16,
+        dtype=dtype,
+    )
+    workspace = (
+        torch.empty((2, 16, 16, 128), device="cuda", dtype=torch.float32),
+        torch.empty((2, 16, 16), device="cuda", dtype=torch.float32),
+        torch.empty((2, 16, 16), device="cuda", dtype=torch.float32),
+    )
+    out = torch.empty_like(q)
+
+    paged_decode_attention_into(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+        out,
+        block_size=16,
+        split_kv_workspace=workspace,
+        num_splits=num_splits,
+    )
+    expected = paged_decode_attention_ref(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+    )
+
+    _assert_close(out, expected)
+
+
 def test_paged_decode_attention_rejects_unsupported_head_dim():
     q = torch.randn((1, 1, 32), device="cuda", dtype=torch.float16)
     k_cache = torch.randn((1, 1, 16, 32), device="cuda", dtype=torch.float16)

@@ -231,6 +231,211 @@ def _paged_decode_gqa_kernel(
     )
 
 
+@triton.jit
+def _paged_decode_gqa_split_kernel(
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    block_tables_ptr,
+    seq_lens_ptr,
+    split_acc_ptr,
+    split_max_ptr,
+    split_sum_ptr,
+    q_stride_seq: tl.constexpr,
+    q_stride_head: tl.constexpr,
+    q_stride_dim: tl.constexpr,
+    k_stride_block: tl.constexpr,
+    k_stride_head: tl.constexpr,
+    k_stride_token: tl.constexpr,
+    k_stride_dim: tl.constexpr,
+    v_stride_block: tl.constexpr,
+    v_stride_head: tl.constexpr,
+    v_stride_token: tl.constexpr,
+    v_stride_dim: tl.constexpr,
+    block_tables_stride_seq: tl.constexpr,
+    block_tables_stride_block: tl.constexpr,
+    split_acc_stride_seq: tl.constexpr,
+    split_acc_stride_head: tl.constexpr,
+    split_acc_stride_split: tl.constexpr,
+    split_acc_stride_dim: tl.constexpr,
+    split_stats_stride_seq: tl.constexpr,
+    split_stats_stride_head: tl.constexpr,
+    split_stats_stride_split: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
+    GROUP_SIZE: tl.constexpr,
+    GROUP_BLOCK: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+    NUM_SPLITS: tl.constexpr,
+    SM_SCALE: tl.constexpr,
+):
+    seq_idx = tl.program_id(axis=0)
+    kv_head = tl.program_id(axis=1)
+    split_idx = tl.program_id(axis=2)
+    offs_g = tl.arange(0, GROUP_BLOCK)
+    offs_d = tl.arange(0, HEAD_DIM)
+    q_heads = kv_head * GROUP_SIZE + offs_g
+    valid_heads = offs_g < GROUP_SIZE
+
+    q = tl.load(
+        q_ptr
+        + seq_idx * q_stride_seq
+        + q_heads[:, None] * q_stride_head
+        + offs_d[None, :] * q_stride_dim,
+        mask=valid_heads[:, None] & (offs_d[None, :] < HEAD_DIM),
+        other=0.0,
+    )
+    seq_len = tl.load(seq_lens_ptr + seq_idx)
+    num_logical_blocks = tl.cdiv(seq_len, BLOCK_SIZE)
+    blocks_per_split = tl.cdiv(num_logical_blocks, NUM_SPLITS)
+    first_block = split_idx * blocks_per_split
+    last_block = tl.minimum(first_block + blocks_per_split, num_logical_blocks)
+
+    m_i = tl.full((GROUP_BLOCK,), -float("inf"), dtype=tl.float32)
+    l_i = tl.zeros((GROUP_BLOCK,), dtype=tl.float32)
+    acc = tl.zeros((GROUP_BLOCK, HEAD_DIM), dtype=tl.float32)
+    offs_t = tl.arange(0, BLOCK_SIZE)
+    for logical_block in tl.range(first_block, last_block):
+        physical_block = tl.load(
+            block_tables_ptr
+            + seq_idx * block_tables_stride_seq
+            + logical_block * block_tables_stride_block
+        )
+        token_idxs = logical_block * BLOCK_SIZE + offs_t
+        valid_tokens = (token_idxs < seq_len) & (physical_block >= 0)
+        k = tl.load(
+            k_ptr
+            + physical_block * k_stride_block
+            + kv_head * k_stride_head
+            + offs_t[:, None] * k_stride_token
+            + offs_d[None, :] * k_stride_dim,
+            mask=valid_tokens[:, None] & (offs_d[None, :] < HEAD_DIM),
+            other=0.0,
+        )
+        scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32) * SM_SCALE
+        scores = tl.where(valid_tokens[None, :], scores, -float("inf"))
+        block_m = tl.max(scores, axis=1)
+        m_new = tl.maximum(m_i, block_m)
+        alpha = tl.exp(m_i - m_new)
+        probs = tl.exp(scores - m_new[:, None])
+        l_new = l_i * alpha + tl.sum(probs, axis=1)
+        v = tl.load(
+            v_ptr
+            + physical_block * v_stride_block
+            + kv_head * v_stride_head
+            + offs_t[:, None] * v_stride_token
+            + offs_d[None, :] * v_stride_dim,
+            mask=valid_tokens[:, None] & (offs_d[None, :] < HEAD_DIM),
+            other=0.0,
+        )
+        acc = acc * alpha[:, None] + tl.dot(
+            probs.to(v.dtype), v, out_dtype=tl.float32
+        )
+        m_i = m_new
+        l_i = l_new
+
+    tl.store(
+        split_acc_ptr
+        + seq_idx * split_acc_stride_seq
+        + q_heads[:, None] * split_acc_stride_head
+        + split_idx * split_acc_stride_split
+        + offs_d[None, :] * split_acc_stride_dim,
+        acc,
+        mask=valid_heads[:, None] & (offs_d[None, :] < HEAD_DIM),
+    )
+    stats_offsets = (
+        seq_idx * split_stats_stride_seq
+        + q_heads * split_stats_stride_head
+        + split_idx * split_stats_stride_split
+    )
+    tl.store(split_max_ptr + stats_offsets, m_i, mask=valid_heads)
+    tl.store(split_sum_ptr + stats_offsets, l_i, mask=valid_heads)
+
+
+@triton.jit
+def _paged_decode_gqa_reduce_kernel(
+    split_acc_ptr,
+    split_max_ptr,
+    split_sum_ptr,
+    seq_lens_ptr,
+    out_ptr,
+    split_acc_stride_seq: tl.constexpr,
+    split_acc_stride_head: tl.constexpr,
+    split_acc_stride_split: tl.constexpr,
+    split_acc_stride_dim: tl.constexpr,
+    split_stats_stride_seq: tl.constexpr,
+    split_stats_stride_head: tl.constexpr,
+    split_stats_stride_split: tl.constexpr,
+    out_stride_seq: tl.constexpr,
+    out_stride_head: tl.constexpr,
+    out_stride_dim: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
+    GROUP_SIZE: tl.constexpr,
+    GROUP_BLOCK: tl.constexpr,
+    NUM_SPLITS: tl.constexpr,
+):
+    seq_idx = tl.program_id(axis=0)
+    kv_head = tl.program_id(axis=1)
+    offs_g = tl.arange(0, GROUP_BLOCK)
+    offs_s = tl.arange(0, NUM_SPLITS)
+    offs_d = tl.arange(0, HEAD_DIM)
+    q_heads = kv_head * GROUP_SIZE + offs_g
+    valid_heads = offs_g < GROUP_SIZE
+
+    stats_offsets = (
+        seq_idx * split_stats_stride_seq
+        + q_heads[:, None] * split_stats_stride_head
+        + offs_s[None, :] * split_stats_stride_split
+    )
+    local_max = tl.load(
+        split_max_ptr + stats_offsets,
+        mask=valid_heads[:, None],
+        other=-float("inf"),
+    )
+    global_max = tl.max(local_max, axis=1)
+    denominator = tl.zeros((GROUP_BLOCK,), dtype=tl.float32)
+    acc = tl.zeros((GROUP_BLOCK, HEAD_DIM), dtype=tl.float32)
+    for split_idx in range(0, NUM_SPLITS):
+        stat_offset = (
+            seq_idx * split_stats_stride_seq
+            + q_heads * split_stats_stride_head
+            + split_idx * split_stats_stride_split
+        )
+        split_max = tl.load(
+            split_max_ptr + stat_offset,
+            mask=valid_heads,
+            other=-float("inf"),
+        )
+        split_sum = tl.load(
+            split_sum_ptr + stat_offset,
+            mask=valid_heads,
+            other=0.0,
+        )
+        weight = tl.exp(split_max - global_max)
+        split_acc = tl.load(
+            split_acc_ptr
+            + seq_idx * split_acc_stride_seq
+            + q_heads[:, None] * split_acc_stride_head
+            + split_idx * split_acc_stride_split
+            + offs_d[None, :] * split_acc_stride_dim,
+            mask=valid_heads[:, None] & (offs_d[None, :] < HEAD_DIM),
+            other=0.0,
+        )
+        denominator += split_sum * weight
+        acc += split_acc * weight[:, None]
+
+    seq_len = tl.load(seq_lens_ptr + seq_idx)
+    denominator = tl.where(seq_len > 0, denominator, 1.0)
+    result = tl.where(seq_len > 0, acc / denominator[:, None], 0.0)
+    tl.store(
+        out_ptr
+        + seq_idx * out_stride_seq
+        + q_heads[:, None] * out_stride_head
+        + offs_d[None, :] * out_stride_dim,
+        result,
+        mask=valid_heads[:, None] & (offs_d[None, :] < HEAD_DIM),
+    )
+
+
 def _validate_inputs(
     q,
     k_cache,
@@ -376,6 +581,8 @@ def paged_decode_attention_into(
     num_warps=2,
     kv_layout="token_major",
     num_stages=None,
+    split_kv_workspace=None,
+    num_splits=1,
 ):
     """Write paged single-token decode attention into ``out``.
 
@@ -409,6 +616,8 @@ def paged_decode_attention_into(
         raise ValueError("out must have the same dtype as q")
     if out.device != q.device:
         raise ValueError("out must be on the same device as q")
+    if isinstance(num_splits, bool) or not isinstance(num_splits, int) or num_splits <= 0:
+        raise ValueError("num_splits must be a positive integer")
 
     # seq_lens is indexed as a dense vector by the kernel. The other inputs
     # carry explicit strides, which avoids copies for vLLM's NHD cache views.
@@ -424,6 +633,91 @@ def paged_decode_attention_into(
         and group_size in (4, 8, 16)
         and block_size in (16, 32)
     )
+    use_split_kv = use_grouped_gqa and num_splits > 1
+    if use_split_kv:
+        if split_kv_workspace is None or len(split_kv_workspace) != 3:
+            raise ValueError("split_kv_workspace must contain acc, max, and sum tensors")
+        split_acc, split_max, split_sum = split_kv_workspace
+        expected_acc = (num_seqs, num_q_heads, num_splits, head_dim)
+        expected_stats = (num_seqs, num_q_heads, num_splits)
+        if split_acc.dim() != 4 or split_max.dim() != 3 or split_sum.dim() != 3:
+            raise ValueError("split KV workspace ranks must be 4, 3, and 3")
+        if any(
+            tensor.device != q.device or tensor.dtype != torch.float32
+            for tensor in split_kv_workspace
+        ):
+            raise ValueError("split KV workspace tensors must be float32 on q.device")
+        if any(actual < expected for actual, expected in zip(split_acc.shape, expected_acc)):
+            raise ValueError("split acc workspace is too small")
+        if any(actual < expected for actual, expected in zip(split_max.shape, expected_stats)):
+            raise ValueError("split max workspace is too small")
+        if any(actual < expected for actual, expected in zip(split_sum.shape, expected_stats)):
+            raise ValueError("split sum workspace is too small")
+        if split_sum.stride() != split_max.stride():
+            raise ValueError("split max and sum workspaces must have identical strides")
+        split_grid = (num_seqs, num_kv_heads, num_splits)
+        _paged_decode_gqa_split_kernel[split_grid](
+            q,
+            k_cache,
+            v_cache,
+            block_tables,
+            seq_lens_contig,
+            split_acc,
+            split_max,
+            split_sum,
+            q.stride(0),
+            q.stride(1),
+            q.stride(2),
+            k_cache.stride(0),
+            k_cache.stride(1),
+            k_cache.stride(token_axis),
+            k_cache.stride(dim_axis),
+            v_cache.stride(0),
+            v_cache.stride(1),
+            v_cache.stride(token_axis),
+            v_cache.stride(dim_axis),
+            block_tables.stride(0),
+            block_tables.stride(1),
+            split_acc.stride(0),
+            split_acc.stride(1),
+            split_acc.stride(2),
+            split_acc.stride(3),
+            split_max.stride(0),
+            split_max.stride(1),
+            split_max.stride(2),
+            HEAD_DIM=head_dim,
+            GROUP_SIZE=group_size,
+            GROUP_BLOCK=16,
+            BLOCK_SIZE=block_size,
+            NUM_SPLITS=num_splits,
+            SM_SCALE=float(sm_scale),
+            num_warps=4,
+        )
+        reduce_grid = (num_seqs, num_kv_heads)
+        _paged_decode_gqa_reduce_kernel[reduce_grid](
+            split_acc,
+            split_max,
+            split_sum,
+            seq_lens_contig,
+            out,
+            split_acc.stride(0),
+            split_acc.stride(1),
+            split_acc.stride(2),
+            split_acc.stride(3),
+            split_max.stride(0),
+            split_max.stride(1),
+            split_max.stride(2),
+            out.stride(0),
+            out.stride(1),
+            out.stride(2),
+            HEAD_DIM=head_dim,
+            GROUP_SIZE=group_size,
+            GROUP_BLOCK=16,
+            NUM_SPLITS=num_splits,
+            num_warps=4,
+        )
+        return out
+
     grid = (num_seqs, num_kv_heads if use_grouped_gqa else num_q_heads)
     launch_kwargs = {"num_warps": num_warps}
     if num_stages is not None:

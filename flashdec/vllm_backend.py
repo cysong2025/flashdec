@@ -8,6 +8,9 @@ uniform single-token decoder attention over FP16/BF16 paged KV cache.
 
 from __future__ import annotations
 
+import math
+import os
+
 import torch
 
 from vllm.v1.attention.backend import AttentionType
@@ -37,6 +40,13 @@ class FlashDecAttentionBackend(TritonAttentionBackend):
 
 class FlashDecAttentionImpl(TritonAttentionImpl):
     """Use FlashDec for the narrow path it implements; delegate everything else."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        requested_splits = int(os.environ.get("FLASHDEC_VLLM_NUM_SPLITS", "0"))
+        if requested_splits < 0 or requested_splits > 16:
+            raise ValueError("FLASHDEC_VLLM_NUM_SPLITS must be in [0, 16]")
+        self._requested_splits = requested_splits
 
     def _supports_flashdec_decode(
         self,
@@ -120,6 +130,17 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
         key_view = key_cache.permute(0, 2, 1, 3)
         value_view = value_cache.permute(0, 2, 1, 3)
 
+        logical_blocks = math.ceil(attn_metadata.max_seq_len / key_cache.shape[1])
+        requested_splits = self._requested_splits
+        if requested_splits == 0:
+            target_programs = 128
+            requested_splits = math.ceil(
+                target_programs / max(1, num_reqs * self.num_kv_heads)
+            )
+        num_splits = min(16, logical_blocks, max(1, requested_splits))
+        if attn_metadata.max_seq_len < 512:
+            num_splits = 1
+
         paged_decode_attention_into(
             query_3d,
             key_view,
@@ -130,5 +151,11 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
             sm_scale=self.scale,
             block_size=key_cache.shape[1],
             num_warps=2,
+            split_kv_workspace=(
+                attn_metadata.softmax_segm_output,
+                attn_metadata.softmax_segm_max,
+                attn_metadata.softmax_segm_expsum,
+            ),
+            num_splits=num_splits,
         )
         return output
