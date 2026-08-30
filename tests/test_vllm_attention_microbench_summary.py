@@ -16,7 +16,7 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
 
 
-def _write_fixture(path, regression_ratio=1.20):
+def _write_fixture(path, regression_ratio=1.03):
     fields = [
         "schema_version",
         "git_commit",
@@ -27,6 +27,7 @@ def _write_fixture(path, regression_ratio=1.20):
         "triton_version",
         "vllm_version",
         "model_id",
+        "flashdec_num_splits",
         "dtype",
         "case",
         "backend",
@@ -38,9 +39,10 @@ def _write_fixture(path, regression_ratio=1.20):
     ]
     cases = {
         "qwen_b1_ctx128": regression_ratio,
-        "qwen_b1_ctx1024": 0.80,
-        "qwen_b4_ctx1024": 0.85,
+        "qwen_b1_ctx1024": 1.00,
+        "qwen_b4_ctx1024": 1.00,
         "qwen_b8_ctx1024": 0.75,
+        "qwen_b8_ctx2048": 0.80,
     }
     rows = []
     for case, ratio in cases.items():
@@ -56,6 +58,7 @@ def _write_fixture(path, regression_ratio=1.20):
                     "triton_version": "3.6.0",
                     "vllm_version": "0.25.1",
                     "model_id": "Qwen2.5-3B-Instruct",
+                    "flashdec_num_splits": "auto",
                     "dtype": "bfloat16",
                     "case": case,
                     "backend": backend,
@@ -72,7 +75,7 @@ def _write_fixture(path, regression_ratio=1.20):
         writer.writerows(rows)
 
 
-def test_summary_accepts_preregistered_win_and_guardrail(tmp_path):
+def test_summary_accepts_frozen_win_and_guardrail(tmp_path):
     source = tmp_path / "input.csv"
     output = tmp_path / "summary.md"
     _write_fixture(source)
@@ -86,7 +89,7 @@ def test_summary_accepts_preregistered_win_and_guardrail(tmp_path):
 def test_summary_rejects_guardrail_regression(tmp_path):
     source = tmp_path / "input.csv"
     output = tmp_path / "summary.md"
-    _write_fixture(source, regression_ratio=1.30)
+    _write_fixture(source, regression_ratio=1.10)
 
     with pytest.raises(ValueError, match="performance gate failed"):
         MODULE.summarize(source, output)

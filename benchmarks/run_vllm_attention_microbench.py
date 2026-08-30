@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -246,6 +247,9 @@ def main() -> None:
                     "triton_version": triton.__version__,
                     "vllm_version": vllm_version,
                     "model_id": MODEL_ID,
+                    "flashdec_num_splits": os.environ.get(
+                        "FLASHDEC_VLLM_NUM_SPLITS", "auto"
+                    ),
                     "dtype": str(dtype).removeprefix("torch."),
                     "case": case.name,
                     "batch_size": case.batch_size,

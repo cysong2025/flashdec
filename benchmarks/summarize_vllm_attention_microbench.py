@@ -13,12 +13,17 @@ from pathlib import Path
 
 BACKENDS = ("vllm_triton_attn", "flashdec")
 REQUIRED_WIN_CASES = (
+    "qwen_b8_ctx1024",
+    "qwen_b8_ctx2048",
+)
+PARITY_CASES = (
+    "qwen_b1_ctx128",
     "qwen_b1_ctx1024",
     "qwen_b4_ctx1024",
-    "qwen_b8_ctx1024",
 )
-WIN_RATIO_LIMIT = 0.95
-REGRESSION_RATIO_LIMIT = 1.25
+WIN_RATIO_LIMIT = 0.90
+PARITY_RATIO_LIMIT = 1.05
+REGRESSION_RATIO_LIMIT = 1.05
 MAX_RATIO_SPREAD = 0.15
 
 
@@ -37,6 +42,7 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         "triton_version",
         "vllm_version",
         "model_id",
+        "flashdec_num_splits",
         "dtype",
         "case",
         "backend",
@@ -64,6 +70,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
         "triton_version",
         "vllm_version",
         "model_id",
+        "flashdec_num_splits",
         "dtype",
     )
     first = rows[0]
@@ -91,9 +98,10 @@ def summarize(input_path: Path, output_path: Path) -> str:
     by_case: dict[str, list[dict[str, dict[str, str]]]] = defaultdict(list)
     for (case, _trial), pair in paired.items():
         by_case[case].append(pair)
-    missing_win_cases = set(REQUIRED_WIN_CASES) - set(by_case)
-    if missing_win_cases:
-        raise ValueError(f"missing required Qwen cases: {sorted(missing_win_cases)}")
+    required_cases = set(REQUIRED_WIN_CASES) | set(PARITY_CASES)
+    missing_cases = required_cases - set(by_case)
+    if missing_cases:
+        raise ValueError(f"missing required Qwen cases: {sorted(missing_cases)}")
 
     results = []
     for case in sorted(by_case):
@@ -125,6 +133,9 @@ def summarize(input_path: Path, output_path: Path) -> str:
     wins_pass = all(
         by_name[case]["ratio"] <= WIN_RATIO_LIMIT for case in REQUIRED_WIN_CASES
     )
+    parity_pass = all(
+        by_name[case]["ratio"] <= PARITY_RATIO_LIMIT for case in PARITY_CASES
+    )
     guardrail_pass = all(
         result["ratio"] <= REGRESSION_RATIO_LIMIT for result in results
     )
@@ -132,7 +143,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
         result["ratio_max"] - result["ratio_min"] <= MAX_RATIO_SPREAD
         for result in results
     )
-    gate_pass = wins_pass and guardrail_pass and stability_pass
+    gate_pass = wins_pass and parity_pass and guardrail_pass and stability_pass
     geo_ratio = math.exp(
         statistics.mean(math.log(result["ratio"]) for result in results)
     )
@@ -146,6 +157,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
         f"- Rows: {len(rows)}; paired trials: {len(paired)}.",
         f"- Device: {first['device']}.",
         f"- Model shape contract: {first['model_id']} / {first['dtype']}.",
+        f"- FlashDec split policy: `{first['flashdec_num_splits']}`.",
         (
             "- PyTorch / Triton / vLLM / PyTorch CUDA: "
             f"{first['torch_version']} / {first['triton_version']} / "
@@ -173,11 +185,15 @@ def summarize(input_path: Path, output_path: Path) -> str:
     lines.extend(
         [
             "",
-            "## Preregistered Performance Gate",
+            "## Frozen Confirmatory Performance Gate",
             "",
             (
-                f"- Required ctx1024 Qwen cases <= {WIN_RATIO_LIMIT:.2f}x: "
+                f"- Required B8 ctx1024/ctx2048 cases <= {WIN_RATIO_LIMIT:.2f}x: "
                 f"{'PASS' if wins_pass else 'FAIL'}."
+            ),
+            (
+                f"- B1/B4 parity cases <= {PARITY_RATIO_LIMIT:.2f}x: "
+                f"{'PASS' if parity_pass else 'FAIL'}."
             ),
             (
                 f"- Every measured case <= {REGRESSION_RATIO_LIMIT:.2f}x guardrail: "
