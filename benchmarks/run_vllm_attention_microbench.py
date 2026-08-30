@@ -59,6 +59,8 @@ CASES = (
     Case("qwen_b4_ctx1024", 4, 1024),
     Case("qwen_b8_ctx1024", 8, 1024),
     Case("qwen_b8_ctx2048", 8, 2048),
+    Case("qwen_b8_ctx4096", 8, 4096),
+    Case("qwen_b8_ctx7168", 8, 7168),
 )
 
 
