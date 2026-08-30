@@ -541,6 +541,254 @@ def _paged_decode_gqa_split_kernel(
 
 
 @triton.jit
+def _vllm_paired_kv_split_kernel(
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    block_tables_ptr,
+    seq_lens_ptr,
+    split_acc_ptr,
+    split_max_ptr,
+    split_sum_ptr,
+    append_k_ptr,
+    append_v_ptr,
+    slot_mapping_ptr,
+    q_stride_seq: tl.constexpr,
+    q_stride_head: tl.constexpr,
+    q_stride_dim: tl.constexpr,
+    cache_stride_plane: tl.constexpr,
+    k_stride_block: tl.constexpr,
+    k_stride_head: tl.constexpr,
+    k_stride_token: tl.constexpr,
+    k_stride_dim: tl.constexpr,
+    v_stride_block: tl.constexpr,
+    v_stride_head: tl.constexpr,
+    v_stride_token: tl.constexpr,
+    v_stride_dim: tl.constexpr,
+    block_tables_stride_seq: tl.constexpr,
+    block_tables_stride_block: tl.constexpr,
+    seq_lens_stride: tl.constexpr,
+    split_acc_stride_seq: tl.constexpr,
+    split_acc_stride_head: tl.constexpr,
+    split_acc_stride_split: tl.constexpr,
+    split_acc_stride_dim: tl.constexpr,
+    split_stats_stride_seq: tl.constexpr,
+    split_stats_stride_head: tl.constexpr,
+    split_stats_stride_split: tl.constexpr,
+    append_k_stride_seq: tl.constexpr,
+    append_k_stride_head: tl.constexpr,
+    append_k_stride_dim: tl.constexpr,
+    append_v_stride_seq: tl.constexpr,
+    append_v_stride_head: tl.constexpr,
+    append_v_stride_dim: tl.constexpr,
+    slot_mapping_stride: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
+    GROUP_SIZE: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+    TOKEN_BLOCK: tl.constexpr,
+    NUM_SPLITS: tl.constexpr,
+    SM_SCALE: tl.constexpr,
+    CACHE_K_PLANE: tl.constexpr,
+    CACHE_V_PLANE: tl.constexpr,
+):
+    """Process Qwen's two KV heads and sixteen query heads in one CTA.
+
+    Tensor-core dot requires at least sixteen rows, while each Qwen KV head
+    owns only eight query heads. The generic split kernel consequently launches
+    two 16-row CTAs with half their rows masked. This canonical vLLM kernel
+    packs the two independent products along their reduction dimension:
+
+      QK: [16, 256] @ [256, TOKEN_BLOCK]
+      PV: [16, 2 * TOKEN_BLOCK] @ [2 * TOKEN_BLOCK, 128]
+
+    Each query row has data in only the half belonging to its KV head. The
+    packed products therefore preserve the two independent attention groups
+    without increasing the aggregate tensor-core multiply-add count of the two
+    generic CTAs. The launcher selects this kernel only for the exact
+    16-Q-head/2-KV-head/128-dim/block-16 fused vLLM contract.
+    """
+    seq_idx = tl.program_id(axis=0)
+    split_idx = tl.program_id(axis=1)
+
+    offs_h = tl.arange(0, 2 * GROUP_SIZE)
+    offs_pair = tl.arange(0, 2)
+    offs_d = tl.arange(0, HEAD_DIM)
+    offs_packed_d = tl.arange(0, 2 * HEAD_DIM)
+    packed_pair = offs_packed_d // HEAD_DIM
+    packed_dim = offs_packed_d % HEAD_DIM
+    head_pair = offs_h // GROUP_SIZE
+
+    # Block-diagonal Q packing: heads [0, 8) occupy the first 128 columns and
+    # heads [8, 16) occupy the second 128 columns.
+    q_packed = tl.load(
+        q_ptr
+        + seq_idx * q_stride_seq
+        + offs_h[:, None] * q_stride_head
+        + packed_dim[None, :] * q_stride_dim,
+        mask=head_pair[:, None] == packed_pair[None, :],
+        other=0.0,
+    )
+
+    seq_len = tl.load(seq_lens_ptr + seq_idx * seq_lens_stride)
+    append_slot = tl.load(slot_mapping_ptr + seq_idx * slot_mapping_stride)
+    active_seq = (append_slot >= 0) & (seq_len > 0)
+    effective_seq_len = tl.where(active_seq, seq_len, 0)
+    num_token_blocks = tl.cdiv(effective_seq_len, TOKEN_BLOCK)
+    blocks_per_split = tl.cdiv(num_token_blocks, NUM_SPLITS)
+    first_block = split_idx * blocks_per_split
+    last_block = tl.minimum(first_block + blocks_per_split, num_token_blocks)
+
+    append_block = append_slot // BLOCK_SIZE
+    append_offset = append_slot % BLOCK_SIZE
+    append_logical_block = (seq_len - 1) // TOKEN_BLOCK
+    owns_append = (
+        (append_logical_block >= first_block)
+        & (append_logical_block < last_block)
+        & active_seq
+    )
+    append_k = tl.load(
+        append_k_ptr
+        + seq_idx * append_k_stride_seq
+        + offs_pair[:, None] * append_k_stride_head
+        + offs_d[None, :] * append_k_stride_dim,
+        mask=owns_append,
+        other=0.0,
+    )
+    append_v = tl.load(
+        append_v_ptr
+        + seq_idx * append_v_stride_seq
+        + offs_pair[:, None] * append_v_stride_head
+        + offs_d[None, :] * append_v_stride_dim,
+        mask=owns_append,
+        other=0.0,
+    )
+    tl.store(
+        k_ptr
+        + CACHE_K_PLANE * cache_stride_plane
+        + append_block * k_stride_block
+        + offs_pair[:, None] * k_stride_head
+        + append_offset * k_stride_token
+        + offs_d[None, :] * k_stride_dim,
+        append_k,
+        mask=owns_append,
+    )
+    tl.store(
+        v_ptr
+        + CACHE_V_PLANE * cache_stride_plane
+        + append_block * v_stride_block
+        + offs_pair[:, None] * v_stride_head
+        + append_offset * v_stride_token
+        + offs_d[None, :] * v_stride_dim,
+        append_v,
+        mask=owns_append,
+    )
+
+    append_k_packed = tl.reshape(append_k, (2 * HEAD_DIM,))
+    append_score = tl.sum(
+        q_packed.to(tl.float32)
+        * append_k_packed[None, :].to(tl.float32),
+        axis=1,
+    ) * SM_SCALE
+    m_i = tl.where(owns_append, append_score, -float("inf"))
+    l_i = tl.where(
+        owns_append,
+        tl.full((2 * GROUP_SIZE,), 1.0, dtype=tl.float32),
+        tl.zeros((2 * GROUP_SIZE,), dtype=tl.float32),
+    )
+    append_v_grouped = tl.broadcast_to(
+        append_v[:, None, :], (2, GROUP_SIZE, HEAD_DIM)
+    )
+    append_acc = tl.reshape(
+        append_v_grouped, (2 * GROUP_SIZE, HEAD_DIM)
+    ).to(tl.float32)
+    acc = tl.where(owns_append, append_acc, 0.0)
+
+    offs_t = tl.arange(0, TOKEN_BLOCK)
+    token_limit = tl.where(active_seq, seq_len - 1, 0)
+    for token_block in tl.range(first_block, last_block):
+        token_idxs = token_block * TOKEN_BLOCK + offs_t
+        valid_tokens = token_idxs < token_limit
+        logical_blocks = token_idxs // BLOCK_SIZE
+        physical_blocks = tl.load(
+            block_tables_ptr
+            + seq_idx * block_tables_stride_seq
+            + logical_blocks * block_tables_stride_block,
+            mask=valid_tokens,
+            other=-1,
+        )
+        page_offsets = token_idxs % BLOCK_SIZE
+        valid_tokens = valid_tokens & (physical_blocks >= 0)
+
+        # Stack K0 and K1 along K so the block-diagonal Q packing produces
+        # sixteen useful score rows in one tensor-core operation.
+        k_stacked = tl.load(
+            k_ptr
+            + CACHE_K_PLANE * cache_stride_plane
+            + physical_blocks[None, :] * k_stride_block
+            + packed_pair[:, None] * k_stride_head
+            + page_offsets[None, :] * k_stride_token
+            + packed_dim[:, None] * k_stride_dim,
+            mask=valid_tokens[None, :],
+            other=0.0,
+        )
+        scores = tl.dot(
+            q_packed, k_stacked, out_dtype=tl.float32
+        ) * SM_SCALE
+        scores = tl.where(valid_tokens[None, :], scores, -float("inf"))
+
+        block_m = tl.max(scores, axis=1)
+        m_new = tl.maximum(m_i, block_m)
+        alpha = tl.exp(m_i - m_new)
+        probs = tl.exp(scores - m_new[:, None])
+        l_new = l_i * alpha + tl.sum(probs, axis=1)
+
+        v = tl.load(
+            v_ptr
+            + CACHE_V_PLANE * cache_stride_plane
+            + physical_blocks[None, :, None] * v_stride_block
+            + offs_pair[:, None, None] * v_stride_head
+            + page_offsets[None, :, None] * v_stride_token
+            + offs_d[None, None, :] * v_stride_dim,
+            mask=valid_tokens[None, :, None],
+            other=0.0,
+        )
+        v_stacked = tl.reshape(v, (2 * TOKEN_BLOCK, HEAD_DIM))
+        probs_grouped = tl.reshape(
+            probs, (2, GROUP_SIZE, TOKEN_BLOCK)
+        )
+        pair_mask = offs_pair[:, None] == offs_pair[None, :]
+        probs_packed = tl.where(
+            pair_mask[:, None, :, None],
+            probs_grouped[:, :, None, :],
+            0.0,
+        )
+        probs_packed = tl.reshape(
+            probs_packed, (2 * GROUP_SIZE, 2 * TOKEN_BLOCK)
+        )
+        acc = acc * alpha[:, None] + tl.dot(
+            probs_packed.to(v.dtype), v_stacked, out_dtype=tl.float32
+        )
+        m_i = m_new
+        l_i = l_new
+
+    tl.store(
+        split_acc_ptr
+        + seq_idx * split_acc_stride_seq
+        + offs_h[:, None] * split_acc_stride_head
+        + split_idx * split_acc_stride_split
+        + offs_d[None, :] * split_acc_stride_dim,
+        acc,
+    )
+    stats_offsets = (
+        seq_idx * split_stats_stride_seq
+        + offs_h * split_stats_stride_head
+        + split_idx * split_stats_stride_split
+    )
+    tl.store(split_max_ptr + stats_offsets, m_i)
+    tl.store(split_sum_ptr + stats_offsets, l_i)
+
+
+@triton.jit
 def _paged_decode_gqa_reduce_kernel(
     split_acc_ptr,
     split_max_ptr,
@@ -636,6 +884,82 @@ def _paged_decode_gqa_reduce_kernel(
         + offs_d[None, :] * out_stride_dim,
         result,
         mask=valid_heads[:, None] & (offs_d[None, :] < HEAD_DIM),
+    )
+
+
+@triton.jit
+def _vllm_paired_kv_reduce_kernel(
+    split_acc_ptr,
+    split_max_ptr,
+    split_sum_ptr,
+    seq_lens_ptr,
+    out_ptr,
+    slot_mapping_ptr,
+    split_acc_stride_seq: tl.constexpr,
+    split_acc_stride_head: tl.constexpr,
+    split_acc_stride_split: tl.constexpr,
+    split_acc_stride_dim: tl.constexpr,
+    split_stats_stride_seq: tl.constexpr,
+    split_stats_stride_head: tl.constexpr,
+    split_stats_stride_split: tl.constexpr,
+    seq_lens_stride: tl.constexpr,
+    out_stride_seq: tl.constexpr,
+    out_stride_head: tl.constexpr,
+    out_stride_dim: tl.constexpr,
+    slot_mapping_stride: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
+    NUM_Q_HEADS: tl.constexpr,
+    NUM_SPLITS: tl.constexpr,
+):
+    """Reduce both canonical Qwen KV groups in one sixteen-head CTA."""
+    seq_idx = tl.program_id(axis=0)
+    offs_h = tl.arange(0, NUM_Q_HEADS)
+    offs_s = tl.arange(0, NUM_SPLITS)
+    offs_d = tl.arange(0, HEAD_DIM)
+    seq_len = tl.load(seq_lens_ptr + seq_idx * seq_lens_stride)
+    append_slot = tl.load(slot_mapping_ptr + seq_idx * slot_mapping_stride)
+    has_output = (seq_len > 0) & (append_slot >= 0)
+
+    stats_offsets = (
+        seq_idx * split_stats_stride_seq
+        + offs_h[:, None] * split_stats_stride_head
+        + offs_s[None, :] * split_stats_stride_split
+    )
+    local_max = tl.load(split_max_ptr + stats_offsets)
+    global_max = tl.where(has_output, tl.max(local_max, axis=1), 0.0)
+    denominator = tl.zeros((NUM_Q_HEADS,), dtype=tl.float32)
+    acc = tl.zeros((NUM_Q_HEADS, HEAD_DIM), dtype=tl.float32)
+    for split_idx in range(0, NUM_SPLITS):
+        stat_offset = (
+            seq_idx * split_stats_stride_seq
+            + offs_h * split_stats_stride_head
+            + split_idx * split_stats_stride_split
+        )
+        split_max = tl.load(split_max_ptr + stat_offset)
+        split_sum = tl.load(split_sum_ptr + stat_offset)
+        weight = tl.where(
+            has_output,
+            tl.exp(split_max - global_max),
+            0.0,
+        )
+        split_acc = tl.load(
+            split_acc_ptr
+            + seq_idx * split_acc_stride_seq
+            + offs_h[:, None] * split_acc_stride_head
+            + split_idx * split_acc_stride_split
+            + offs_d[None, :] * split_acc_stride_dim,
+        )
+        denominator += split_sum * weight
+        acc += split_acc * weight[:, None]
+
+    denominator = tl.where(has_output, denominator, 1.0)
+    result = tl.where(has_output, acc / denominator[:, None], 0.0)
+    tl.store(
+        out_ptr
+        + seq_idx * out_stride_seq
+        + offs_h[:, None] * out_stride_head
+        + offs_d[None, :] * out_stride_dim,
+        result,
     )
 
 
@@ -765,6 +1089,93 @@ def _vllm_paged_decode_attention_into(
     cache_stride_dim = kv_cache.stride(4)
 
     if num_splits > 1:
+        use_paired_kv = (
+            num_q_heads == 16
+            and num_kv_heads == 2
+            and group_size == 8
+            and head_dim == 128
+            and block_size == 16
+        )
+        if use_paired_kv:
+            paired_split_grid = (num_reqs, num_splits)
+            _vllm_paired_kv_split_kernel[paired_split_grid](
+                q,
+                kv_cache,
+                kv_cache,
+                block_tables,
+                seq_lens,
+                split_acc,
+                split_max,
+                split_sum,
+                append_k,
+                append_v,
+                slot_mapping,
+                q.stride(0),
+                q.stride(1),
+                q.stride(2),
+                cache_stride_plane,
+                cache_stride_block,
+                cache_stride_head,
+                cache_stride_token,
+                cache_stride_dim,
+                cache_stride_block,
+                cache_stride_head,
+                cache_stride_token,
+                cache_stride_dim,
+                block_tables.stride(0),
+                block_tables.stride(1),
+                seq_lens.stride(0),
+                split_acc.stride(0),
+                split_acc.stride(1),
+                split_acc.stride(2),
+                split_acc.stride(3),
+                split_max.stride(0),
+                split_max.stride(1),
+                split_max.stride(2),
+                append_k.stride(0),
+                append_k.stride(1),
+                append_k.stride(2),
+                append_v.stride(0),
+                append_v.stride(1),
+                append_v.stride(2),
+                slot_mapping.stride(0),
+                HEAD_DIM=head_dim,
+                GROUP_SIZE=group_size,
+                BLOCK_SIZE=block_size,
+                TOKEN_BLOCK=32,
+                NUM_SPLITS=num_splits,
+                SM_SCALE=float(sm_scale),
+                CACHE_K_PLANE=0,
+                CACHE_V_PLANE=1,
+                num_warps=8,
+            )
+            paired_reduce_grid = (num_reqs, 1)
+            _vllm_paired_kv_reduce_kernel[paired_reduce_grid](
+                split_acc,
+                split_max,
+                split_sum,
+                seq_lens,
+                out,
+                slot_mapping,
+                split_acc.stride(0),
+                split_acc.stride(1),
+                split_acc.stride(2),
+                split_acc.stride(3),
+                split_max.stride(0),
+                split_max.stride(1),
+                split_max.stride(2),
+                seq_lens.stride(0),
+                out.stride(0),
+                out.stride(1),
+                out.stride(2),
+                slot_mapping.stride(0),
+                HEAD_DIM=head_dim,
+                NUM_Q_HEADS=num_q_heads,
+                NUM_SPLITS=num_splits,
+                num_warps=4,
+            )
+            return out
+
         split_grid = (num_reqs, num_kv_heads, num_splits)
         _paged_decode_gqa_split_kernel[split_grid](
             q,

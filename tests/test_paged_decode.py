@@ -424,7 +424,7 @@ def test_paged_decode_attention_fuses_current_kv_append(
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize(
     ("num_splits", "cache_layout"),
-    [(1, "NHD"), (8, "HND")],
+    [(1, "NHD"), (8, "NHD"), (8, "HND")],
 )
 def test_vllm_unchecked_launcher_handles_full_cache_and_graph_padding(
     num_splits, cache_layout, dtype
