@@ -262,6 +262,7 @@ def main() -> None:
             "one worker process"
         )
     output_token_ids_sha256 = measured_output_sha256[0]
+    output_first_token_ids = [tokens[0] for tokens in token_ids]
 
     payload = {
         "schema_version": RESULT_SCHEMA_VERSION,
@@ -298,6 +299,7 @@ def main() -> None:
         "warmup_output_sha256": warmup_output_sha256,
         "measured_output_sha256": measured_output_sha256,
         "output_token_ids_sha256": output_token_ids_sha256,
+        "output_first_token_ids": output_first_token_ids,
         "device": torch.cuda.get_device_name(),
         "torch_version": torch.__version__,
         "torch_cuda": torch.version.cuda,

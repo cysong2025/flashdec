@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 import re
 import statistics
@@ -77,6 +78,7 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         "dataset_path",
         "dataset_sha256",
         "output_token_ids_sha256",
+        "first_output_token_ids_json",
         "avg_latency_ms",
         "p50_latency_ms",
         "p90_latency_ms",
@@ -129,7 +131,8 @@ def summarize(input_path: Path, output_path: Path) -> str:
     )
     first = rows[0]
     case_datasets: dict[str, tuple[str, ...]] = {}
-    case_outputs: dict[str, str] = {}
+    case_first_tokens: dict[str, tuple[int, ...]] = {}
+    case_output_hashes: dict[str, set[str]] = defaultdict(set)
     for row in rows:
         if any(row.get(field) != first.get(field) for field in invariant_fields):
             raise ValueError("environment/model/protocol invariants differ across rows")
@@ -177,13 +180,30 @@ def summarize(input_path: Path, output_path: Path) -> str:
             raise ValueError(
                 "every backend/trial for a case must use the exact same dataset"
             )
-        previous_output = case_outputs.setdefault(
-            row["case"], row["output_token_ids_sha256"]
-        )
-        if previous_output != row["output_token_ids_sha256"]:
-            raise ValueError(
-                "every backend/trial for a case must generate the exact same tokens"
+        try:
+            first_tokens_raw = json.loads(row["first_output_token_ids_json"])
+        except json.JSONDecodeError as error:
+            raise ValueError("invalid first-output token JSON") from error
+        if (
+            not isinstance(first_tokens_raw, list)
+            or len(first_tokens_raw) != int(row["batch_size"])
+            or any(
+                not isinstance(token_id, int)
+                or isinstance(token_id, bool)
+                or token_id < 0
+                for token_id in first_tokens_raw
             )
+        ):
+            raise ValueError("invalid first-output token IDs")
+        first_tokens = tuple(first_tokens_raw)
+        previous_first_tokens = case_first_tokens.setdefault(
+            row["case"], first_tokens
+        )
+        if previous_first_tokens != first_tokens:
+            raise ValueError(
+                "every backend/trial for a case must agree on first output tokens"
+            )
+        case_output_hashes[row["case"]].add(row["output_token_ids_sha256"])
         if min(
             float(row["avg_latency_ms"]),
             float(row["p50_latency_ms"]),
@@ -296,8 +316,10 @@ def summarize(input_path: Path, output_path: Path) -> str:
         ),
         "- Per-case generated-token identities:",
         *(
-            f"  - `{case}`: `{digest}`."
-            for case, digest in sorted(case_outputs.items())
+            f"  - `{case}`: first tokens `{list(case_first_tokens[case])}`; "
+            f"{len(case_output_hashes[case])} unique full-rollout SHA-256 "
+            "(descriptive only)."
+            for case in sorted(case_first_tokens)
         ),
         "",
         "## Paired Results",
@@ -354,6 +376,11 @@ def summarize(input_path: Path, output_path: Path) -> str:
                 "It includes Qwen transformer execution, scheduling, KV-cache access, "
                 "sampling, and Python API overhead, but excludes model startup/JIT and "
                 "does not claim online TTFT/TPOT behavior."
+            ),
+            (
+                "First-step greedy tokens must match from identical prompt state. "
+                "Full autoregressive rollout hashes are descriptive because one "
+                "near-tied floating-point choice can change all later inputs."
             ),
             "",
         ]

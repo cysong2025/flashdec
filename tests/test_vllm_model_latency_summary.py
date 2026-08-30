@@ -65,6 +65,7 @@ def _write_fixture(
         "dataset_path",
         "dataset_sha256",
         "output_token_ids_sha256",
+        "first_output_token_ids_json",
         "avg_latency_ms",
         "p50_latency_ms",
         "p90_latency_ms",
@@ -139,6 +140,7 @@ def _write_fixture(
                         "output_token_ids_sha256": hashlib.sha256(
                             f"output:{case}".encode("utf-8")
                         ).hexdigest(),
+                        "first_output_token_ids_json": "[1,2,3,4,5,6,7,8]",
                         "avg_latency_ms": p50,
                         "p50_latency_ms": p50,
                         "p90_latency_ms": p50,
@@ -259,7 +261,7 @@ def test_summary_rejects_different_dataset_for_paired_backend(tmp_path):
         MODULE.summarize(source, output)
 
 
-def test_summary_rejects_different_generated_tokens_for_paired_backend(tmp_path):
+def test_summary_accepts_late_autoregressive_output_divergence(tmp_path):
     source = tmp_path / "input.csv"
     output = tmp_path / "summary.md"
     _write_fixture(source)
@@ -276,5 +278,27 @@ def test_summary_rejects_different_generated_tokens_for_paired_backend(tmp_path)
         writer.writeheader()
         writer.writerows(rows)
 
-    with pytest.raises(ValueError, match="exact same tokens"):
+    text = MODULE.summarize(source, output)
+
+    assert "2 unique full-rollout SHA-256 (descriptive only)" in text
+
+
+def test_summary_rejects_different_first_output_tokens(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    for row in rows:
+        if (
+            row["case"] == "qwen_b8_i2048_o128"
+            and row["backend"] == "flashdec"
+            and row["trial"] == "2"
+        ):
+            row["first_output_token_ids_json"] = "[9,2,3,4,5,6,7,8]"
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="first output tokens"):
         MODULE.summarize(source, output)

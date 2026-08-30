@@ -194,6 +194,7 @@ def test_runner_rejects_inconsistent_worker_output_hashes(tmp_path):
         "warmup_output_sha256": ["b" * 64],
         "measured_output_sha256": ["c" * 64],
         "output_token_ids_sha256": "c" * 64,
+        "output_first_token_ids": [1],
     }
 
     with pytest.raises(ValueError, match="outputs differ"):

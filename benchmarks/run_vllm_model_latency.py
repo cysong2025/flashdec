@@ -386,7 +386,7 @@ def _validate_worker_result(
     warmup_iters: int,
     num_iters: int,
     expected_environment: dict[str, str] | None = None,
-) -> tuple[list[float], float, float, float, str]:
+) -> tuple[list[float], float, float, float, str, tuple[int, ...]]:
     expected = {
         "schema_version": 1,
         "backend_arg": backend_arg,
@@ -448,6 +448,18 @@ def _validate_worker_result(
         raise ValueError(
             "worker fixed-greedy outputs differ within one process"
         )
+    first_token_ids = result.get("output_first_token_ids")
+    if (
+        not isinstance(first_token_ids, list)
+        or len(first_token_ids) != case.batch_size
+        or any(
+            not isinstance(token_id, int)
+            or isinstance(token_id, bool)
+            or token_id < 0
+            for token_id in first_token_ids
+        )
+    ):
+        raise ValueError("worker returned invalid first output token IDs")
 
     avg_s = float(result["avg_latency_s"])
     p50_s = float(result["percentiles_s"]["50"])
@@ -480,7 +492,14 @@ def _validate_worker_result(
             raise ValueError(
                 f"worker {name} latency aggregate does not match raw samples"
             )
-    return latencies, avg_s, p50_s, p90_s, output_sha256
+    return (
+        latencies,
+        avg_s,
+        p50_s,
+        p90_s,
+        output_sha256,
+        tuple(first_token_ids),
+    )
 
 
 def main() -> None:
@@ -640,6 +659,7 @@ def main() -> None:
                     p50_s,
                     p90_s,
                     output_sha256,
+                    first_token_ids,
                 ) = _validate_worker_result(
                     result,
                     case=case,
@@ -670,6 +690,9 @@ def main() -> None:
                     "dataset_path": str(dataset_path.resolve()),
                     "dataset_sha256": dataset_sha256,
                     "output_token_ids_sha256": output_sha256,
+                    "first_output_token_ids_json": json.dumps(
+                        first_token_ids, separators=(",", ":")
+                    ),
                     "sampling_min_tokens": case.output_len,
                     "sampling_max_tokens": case.output_len,
                     "avg_latency_ms": f"{avg_s * 1000.0:.6f}",
