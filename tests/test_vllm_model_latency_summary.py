@@ -248,7 +248,9 @@ def test_summary_rejects_unstable_ratio(tmp_path):
             and row["backend"] == "flashdec"
             and row["trial"] == "3"
         ):
-            row["p50_latency_ms"] = "850.0"
+            for field in ("avg_latency_ms", "p50_latency_ms", "p90_latency_ms"):
+                row[field] = "850.0"
+            row["output_tokens_per_s"] = str(1024.0 * 1000.0 / 850.0)
     with source.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
         writer.writeheader()
