@@ -19,6 +19,7 @@ REQUIRED_WIN_CASES = (
 )
 WIN_RATIO_LIMIT = 0.95
 REGRESSION_RATIO_LIMIT = 1.25
+MAX_RATIO_SPREAD = 0.15
 
 
 def _read_rows(path: Path) -> list[dict[str, str]]:
@@ -127,7 +128,11 @@ def summarize(input_path: Path, output_path: Path) -> str:
     guardrail_pass = all(
         result["ratio"] <= REGRESSION_RATIO_LIMIT for result in results
     )
-    gate_pass = wins_pass and guardrail_pass
+    stability_pass = all(
+        result["ratio_max"] - result["ratio_min"] <= MAX_RATIO_SPREAD
+        for result in results
+    )
+    gate_pass = wins_pass and guardrail_pass and stability_pass
     geo_ratio = math.exp(
         statistics.mean(math.log(result["ratio"]) for result in results)
     )
@@ -177,6 +182,10 @@ def summarize(input_path: Path, output_path: Path) -> str:
             (
                 f"- Every measured case <= {REGRESSION_RATIO_LIMIT:.2f}x guardrail: "
                 f"{'PASS' if guardrail_pass else 'FAIL'}."
+            ),
+            (
+                f"- Every case paired-ratio spread <= {MAX_RATIO_SPREAD:.2f}: "
+                f"{'PASS' if stability_pass else 'FAIL'}."
             ),
             f"- Geometric-mean p50 ratio across cases: {geo_ratio:.4f}x.",
             f"- Overall external-kernel gate: **{'PASS' if gate_pass else 'FAIL'}**.",

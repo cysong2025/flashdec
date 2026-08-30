@@ -92,3 +92,27 @@ def test_summary_rejects_guardrail_regression(tmp_path):
         MODULE.summarize(source, output)
 
     assert "guardrail: FAIL" in output.read_text(encoding="utf-8")
+
+
+def test_summary_rejects_unstable_paired_ratios(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    duplicate = []
+    for row in rows:
+        copied = dict(row)
+        copied["trial"] = "2"
+        if copied["case"] == "qwen_b1_ctx128" and copied["backend"] == "flashdec":
+            copied["p50_ms"] = "0.04"
+        duplicate.append(copied)
+    with source.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writerows(duplicate)
+
+    with pytest.raises(ValueError, match="performance gate failed"):
+        MODULE.summarize(source, output)
+
+    assert "paired-ratio spread <= 0.15: FAIL" in output.read_text(
+        encoding="utf-8"
+    )

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import csv
 import math
-import statistics
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -53,17 +52,6 @@ class _LayerScales:
         self._q_scale = one
         self._k_scale = one
         self._v_scale = one
-
-
-def _percentile(values: list[float], quantile: float) -> float:
-    ordered = sorted(values)
-    index = (len(ordered) - 1) * quantile
-    lower = math.floor(index)
-    upper = math.ceil(index)
-    if lower == upper:
-        return ordered[lower]
-    weight = index - lower
-    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
 def _git_value(*args: str) -> str:
@@ -165,28 +153,30 @@ def _run_once(impl, layer, query, kv_cache, metadata, output):
     )
 
 
-def _measure(fn, warmup: int, repeat: int) -> list[float]:
-    for _ in range(warmup):
-        fn()
-    torch.cuda.synchronize()
-    values = []
-    for _ in range(repeat):
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
-        fn()
-        end.record()
-        end.synchronize()
-        values.append(float(start.elapsed_time(end)))
-    return values
+def _measure(fn, warmup_ms: int, repeat_ms: int) -> tuple[float, float, float]:
+    # Time-window warmup is important for sub-0.1 ms kernels: a small count of
+    # synchronized launches does not reliably raise the GPU from an idle
+    # P-state. Triton's helper batches launches and returns event-based
+    # quantiles after the requested warmup/measurement windows.
+    p50, p90, p99 = triton.testing.do_bench(
+        fn,
+        warmup=float(warmup_ms),
+        rep=float(repeat_ms),
+        quantiles=[0.50, 0.90, 0.99],
+    )
+    return float(p50), float(p90), float(p99)
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--trials", type=int, default=3)
-    parser.add_argument("--warmup", type=int, default=10)
-    parser.add_argument("--repeat", type=int, default=100)
+    parser.add_argument(
+        "--warmup", type=int, default=100, help="Warmup window in milliseconds."
+    )
+    parser.add_argument(
+        "--repeat", type=int, default=500, help="Measurement window in milliseconds."
+    )
     parser.add_argument(
         "--case",
         action="append",
@@ -244,8 +234,7 @@ def main() -> None:
         for trial in range(1, args.trials + 1):
             ordered = backends if trial % 2 else tuple(reversed(backends))
             for backend, fn in ordered:
-                values = _measure(fn, args.warmup, args.repeat)
-                p50 = statistics.median(values)
+                p50, p90, p99 = _measure(fn, args.warmup, args.repeat)
                 row = {
                     "schema_version": SCHEMA_VERSION,
                     "started_at": started_at,
@@ -270,8 +259,8 @@ def main() -> None:
                     "warmup": args.warmup,
                     "repeat": args.repeat,
                     "p50_ms": f"{p50:.6f}",
-                    "p90_ms": f"{_percentile(values, 0.90):.6f}",
-                    "p99_ms": f"{_percentile(values, 0.99):.6f}",
+                    "p90_ms": f"{p90:.6f}",
+                    "p99_ms": f"{p99:.6f}",
                     "sequences_per_s": f"{case.batch_size * 1000.0 / p50:.3f}",
                     "correctness": "PASS",
                 }
