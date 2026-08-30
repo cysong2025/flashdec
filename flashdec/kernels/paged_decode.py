@@ -118,6 +118,119 @@ def _paged_decode_attention_kernel(
     )
 
 
+@triton.jit
+def _paged_decode_gqa_kernel(
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    block_tables_ptr,
+    seq_lens_ptr,
+    out_ptr,
+    q_stride_seq: tl.constexpr,
+    q_stride_head: tl.constexpr,
+    q_stride_dim: tl.constexpr,
+    k_stride_block: tl.constexpr,
+    k_stride_head: tl.constexpr,
+    k_stride_token: tl.constexpr,
+    k_stride_dim: tl.constexpr,
+    v_stride_block: tl.constexpr,
+    v_stride_head: tl.constexpr,
+    v_stride_token: tl.constexpr,
+    v_stride_dim: tl.constexpr,
+    block_tables_stride_seq: tl.constexpr,
+    block_tables_stride_block: tl.constexpr,
+    out_stride_seq: tl.constexpr,
+    out_stride_head: tl.constexpr,
+    out_stride_dim: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
+    GROUP_SIZE: tl.constexpr,
+    GROUP_BLOCK: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+    SM_SCALE: tl.constexpr,
+):
+    """Decode one GQA KV head and all of its query heads together.
+
+    Qwen2.5-3B maps eight query heads to each KV head. Grouping those heads
+    keeps one K/V tile in the same program instead of issuing eight independent
+    cache reads. GROUP_BLOCK pads the query-head dimension to a tensor-core
+    friendly power of two while stores remain masked to GROUP_SIZE.
+    """
+    seq_idx = tl.program_id(axis=0)
+    kv_head = tl.program_id(axis=1)
+    offs_g = tl.arange(0, GROUP_BLOCK)
+    offs_d = tl.arange(0, HEAD_DIM)
+    q_heads = kv_head * GROUP_SIZE + offs_g
+    valid_heads = offs_g < GROUP_SIZE
+
+    q = tl.load(
+        q_ptr
+        + seq_idx * q_stride_seq
+        + q_heads[:, None] * q_stride_head
+        + offs_d[None, :] * q_stride_dim,
+        mask=valid_heads[:, None] & (offs_d[None, :] < HEAD_DIM),
+        other=0.0,
+    )
+    seq_len = tl.load(seq_lens_ptr + seq_idx)
+    m_i = tl.full((GROUP_BLOCK,), -float("inf"), dtype=tl.float32)
+    l_i = tl.zeros((GROUP_BLOCK,), dtype=tl.float32)
+    acc = tl.zeros((GROUP_BLOCK, HEAD_DIM), dtype=tl.float32)
+
+    offs_t = tl.arange(0, BLOCK_SIZE)
+    num_logical_blocks = tl.cdiv(seq_len, BLOCK_SIZE)
+    for logical_block in tl.range(0, num_logical_blocks):
+        physical_block = tl.load(
+            block_tables_ptr
+            + seq_idx * block_tables_stride_seq
+            + logical_block * block_tables_stride_block
+        )
+        token_idxs = logical_block * BLOCK_SIZE + offs_t
+        valid_tokens = (token_idxs < seq_len) & (physical_block >= 0)
+
+        k = tl.load(
+            k_ptr
+            + physical_block * k_stride_block
+            + kv_head * k_stride_head
+            + offs_t[:, None] * k_stride_token
+            + offs_d[None, :] * k_stride_dim,
+            mask=valid_tokens[:, None] & (offs_d[None, :] < HEAD_DIM),
+            other=0.0,
+        )
+        scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32) * SM_SCALE
+        scores = tl.where(valid_tokens[None, :], scores, -float("inf"))
+
+        block_m = tl.max(scores, axis=1)
+        m_new = tl.maximum(m_i, block_m)
+        alpha = tl.exp(m_i - m_new)
+        probs = tl.exp(scores - m_new[:, None])
+        l_new = l_i * alpha + tl.sum(probs, axis=1)
+
+        v = tl.load(
+            v_ptr
+            + physical_block * v_stride_block
+            + kv_head * v_stride_head
+            + offs_t[:, None] * v_stride_token
+            + offs_d[None, :] * v_stride_dim,
+            mask=valid_tokens[:, None] & (offs_d[None, :] < HEAD_DIM),
+            other=0.0,
+        )
+        acc = acc * alpha[:, None] + tl.dot(
+            probs.to(v.dtype), v, out_dtype=tl.float32
+        )
+        m_i = m_new
+        l_i = l_new
+
+    denom = tl.where(seq_len > 0, l_i, 1.0)
+    result = tl.where(seq_len > 0, acc / denom[:, None], 0.0)
+    tl.store(
+        out_ptr
+        + seq_idx * out_stride_seq
+        + q_heads[:, None] * out_stride_head
+        + offs_d[None, :] * out_stride_dim,
+        result,
+        mask=valid_heads[:, None] & (offs_d[None, :] < HEAD_DIM),
+    )
+
+
 def _validate_inputs(
     q,
     k_cache,
@@ -306,11 +419,19 @@ def paged_decode_attention_into(
     if sm_scale is None:
         sm_scale = 1.0 / math.sqrt(head_dim)
 
-    grid = (num_seqs, num_q_heads)
+    use_grouped_gqa = (
+        head_dim == 128
+        and group_size in (4, 8, 16)
+        and block_size in (16, 32)
+    )
+    grid = (num_seqs, num_kv_heads if use_grouped_gqa else num_q_heads)
     launch_kwargs = {"num_warps": num_warps}
     if num_stages is not None:
         launch_kwargs["num_stages"] = num_stages
-    _paged_decode_attention_kernel[grid](
+    kernel = _paged_decode_gqa_kernel if use_grouped_gqa else _paged_decode_attention_kernel
+    if use_grouped_gqa:
+        launch_kwargs["num_warps"] = max(num_warps, 4)
+    kernel[grid](
         q,
         k_cache,
         v_cache,
@@ -335,6 +456,7 @@ def paged_decode_attention_into(
         out.stride(2),
         HEAD_DIM=head_dim,
         GROUP_SIZE=group_size,
+        **({"GROUP_BLOCK": 16} if use_grouped_gqa else {}),
         BLOCK_SIZE=block_size,
         SM_SCALE=float(sm_scale),
         **launch_kwargs,
