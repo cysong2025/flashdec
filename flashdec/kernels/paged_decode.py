@@ -126,6 +126,9 @@ def _paged_decode_gqa_kernel(
     block_tables_ptr,
     seq_lens_ptr,
     out_ptr,
+    append_k_ptr,
+    append_v_ptr,
+    slot_mapping_ptr,
     q_stride_seq: tl.constexpr,
     q_stride_head: tl.constexpr,
     q_stride_dim: tl.constexpr,
@@ -142,11 +145,19 @@ def _paged_decode_gqa_kernel(
     out_stride_seq: tl.constexpr,
     out_stride_head: tl.constexpr,
     out_stride_dim: tl.constexpr,
+    append_k_stride_seq: tl.constexpr,
+    append_k_stride_head: tl.constexpr,
+    append_k_stride_dim: tl.constexpr,
+    append_v_stride_seq: tl.constexpr,
+    append_v_stride_head: tl.constexpr,
+    append_v_stride_dim: tl.constexpr,
+    slot_mapping_stride: tl.constexpr,
     HEAD_DIM: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
     GROUP_BLOCK: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
     SM_SCALE: tl.constexpr,
+    FUSE_KV_APPEND: tl.constexpr,
 ):
     """Decode one GQA KV head and all of its query heads together.
 
@@ -171,9 +182,59 @@ def _paged_decode_gqa_kernel(
         other=0.0,
     )
     seq_len = tl.load(seq_lens_ptr + seq_idx)
-    m_i = tl.full((GROUP_BLOCK,), -float("inf"), dtype=tl.float32)
-    l_i = tl.zeros((GROUP_BLOCK,), dtype=tl.float32)
-    acc = tl.zeros((GROUP_BLOCK, HEAD_DIM), dtype=tl.float32)
+    if FUSE_KV_APPEND:
+        append_k = tl.load(
+            append_k_ptr
+            + seq_idx * append_k_stride_seq
+            + kv_head * append_k_stride_head
+            + offs_d * append_k_stride_dim,
+            mask=offs_d < HEAD_DIM,
+            other=0.0,
+        )
+        append_v = tl.load(
+            append_v_ptr
+            + seq_idx * append_v_stride_seq
+            + kv_head * append_v_stride_head
+            + offs_d * append_v_stride_dim,
+            mask=offs_d < HEAD_DIM,
+            other=0.0,
+        )
+        append_slot = tl.load(
+            slot_mapping_ptr + seq_idx * slot_mapping_stride
+        )
+        append_block = append_slot // BLOCK_SIZE
+        append_offset = append_slot % BLOCK_SIZE
+        tl.store(
+            k_ptr
+            + append_block * k_stride_block
+            + kv_head * k_stride_head
+            + append_offset * k_stride_token
+            + offs_d * k_stride_dim,
+            append_k,
+            mask=(append_slot >= 0) & (offs_d < HEAD_DIM),
+        )
+        tl.store(
+            v_ptr
+            + append_block * v_stride_block
+            + kv_head * v_stride_head
+            + append_offset * v_stride_token
+            + offs_d * v_stride_dim,
+            append_v,
+            mask=(append_slot >= 0) & (offs_d < HEAD_DIM),
+        )
+    if FUSE_KV_APPEND:
+        append_score = tl.sum(
+            q.to(tl.float32) * append_k[None, :].to(tl.float32), axis=1
+        ) * SM_SCALE
+        m_i = append_score
+        l_i = tl.full((GROUP_BLOCK,), 1.0, dtype=tl.float32)
+        acc = tl.broadcast_to(append_v[None, :], (GROUP_BLOCK, HEAD_DIM)).to(
+            tl.float32
+        )
+    else:
+        m_i = tl.full((GROUP_BLOCK,), -float("inf"), dtype=tl.float32)
+        l_i = tl.zeros((GROUP_BLOCK,), dtype=tl.float32)
+        acc = tl.zeros((GROUP_BLOCK, HEAD_DIM), dtype=tl.float32)
 
     offs_t = tl.arange(0, BLOCK_SIZE)
     num_logical_blocks = tl.cdiv(seq_len, BLOCK_SIZE)
@@ -184,7 +245,10 @@ def _paged_decode_gqa_kernel(
             + logical_block * block_tables_stride_block
         )
         token_idxs = logical_block * BLOCK_SIZE + offs_t
-        valid_tokens = (token_idxs < seq_len) & (physical_block >= 0)
+        if FUSE_KV_APPEND:
+            valid_tokens = (token_idxs < seq_len - 1) & (physical_block >= 0)
+        else:
+            valid_tokens = (token_idxs < seq_len) & (physical_block >= 0)
 
         k = tl.load(
             k_ptr
@@ -241,6 +305,9 @@ def _paged_decode_gqa_split_kernel(
     split_acc_ptr,
     split_max_ptr,
     split_sum_ptr,
+    append_k_ptr,
+    append_v_ptr,
+    slot_mapping_ptr,
     q_stride_seq: tl.constexpr,
     q_stride_head: tl.constexpr,
     q_stride_dim: tl.constexpr,
@@ -261,12 +328,20 @@ def _paged_decode_gqa_split_kernel(
     split_stats_stride_seq: tl.constexpr,
     split_stats_stride_head: tl.constexpr,
     split_stats_stride_split: tl.constexpr,
+    append_k_stride_seq: tl.constexpr,
+    append_k_stride_head: tl.constexpr,
+    append_k_stride_dim: tl.constexpr,
+    append_v_stride_seq: tl.constexpr,
+    append_v_stride_head: tl.constexpr,
+    append_v_stride_dim: tl.constexpr,
+    slot_mapping_stride: tl.constexpr,
     HEAD_DIM: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
     GROUP_BLOCK: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
     NUM_SPLITS: tl.constexpr,
     SM_SCALE: tl.constexpr,
+    FUSE_KV_APPEND: tl.constexpr,
 ):
     seq_idx = tl.program_id(axis=0)
     kv_head = tl.program_id(axis=1)
@@ -290,9 +365,67 @@ def _paged_decode_gqa_split_kernel(
     first_block = split_idx * blocks_per_split
     last_block = tl.minimum(first_block + blocks_per_split, num_logical_blocks)
 
-    m_i = tl.full((GROUP_BLOCK,), -float("inf"), dtype=tl.float32)
-    l_i = tl.zeros((GROUP_BLOCK,), dtype=tl.float32)
-    acc = tl.zeros((GROUP_BLOCK, HEAD_DIM), dtype=tl.float32)
+    if FUSE_KV_APPEND:
+        append_slot = tl.load(
+            slot_mapping_ptr + seq_idx * slot_mapping_stride
+        )
+        append_block = append_slot // BLOCK_SIZE
+        append_offset = append_slot % BLOCK_SIZE
+        append_logical_block = (seq_len - 1) // BLOCK_SIZE
+        owns_append = (
+            (append_logical_block >= first_block)
+            & (append_logical_block < last_block)
+            & (append_slot >= 0)
+        )
+        append_k = tl.load(
+            append_k_ptr
+            + seq_idx * append_k_stride_seq
+            + kv_head * append_k_stride_head
+            + offs_d * append_k_stride_dim,
+            mask=owns_append & (offs_d < HEAD_DIM),
+            other=0.0,
+        )
+        append_v = tl.load(
+            append_v_ptr
+            + seq_idx * append_v_stride_seq
+            + kv_head * append_v_stride_head
+            + offs_d * append_v_stride_dim,
+            mask=owns_append & (offs_d < HEAD_DIM),
+            other=0.0,
+        )
+        tl.store(
+            k_ptr
+            + append_block * k_stride_block
+            + kv_head * k_stride_head
+            + append_offset * k_stride_token
+            + offs_d * k_stride_dim,
+            append_k,
+            mask=owns_append & (offs_d < HEAD_DIM),
+        )
+        tl.store(
+            v_ptr
+            + append_block * v_stride_block
+            + kv_head * v_stride_head
+            + append_offset * v_stride_token
+            + offs_d * v_stride_dim,
+            append_v,
+            mask=owns_append & (offs_d < HEAD_DIM),
+        )
+
+    if FUSE_KV_APPEND:
+        append_score = tl.sum(
+            q.to(tl.float32) * append_k[None, :].to(tl.float32), axis=1
+        ) * SM_SCALE
+        m_i = tl.where(owns_append, append_score, -float("inf"))
+        l_i = tl.where(owns_append, 1.0, 0.0).to(tl.float32)
+        append_acc = tl.broadcast_to(
+            append_v[None, :], (GROUP_BLOCK, HEAD_DIM)
+        ).to(tl.float32)
+        acc = tl.where(owns_append, append_acc, 0.0)
+    else:
+        m_i = tl.full((GROUP_BLOCK,), -float("inf"), dtype=tl.float32)
+        l_i = tl.zeros((GROUP_BLOCK,), dtype=tl.float32)
+        acc = tl.zeros((GROUP_BLOCK, HEAD_DIM), dtype=tl.float32)
     offs_t = tl.arange(0, BLOCK_SIZE)
     for logical_block in tl.range(first_block, last_block):
         physical_block = tl.load(
@@ -301,7 +434,10 @@ def _paged_decode_gqa_split_kernel(
             + logical_block * block_tables_stride_block
         )
         token_idxs = logical_block * BLOCK_SIZE + offs_t
-        valid_tokens = (token_idxs < seq_len) & (physical_block >= 0)
+        if FUSE_KV_APPEND:
+            valid_tokens = (token_idxs < seq_len - 1) & (physical_block >= 0)
+        else:
+            valid_tokens = (token_idxs < seq_len) & (physical_block >= 0)
         k = tl.load(
             k_ptr
             + physical_block * k_stride_block
@@ -583,6 +719,9 @@ def paged_decode_attention_into(
     num_stages=None,
     split_kv_workspace=None,
     num_splits=1,
+    append_k=None,
+    append_v=None,
+    slot_mapping=None,
 ):
     """Write paged single-token decode attention into ``out``.
 
@@ -590,6 +729,10 @@ def paged_decode_attention_into(
     allocation. K/V and block-table tensors may be strided views; their strides
     are passed to Triton directly instead of materializing a cache-sized copy.
     This is the integration path used by runtimes that own their KV storage.
+    ``append_k``, ``append_v``, and ``slot_mapping`` may be provided together
+    for grouped GQA decode. The kernel then stores the current K/V token and
+    consumes those register values directly for attention, avoiding a separate
+    cache-update launch and any cross-program visibility dependency.
     """
     token_axis, dim_axis = _layout_axes(kv_layout)
     if block_size is None:
@@ -633,6 +776,38 @@ def paged_decode_attention_into(
         and group_size in (4, 8, 16)
         and block_size in (16, 32)
     )
+    append_values = (append_k, append_v, slot_mapping)
+    fuse_kv_append = all(value is not None for value in append_values)
+    if any(value is not None for value in append_values) and not fuse_kv_append:
+        raise ValueError(
+            "append_k, append_v, and slot_mapping must be provided together"
+        )
+    if fuse_kv_append:
+        if not use_grouped_gqa:
+            raise ValueError("fused KV append requires grouped GQA decode")
+        expected_append_shape = (num_seqs, num_kv_heads, head_dim)
+        if append_k.shape != expected_append_shape or append_v.shape != expected_append_shape:
+            raise ValueError(
+                "append_k and append_v must have shape "
+                "[num_seqs, num_kv_heads, head_dim]"
+            )
+        if append_k.dtype != q.dtype or append_v.dtype != q.dtype:
+            raise ValueError("append_k and append_v must match q.dtype")
+        if append_k.device != q.device or append_v.device != q.device:
+            raise ValueError("append_k and append_v must be on q.device")
+        if slot_mapping.dim() != 1 or slot_mapping.numel() < num_seqs:
+            raise ValueError("slot_mapping must have at least one entry per sequence")
+        if slot_mapping.dtype not in (torch.int32, torch.int64):
+            raise ValueError("slot_mapping must be int32 or int64")
+        if slot_mapping.device != q.device:
+            raise ValueError("slot_mapping must be on q.device")
+
+    append_k_arg = append_k if fuse_kv_append else q
+    append_v_arg = append_v if fuse_kv_append else q
+    slot_mapping_arg = slot_mapping if fuse_kv_append else seq_lens_contig
+    append_k_strides = append_k.stride() if fuse_kv_append else (0, 0, 0)
+    append_v_strides = append_v.stride() if fuse_kv_append else (0, 0, 0)
+    slot_mapping_stride = slot_mapping.stride(0) if fuse_kv_append else 0
     use_split_kv = use_grouped_gqa and num_splits > 1
     if use_split_kv:
         if split_kv_workspace is None or len(split_kv_workspace) != 3:
@@ -665,6 +840,9 @@ def paged_decode_attention_into(
             split_acc,
             split_max,
             split_sum,
+            append_k_arg,
+            append_v_arg,
+            slot_mapping_arg,
             q.stride(0),
             q.stride(1),
             q.stride(2),
@@ -685,12 +863,20 @@ def paged_decode_attention_into(
             split_max.stride(0),
             split_max.stride(1),
             split_max.stride(2),
+            append_k_strides[0],
+            append_k_strides[1],
+            append_k_strides[2],
+            append_v_strides[0],
+            append_v_strides[1],
+            append_v_strides[2],
+            slot_mapping_stride,
             HEAD_DIM=head_dim,
             GROUP_SIZE=group_size,
             GROUP_BLOCK=16,
             BLOCK_SIZE=block_size,
             NUM_SPLITS=num_splits,
             SM_SCALE=float(sm_scale),
+            FUSE_KV_APPEND=fuse_kv_append,
             num_warps=4,
         )
         reduce_grid = (num_seqs, num_kv_heads)
@@ -725,34 +911,76 @@ def paged_decode_attention_into(
     kernel = _paged_decode_gqa_kernel if use_grouped_gqa else _paged_decode_attention_kernel
     if use_grouped_gqa:
         launch_kwargs["num_warps"] = max(num_warps, 4)
-    kernel[grid](
-        q,
-        k_cache,
-        v_cache,
-        block_tables,
-        seq_lens_contig,
-        out,
-        q.stride(0),
-        q.stride(1),
-        q.stride(2),
-        k_cache.stride(0),
-        k_cache.stride(1),
-        k_cache.stride(token_axis),
-        k_cache.stride(dim_axis),
-        v_cache.stride(0),
-        v_cache.stride(1),
-        v_cache.stride(token_axis),
-        v_cache.stride(dim_axis),
-        block_tables.stride(0),
-        block_tables.stride(1),
-        out.stride(0),
-        out.stride(1),
-        out.stride(2),
-        HEAD_DIM=head_dim,
-        GROUP_SIZE=group_size,
-        **({"GROUP_BLOCK": 16} if use_grouped_gqa else {}),
-        BLOCK_SIZE=block_size,
-        SM_SCALE=float(sm_scale),
-        **launch_kwargs,
-    )
+    if use_grouped_gqa:
+        kernel[grid](
+            q,
+            k_cache,
+            v_cache,
+            block_tables,
+            seq_lens_contig,
+            out,
+            append_k_arg,
+            append_v_arg,
+            slot_mapping_arg,
+            q.stride(0),
+            q.stride(1),
+            q.stride(2),
+            k_cache.stride(0),
+            k_cache.stride(1),
+            k_cache.stride(token_axis),
+            k_cache.stride(dim_axis),
+            v_cache.stride(0),
+            v_cache.stride(1),
+            v_cache.stride(token_axis),
+            v_cache.stride(dim_axis),
+            block_tables.stride(0),
+            block_tables.stride(1),
+            out.stride(0),
+            out.stride(1),
+            out.stride(2),
+            append_k_strides[0],
+            append_k_strides[1],
+            append_k_strides[2],
+            append_v_strides[0],
+            append_v_strides[1],
+            append_v_strides[2],
+            slot_mapping_stride,
+            HEAD_DIM=head_dim,
+            GROUP_SIZE=group_size,
+            GROUP_BLOCK=16,
+            BLOCK_SIZE=block_size,
+            SM_SCALE=float(sm_scale),
+            FUSE_KV_APPEND=fuse_kv_append,
+            **launch_kwargs,
+        )
+    else:
+        kernel[grid](
+            q,
+            k_cache,
+            v_cache,
+            block_tables,
+            seq_lens_contig,
+            out,
+            q.stride(0),
+            q.stride(1),
+            q.stride(2),
+            k_cache.stride(0),
+            k_cache.stride(1),
+            k_cache.stride(token_axis),
+            k_cache.stride(dim_axis),
+            v_cache.stride(0),
+            v_cache.stride(1),
+            v_cache.stride(token_axis),
+            v_cache.stride(dim_axis),
+            block_tables.stride(0),
+            block_tables.stride(1),
+            out.stride(0),
+            out.stride(1),
+            out.stride(2),
+            HEAD_DIM=head_dim,
+            GROUP_SIZE=group_size,
+            BLOCK_SIZE=block_size,
+            SM_SCALE=float(sm_scale),
+            **launch_kwargs,
+        )
     return out

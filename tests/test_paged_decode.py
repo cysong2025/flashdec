@@ -244,7 +244,6 @@ def test_paged_decode_attention_into_supports_strided_nhd_cache_view(dtype):
         block_tables,
         seq_lens,
     )
-
     assert returned is out
     _assert_close(out, expected)
 
@@ -277,7 +276,6 @@ def test_paged_decode_attention_dynamic_loop_ignores_unused_invalid_blocks():
         block_tables,
         seq_lens,
     )
-
     _assert_close(actual, expected)
 
 
@@ -338,6 +336,108 @@ def test_paged_decode_attention_split_kv_matches_reference(num_splits, dtype):
     )
 
     _assert_close(out, expected)
+
+
+@pytest.mark.parametrize("num_splits", [1, 8])
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize("prior_lengths", [(0, 17), (256, 193)])
+def test_paged_decode_attention_fuses_current_kv_append(
+    prior_lengths, num_splits, dtype
+):
+    request_ids = [111, 222]
+    q, k_cache, v_cache, _block_tables, _seq_lens, cache = _make_paged_inputs(
+        request_ids=request_ids,
+        target_seq_lens=list(prior_lengths),
+        num_q_heads=16,
+        num_kv_heads=2,
+        head_dim=128,
+        block_size=16,
+        dtype=dtype,
+    )
+    append_k = torch.randn((2, 2, 128), device="cuda", dtype=dtype)
+    append_v = torch.randn_like(append_k)
+    cache.append(0, request_ids, append_k, append_v)
+    block_tables = cache.block_tables(request_ids)
+    seq_lens = cache.seq_lens_tensor(request_ids)
+    slots = []
+    for request_id in request_ids:
+        state = cache.request_state(request_id)
+        token_offset = (state["seq_len"] - 1) % cache.block_size
+        block_id = cache.request_block_ids(request_id)[-1]
+        slots.append(block_id * cache.block_size + token_offset)
+
+    expected = paged_decode_attention_ref(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+    )
+    expected_k_cache = k_cache.clone()
+    expected_v_cache = v_cache.clone()
+    for row, request_id in enumerate(request_ids):
+        state = cache.request_state(request_id)
+        token_offset = (state["seq_len"] - 1) % cache.block_size
+        block_id = cache.request_block_ids(request_id)[-1]
+        k_cache[block_id, :, token_offset].zero_()
+        v_cache[block_id, :, token_offset].zero_()
+
+    workspace = (
+        torch.empty((2, 16, 16, 128), device="cuda", dtype=torch.float32),
+        torch.empty((2, 16, 16), device="cuda", dtype=torch.float32),
+        torch.empty((2, 16, 16), device="cuda", dtype=torch.float32),
+    )
+    out = torch.empty_like(q)
+    paged_decode_attention_into(
+        q,
+        k_cache,
+        v_cache,
+        block_tables,
+        seq_lens,
+        out,
+        block_size=16,
+        split_kv_workspace=workspace,
+        num_splits=num_splits,
+        append_k=append_k,
+        append_v=append_v,
+        slot_mapping=torch.tensor(slots, device="cuda", dtype=torch.int64),
+    )
+
+    _assert_close(out, expected)
+    torch.testing.assert_close(k_cache, expected_k_cache)
+    torch.testing.assert_close(v_cache, expected_v_cache)
+    for row, request_id in enumerate(request_ids):
+        state = cache.request_state(request_id)
+        token_offset = (state["seq_len"] - 1) % cache.block_size
+        block_id = cache.request_block_ids(request_id)[-1]
+        torch.testing.assert_close(
+            k_cache[block_id, :, token_offset], append_k[row]
+        )
+        torch.testing.assert_close(
+            v_cache[block_id, :, token_offset], append_v[row]
+        )
+
+
+def test_paged_decode_attention_rejects_partial_fused_append_arguments():
+    q, k_cache, v_cache, block_tables, seq_lens, _ = _make_paged_inputs(
+        request_ids=[333],
+        target_seq_lens=[16],
+        num_q_heads=8,
+        num_kv_heads=1,
+        head_dim=128,
+        block_size=16,
+        dtype=torch.float16,
+    )
+    with pytest.raises(ValueError, match="must be provided together"):
+        paged_decode_attention_into(
+            q,
+            k_cache,
+            v_cache,
+            block_tables,
+            seq_lens,
+            torch.empty_like(q),
+            append_k=torch.empty((1, 1, 128), device="cuda", dtype=torch.float16),
+        )
 
 
 def test_paged_decode_attention_rejects_unsupported_head_dim():

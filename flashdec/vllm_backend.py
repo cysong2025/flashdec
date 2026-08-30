@@ -26,6 +26,10 @@ from .kernels.paged_decode import paged_decode_attention_into
 class FlashDecAttentionBackend(TritonAttentionBackend):
     """vLLM backend that substitutes FlashDec for eligible decode batches."""
 
+    # Eligible decode writes the current K/V token from the attention kernel.
+    # Unsupported paths explicitly invoke Triton's update before delegating.
+    forward_includes_kv_cache_update = True
+
     @staticmethod
     def get_name() -> str:
         # vLLM 0.25.1 maps the selected class back through the registry using
@@ -74,15 +78,18 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
             return False
         if kv_cache.dtype != query.dtype or kv_cache.ndim != 5:
             return False
-        if self.head_size not in (64, 128):
+        if self.head_size != 128:
             return False
-        if kv_cache.shape[2] not in (8, 16, 32):
+        if kv_cache.shape[2] not in (16, 32):
             return False
         if self.alibi_slopes is not None or self.sinks is not None:
             return False
         if self.sliding_window != (-1, -1) or self.logits_soft_cap != 0:
             return False
-        return self.num_heads % self.num_kv_heads == 0
+        return (
+            self.num_heads % self.num_kv_heads == 0
+            and self.num_heads // self.num_kv_heads in (4, 8, 16)
+        )
 
     def forward(
         self,
@@ -96,13 +103,26 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
         output_scale: torch.Tensor | None = None,
         output_block_scale: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if not self._supports_flashdec_decode(
+        owns_kv = (
+            getattr(layer, "kv_sharing_target_layer_name", None) is None
+            and key is not None
+            and value is not None
+        )
+        if not owns_kv or not self._supports_flashdec_decode(
             query,
             kv_cache,
             attn_metadata,
             output_scale,
             output_block_scale,
         ):
+            if attn_metadata is not None and owns_kv:
+                self.do_kv_cache_update(
+                    layer,
+                    key,
+                    value,
+                    kv_cache,
+                    attn_metadata.slot_mapping,
+                )
             return super().forward(
                 layer,
                 query,
@@ -121,6 +141,12 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
         query_3d = query[:num_reqs].view(num_reqs, self.num_heads, self.head_size)
         output_3d = output[:num_reqs].view(
             num_reqs, self.num_heads, self.head_size
+        )
+        key_3d = key[:num_reqs].view(
+            num_reqs, self.num_kv_heads, self.head_size
+        )
+        value_3d = value[:num_reqs].view(
+            num_reqs, self.num_kv_heads, self.head_size
         )
 
         # vLLM's logical NHD cache halves are [block, token, kv_head, dim].
@@ -157,5 +183,8 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
                 attn_metadata.softmax_segm_expsum,
             ),
             num_splits=num_splits,
+            append_k=key_3d,
+            append_v=value_3d,
+            slot_mapping=attn_metadata.slot_mapping,
         )
         return output
