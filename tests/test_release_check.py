@@ -16,6 +16,18 @@ from benchmarks.run_flashinfer_baseline import (
     EXPECTED_TORCH_VERSION,
     EXPECTED_TRITON_VERSION,
 )
+from benchmarks.run_vllm_model_latency import (
+    SCHEMA_VERSION as MODEL_LATENCY_CSV_SCHEMA_VERSION,
+    TIMING_SCOPE as MODEL_LATENCY_TIMING_SCOPE,
+)
+from benchmarks.run_vllm_model_latency_worker import (
+    RESULT_SCHEMA_VERSION as MODEL_LATENCY_WORKER_SCHEMA_VERSION,
+    TIMING_SCOPE as MODEL_LATENCY_WORKER_TIMING_SCOPE,
+)
+from benchmarks.summarize_vllm_model_latency import (
+    FORMAL_PRIME_ITERS,
+    TIMING_SCOPE as MODEL_LATENCY_SUMMARY_TIMING_SCOPE,
+)
 from scripts.check_docs import PUBLIC_ENTRY_FILES
 from scripts.check_release import (
     PUBLIC_RELEASE_REQUIRED_PATHS,
@@ -232,6 +244,18 @@ def test_release_version_readers_support_pyproject_and_package(tmp_path):
     assert _read_constraint_pins(root / "constraints/flashinfer-cu128.txt") == (
         FLASHINFER_CONSTRAINT_PINS
     )
+
+
+def test_release_model_latency_protocol_requires_explicit_jit_prime():
+    assert MODEL_LATENCY_WORKER_SCHEMA_VERSION == 2
+    assert MODEL_LATENCY_CSV_SCHEMA_VERSION == 4
+    assert FORMAL_PRIME_ITERS == 1
+    assert (
+        MODEL_LATENCY_TIMING_SCOPE
+        == MODEL_LATENCY_WORKER_TIMING_SCOPE
+        == MODEL_LATENCY_SUMMARY_TIMING_SCOPE
+    )
+    assert "full-length JIT-prime and warmup calls" in MODEL_LATENCY_TIMING_SCOPE
 
 
 def test_project_license_reader_requires_pep639_spdx_string(tmp_path):

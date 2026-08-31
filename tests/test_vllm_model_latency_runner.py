@@ -25,6 +25,59 @@ RUNNER = _load(RUNNER_SCRIPT, "vllm_model_latency_runner_test")
 WORKER = _load(WORKER_SCRIPT, "vllm_model_latency_worker_test")
 
 
+def test_parent_defaults_to_one_full_length_jit_prime(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(RUNNER_SCRIPT),
+            "--model",
+            str(tmp_path / "model"),
+            "--output",
+            str(tmp_path / "results.csv"),
+        ],
+    )
+
+    assert RUNNER._parse_args().prime_iters == 1
+
+
+def test_worker_requires_explicit_jit_prime_count(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(WORKER_SCRIPT),
+            "--backend",
+            "CUSTOM",
+            "--model",
+            str(tmp_path / "model"),
+            "--dataset",
+            str(tmp_path / "dataset.json"),
+            "--dataset-sha256",
+            "a" * 64,
+            "--output",
+            str(tmp_path / "result.json"),
+            "--warmup-iters",
+            "1",
+            "--num-iters",
+            "1",
+            "--sampling-seed",
+            "23",
+            "--gpu-memory-utilization",
+            "0.85",
+            "--max-model-len",
+            "12288",
+            "--max-num-seqs",
+            "8",
+            "--max-num-batched-tokens",
+            "2048",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        WORKER._parse_args()
+
+
 def test_token_id_dataset_is_deterministic_and_excludes_special_ids():
     case = RUNNER.Case("audit_b2_i4_o3", 2, 4, 3)
 
@@ -102,6 +155,7 @@ def test_runner_invokes_repository_worker_with_dataset_identity(tmp_path):
         dataset=dataset,
         dataset_sha256=digest,
         backend="CUSTOM",
+        prime_iters=1,
         warmup_iters=2,
         num_iters=5,
         sampling_seed=23,
@@ -117,6 +171,7 @@ def test_runner_invokes_repository_worker_with_dataset_identity(tmp_path):
     assert "latency" not in command
     assert command[command.index("--dataset") + 1] == str(dataset)
     assert command[command.index("--dataset-sha256") + 1] == digest
+    assert command[command.index("--prime-iters") + 1] == "1"
     assert command[command.index("--sampling-seed") + 1] == "23"
 
 
@@ -163,12 +218,21 @@ def test_worker_percentile_uses_linear_interpolation():
     assert WORKER._percentile([1.0, 2.0, 3.0, 4.0], 90.0) == pytest.approx(3.7)
 
 
-def test_runner_rejects_inconsistent_worker_output_hashes(tmp_path):
+def _valid_worker_result(tmp_path, *, num_iters=1):
     case = RUNNER.Case("audit_b1_i2_o2", 1, 2, 2)
     dataset = tmp_path / "dataset.json"
     digest = "a" * 64
+    output_token_ids = [[1, 2]]
+    output_sha256 = hashlib.sha256(
+        json.dumps(
+            output_token_ids,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    latencies = [float(value) for value in range(1, num_iters + 1)]
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "backend_arg": "CUSTOM",
         "case": case.name,
         "batch_size": case.batch_size,
@@ -187,32 +251,68 @@ def test_runner_rejects_inconsistent_worker_output_hashes(tmp_path):
         "sampling_max_tokens": case.output_len,
         "sampling_ignore_eos": True,
         "sampling_detokenize": False,
+        "prime_iters": 1,
         "warmup_iters": 1,
-        "num_iters": 1,
+        "num_iters": num_iters,
         "timing_scope": RUNNER.TIMING_SCOPE,
         "vllm_engine_multiprocessing": True,
         "accuracy_prefix_len": RUNNER.ACCURACY_PREFIX_LEN,
-        "latencies_s": [1.0],
-        "avg_latency_s": 1.0,
-        "percentiles_s": {"50": 1.0, "90": 1.0},
-        "warmup_output_sha256": ["b" * 64],
-        "measured_output_sha256": ["c" * 64],
-        "output_token_ids_sha256": "c" * 64,
-        "output_token_ids": [[1, 2]],
+        "latencies_s": latencies,
+        "avg_latency_s": sum(latencies) / len(latencies),
+        "percentiles_s": {
+            "50": WORKER._percentile(latencies, 50.0),
+            "90": WORKER._percentile(latencies, 90.0),
+        },
+        "prime_output_sha256": ["f" * 64],
+        "warmup_output_sha256": [output_sha256],
+        "measured_output_sha256": [output_sha256] * num_iters,
+        "output_token_ids_sha256": output_sha256,
+        "output_token_ids": output_token_ids,
     }
+    kwargs = {
+        "case": case,
+        "backend_arg": "CUSTOM",
+        "dataset_path": dataset,
+        "dataset_sha256": digest,
+        "dataset_seed": 17,
+        "sampling_seed": 23,
+        "prime_iters": 1,
+        "warmup_iters": 1,
+        "num_iters": num_iters,
+    }
+    return result, kwargs, output_sha256
+
+
+def test_runner_rejects_inconsistent_worker_output_hashes(tmp_path):
+    result, kwargs, _output_sha256 = _valid_worker_result(tmp_path)
+    result["warmup_output_sha256"] = ["b" * 64]
 
     with pytest.raises(ValueError, match="outputs differ"):
-        RUNNER._validate_worker_result(
-            result,
-            case=case,
-            backend_arg="CUSTOM",
-            dataset_path=dataset,
-            dataset_sha256=digest,
-            dataset_seed=17,
-            sampling_seed=23,
-            warmup_iters=1,
-            num_iters=1,
-        )
+        RUNNER._validate_worker_result(result, **kwargs)
+
+
+def test_runner_accepts_different_prime_then_requires_stable_timed_output(tmp_path):
+    result, kwargs, output_sha256 = _valid_worker_result(tmp_path, num_iters=2)
+
+    validated = RUNNER._validate_worker_result(result, **kwargs)
+
+    assert validated[4] == output_sha256
+
+    result["measured_output_sha256"][1] = "e" * 64
+    with pytest.raises(ValueError, match="outputs differ"):
+        RUNNER._validate_worker_result(result, **kwargs)
+
+
+def test_runner_strictly_validates_jit_prime_hashes(tmp_path):
+    result, kwargs, _output_sha256 = _valid_worker_result(tmp_path)
+    result["prime_output_sha256"] = ["not-a-sha256"]
+
+    with pytest.raises(ValueError, match="invalid output SHA-256"):
+        RUNNER._validate_worker_result(result, **kwargs)
+
+    result["prime_output_sha256"] = []
+    with pytest.raises(ValueError, match="invalid JIT-prime output hashes"):
+        RUNNER._validate_worker_result(result, **kwargs)
 
 
 def test_cross_backend_parity_requires_first_custom_decode_decision():

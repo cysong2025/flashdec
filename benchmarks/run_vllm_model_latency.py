@@ -25,7 +25,7 @@ from flashdec.benchmark import (
 )
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DATASET_SCHEMA_VERSION = 2
 DATASET_GENERATION_PROTOCOL = (
     "sha256-indexed-u64be-mod-model-tokenizer-nonspecial-v2"
@@ -38,8 +38,9 @@ DATASET_GENERATION_DESCRIPTION = (
     "the model or tokenizer configuration, then maps to that ranked ID."
 )
 TIMING_SCOPE = (
-    "wall-clock blocking LLM.generate call after full-length warmup; "
-    "model load, engine startup, JIT/graph capture, and result hashing excluded"
+    "wall-clock blocking LLM.generate call only; full-length JIT-prime and "
+    "warmup calls, model load, engine startup, JIT/graph capture, and result "
+    "hashing excluded"
 )
 MODEL_ID = "Qwen2.5-3B-Instruct"
 ACCURACY_PREFIX_LEN = 2
@@ -245,6 +246,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--trials", type=int, default=3)
+    parser.add_argument("--prime-iters", type=int, default=1)
     parser.add_argument("--warmup-iters", type=int, default=3)
     parser.add_argument("--num-iters", type=int, default=5)
     parser.add_argument("--dataset-seed", type=int, default=20260830)
@@ -289,8 +291,15 @@ def _validate_environment(
 ) -> tuple[Path, Path, Path, Path]:
     if args.output.exists():
         raise FileExistsError(f"refusing to overwrite {args.output}")
-    if args.trials <= 0 or args.warmup_iters < 0 or args.num_iters <= 0:
-        raise ValueError("trials/num-iters must be positive and warmup non-negative")
+    if (
+        args.trials <= 0
+        or args.prime_iters < 0
+        or args.warmup_iters < 0
+        or args.num_iters <= 0
+    ):
+        raise ValueError(
+            "trials/num-iters must be positive and prime/warmup non-negative"
+        )
     if min(
         args.max_model_len,
         args.max_num_seqs,
@@ -339,6 +348,7 @@ def _command(
     dataset: Path,
     dataset_sha256: str,
     backend: str,
+    prime_iters: int,
     warmup_iters: int,
     num_iters: int,
     sampling_seed: int,
@@ -359,6 +369,8 @@ def _command(
         str(dataset),
         "--dataset-sha256",
         dataset_sha256,
+        "--prime-iters",
+        str(prime_iters),
         "--warmup-iters",
         str(warmup_iters),
         "--num-iters",
@@ -387,6 +399,7 @@ def _validate_worker_result(
     dataset_sha256: str,
     dataset_seed: int,
     sampling_seed: int,
+    prime_iters: int,
     warmup_iters: int,
     num_iters: int,
     expected_environment: dict[str, str] | None = None,
@@ -399,7 +412,7 @@ def _validate_worker_result(
     tuple[tuple[int, ...], ...],
 ]:
     expected = {
-        "schema_version": 1,
+        "schema_version": 2,
         "backend_arg": backend_arg,
         "case": case.name,
         "batch_size": case.batch_size,
@@ -418,6 +431,7 @@ def _validate_worker_result(
         "sampling_max_tokens": case.output_len,
         "sampling_ignore_eos": True,
         "sampling_detokenize": False,
+        "prime_iters": prime_iters,
         "warmup_iters": warmup_iters,
         "num_iters": num_iters,
         "timing_scope": TIMING_SCOPE,
@@ -442,13 +456,16 @@ def _validate_worker_result(
         not math.isfinite(value) or value <= 0 for value in latencies
     ):
         raise ValueError("worker returned invalid latency samples")
+    prime_hashes = result.get("prime_output_sha256")
     warmup_hashes = result.get("warmup_output_sha256")
     measured_hashes = result.get("measured_output_sha256")
+    if not isinstance(prime_hashes, list) or len(prime_hashes) != prime_iters:
+        raise ValueError("worker returned invalid JIT-prime output hashes")
     if not isinstance(warmup_hashes, list) or len(warmup_hashes) != warmup_iters:
         raise ValueError("worker returned invalid warmup output hashes")
     if not isinstance(measured_hashes, list) or len(measured_hashes) != num_iters:
         raise ValueError("worker returned invalid measured output hashes")
-    for digest in [*warmup_hashes, *measured_hashes]:
+    for digest in [*prime_hashes, *warmup_hashes, *measured_hashes]:
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise ValueError("worker returned an invalid output SHA-256")
     output_sha256 = result.get("output_token_ids_sha256")
@@ -658,6 +675,7 @@ def main() -> None:
         "flashdec_num_splits": os.environ.get(
             "FLASHDEC_VLLM_NUM_SPLITS", "auto"
         ),
+        "prime_iters": args.prime_iters,
         "warmup_iters": args.warmup_iters,
         "num_iters": args.num_iters,
         "dataset_seed": args.dataset_seed,
@@ -697,6 +715,7 @@ def main() -> None:
                     dataset=dataset_path.resolve(),
                     dataset_sha256=dataset_sha256,
                     backend=backend_arg,
+                    prime_iters=args.prime_iters,
                     warmup_iters=args.warmup_iters,
                     num_iters=args.num_iters,
                     sampling_seed=args.sampling_seed,
@@ -742,6 +761,7 @@ def main() -> None:
                     dataset_sha256=dataset_sha256,
                     dataset_seed=args.dataset_seed,
                     sampling_seed=args.sampling_seed,
+                    prime_iters=args.prime_iters,
                     warmup_iters=args.warmup_iters,
                     num_iters=args.num_iters,
                     expected_environment={

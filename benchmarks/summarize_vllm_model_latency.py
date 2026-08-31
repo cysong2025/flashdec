@@ -26,6 +26,7 @@ FORMAL_CASE_SHAPES = {
     TARGET_CASE: (8, 8192, 4096),
 }
 FORMAL_TRIALS = {1, 2, 3, 4}
+FORMAL_PRIME_ITERS = 1
 FORMAL_WARMUP_ITERS = 1
 FORMAL_NUM_ITERS = 1
 ACCURACY_PREFIX_LEN = 2
@@ -36,8 +37,9 @@ DATASET_GENERATION_PROTOCOL = (
     "sha256-indexed-u64be-mod-model-tokenizer-nonspecial-v2"
 )
 TIMING_SCOPE = (
-    "wall-clock blocking LLM.generate call after full-length warmup; "
-    "model load, engine startup, JIT/graph capture, and result hashing excluded"
+    "wall-clock blocking LLM.generate call only; full-length JIT-prime and "
+    "warmup calls, model load, engine startup, JIT/graph capture, and result "
+    "hashing excluded"
 )
 
 
@@ -70,6 +72,7 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         "compilation_mode",
         "vllm_cache_root",
         "flashdec_num_splits",
+        "prime_iters",
         "warmup_iters",
         "num_iters",
         "dataset_seed",
@@ -143,6 +146,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
         "compilation_mode",
         "vllm_cache_root",
         "flashdec_num_splits",
+        "prime_iters",
         "warmup_iters",
         "num_iters",
         "dataset_seed",
@@ -165,7 +169,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
     for row in rows:
         if any(row.get(field) != first.get(field) for field in invariant_fields):
             raise ValueError("environment/model/protocol invariants differ across rows")
-        if row["schema_version"] != "3":
+        if row["schema_version"] != "4":
             raise ValueError("unsupported schema_version")
         validate_vllm_cache_root(row["vllm_cache_root"], row["git_commit"])
         if row["git_worktree_clean"] != "True":
@@ -190,7 +194,8 @@ def summarize(input_path: Path, output_path: Path) -> str:
         ):
             raise ValueError("capacity/compilation settings differ from formal protocol")
         if (
-            row["warmup_iters"] != str(FORMAL_WARMUP_ITERS)
+            row["prime_iters"] != str(FORMAL_PRIME_ITERS)
+            or row["warmup_iters"] != str(FORMAL_WARMUP_ITERS)
             or row["num_iters"] != str(FORMAL_NUM_ITERS)
             or row["dataset_seed"] != "20260830"
             or row["sampling_seed"] != "20260830"
@@ -452,7 +457,8 @@ def summarize(input_path: Path, output_path: Path) -> str:
         ),
         f"- Commit-scoped vLLM cache: `{first['vllm_cache_root']}`.",
         (
-            f"- Per process: {first['warmup_iters']} warmup iterations and "
+            f"- Per process: {first['prime_iters']} full-length JIT-prime, "
+            f"{first['warmup_iters']} warmup, and "
             f"{first['num_iters']} measured iterations."
         ),
         f"- Git commit: `{first['git_commit']}`; clean at start: True.",

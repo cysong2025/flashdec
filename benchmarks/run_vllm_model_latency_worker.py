@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Measure one vLLM backend with a pre-generated token-ID dataset.
 
-This worker intentionally owns model construction and warmup so the parent runner
-can launch every backend in a fresh process while keeping model load and JIT out
-of the measured ``LLM.generate`` samples.
+This worker intentionally owns model construction, JIT priming, and warmup so the
+parent runner can launch every backend in a fresh process while keeping model
+load and compilation out of the measured ``LLM.generate`` samples.
 """
 
 from __future__ import annotations
@@ -24,11 +24,12 @@ DATASET_SCHEMA_VERSION = 2
 DATASET_GENERATION_PROTOCOL = (
     "sha256-indexed-u64be-mod-model-tokenizer-nonspecial-v2"
 )
-RESULT_SCHEMA_VERSION = 1
+RESULT_SCHEMA_VERSION = 2
 ACCURACY_PREFIX_LEN = 2
 TIMING_SCOPE = (
-    "wall-clock blocking LLM.generate call after full-length warmup; "
-    "model load, engine startup, JIT/graph capture, and result hashing excluded"
+    "wall-clock blocking LLM.generate call only; full-length JIT-prime and "
+    "warmup calls, model load, engine startup, JIT/graph capture, and result "
+    "hashing excluded"
 )
 
 
@@ -166,6 +167,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--dataset-sha256", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--prime-iters", type=int, required=True)
     parser.add_argument("--warmup-iters", type=int, required=True)
     parser.add_argument("--num-iters", type=int, required=True)
     parser.add_argument("--sampling-seed", type=int, required=True)
@@ -180,8 +182,10 @@ def main() -> None:
     args = _parse_args()
     if args.output.exists():
         raise FileExistsError(f"refusing to overwrite {args.output}")
-    if args.warmup_iters < 0 or args.num_iters <= 0:
-        raise ValueError("num-iters must be positive and warmup-iters non-negative")
+    if args.prime_iters < 0 or args.warmup_iters < 0 or args.num_iters <= 0:
+        raise ValueError(
+            "num-iters must be positive and prime/warmup-iters non-negative"
+        )
     if args.sampling_seed < 0 or args.sampling_seed >= 2**64:
         raise ValueError("sampling-seed must fit an unsigned 64-bit integer")
     if os.environ.get("VLLM_USE_FLASHINFER_SAMPLER") != "0":
@@ -238,6 +242,20 @@ def main() -> None:
         for prompt in dataset["prompt_token_ids"]
     ]
 
+    # The first full-length call is an explicit JIT-prime phase. Some vLLM
+    # kernels are compiled lazily only after the graph reaches its longest
+    # decode shape, so a shorter prefill-time compile cannot replace this call.
+    # Its output is retained for audit but is deliberately not part of the
+    # within-process determinism gate below: compilation may change the first
+    # call, while every subsequent warmup and measured call must be identical.
+    prime_output_sha256 = []
+    for _ in range(args.prime_iters):
+        outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
+        token_ids = _output_token_ids(
+            outputs, dataset["batch_size"], dataset["output_len"]
+        )
+        prime_output_sha256.append(_token_ids_sha256(token_ids))
+
     warmup_output_sha256 = []
     for _ in range(args.warmup_iters):
         outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
@@ -286,6 +304,7 @@ def main() -> None:
         "sampling_max_tokens": dataset["output_len"],
         "sampling_ignore_eos": True,
         "sampling_detokenize": False,
+        "prime_iters": args.prime_iters,
         "warmup_iters": args.warmup_iters,
         "num_iters": args.num_iters,
         "timing_scope": TIMING_SCOPE,
@@ -297,6 +316,7 @@ def main() -> None:
             "50": _percentile(latencies_s, 50.0),
             "90": _percentile(latencies_s, 90.0),
         },
+        "prime_output_sha256": prime_output_sha256,
         "warmup_output_sha256": warmup_output_sha256,
         "measured_output_sha256": measured_output_sha256,
         "output_token_ids_sha256": output_token_ids_sha256,
