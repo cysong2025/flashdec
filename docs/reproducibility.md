@@ -723,6 +723,30 @@ marker 只证明对应 decode CUDA Graph 在 capture 阶段包含成功的 Flash
 
 canonical Markdown 见 [R8 长上下文模型摘要](../benchmarks/results/vllm_qwen_long_context_model_latency_summary.md)。这里的端到端范围是离线固定 B8 的 blocking `LLM.generate`，包含 model execution、scheduler、KV cache、sampling 和 Python API，排除 startup/model load、full-length JIT-prime 和 warmup。它不等同于 online serving，不能用于声称 TTFT、TPOT、并发请求吞吐或对 vLLM 默认/最快 backend 的收益；外部 baseline 明确固定为 `TRITON_ATTN`。
 
+### 2026-08-31 R8 发布回归
+
+证据发布提交 `f4caf29edcff3312151bc7104cb4f50a9a30c693` 在同一 RTX 5070 上完成两套环境闭环：
+
+- cu128 核心环境：PyTorch `2.11.0+cu128`、PyTorch CUDA 12.8、Triton `3.6.0`，全仓库为 `600 passed, 1 skipped, 105 subtests passed in 247.68s`；唯一 skip 是该环境未安装 vLLM。
+- vLLM/cu130 环境：PyTorch `2.11.0+cu130`、PyTorch CUDA 13.0、Triton `3.6.0`、vLLM `0.25.1`，`tests/test_vllm_*.py`、paged-decode 和 release tests 合计 `245 passed, 5 subtests passed in 9.50s`；14 条 warning 均来自 vLLM 依赖触发的 `torch.jit.script_method` deprecation。
+- 两套环境 `python -m pip check` 都为 `No broken requirements found`；两次 `--require-clean --require-evidence --require-public` release check 都在 clean commit `f4caf29` 上返回 `PASS`。
+
+已有 cu128 环境的 setuptools 为 `70.2.0`，不识别项目当前的 PEP 639 SPDX license string；因此一次 `--no-build-isolation` editable-install probe 在 metadata 阶段按预期失败，核心回归随后用 `PYTHONPATH=/home/<user>/projects/flashdec` 明确加载当前 checkout。vLLM 环境使用 setuptools `80.10.2`，其 editable package location 已指向同一 checkout。这个流程验证当前源码，不构成 fresh-environment install gate；后者继续保持暂停状态，也没有为通过回归而重解 Torch/CUDA dependencies。
+
+原始日志保留在仓库外 `/home/<user>/flashdec_results/r8_f4caf29_release_validation_20260831/`：
+
+| artifact | SHA-256 |
+| --- | --- |
+| `full_cu128.log` | `548ce78b7209ffdc61038792c81841a6028bf9dcde7c823f9f1714c8e19705e0` |
+| `focused_vllm_cu130.log` | `b41f3da49845f7a2d2c479e8d0f1407ff6f6aacb3fa02a86a8441d8b57378ebc` |
+| `env_cu128.log` | `b4a242140c22af5040b5ad7771d1ed47856332bb737095828b0530016e204111` |
+| `env_vllm_cu130.log` | `99386ef3ebaa17e6a6c79723c87056272a897ed5e8793adfe965478de01acd3e` |
+| `install_cu128.log` | `adae993fca2c28719086847b71d0d9f0ba435fe9bf6a11913563e3bd7d46a6e7` |
+| `setuptools_cu128.log` | `bb6e010bdf99a21e5fc7d07169eb8292cf31f13f8438f7abde55388c97efa371` |
+| `package_vllm_cu130.log` | `e1f65b25b70f2428e7117fa5cb5b93cd360c0841e4443b798340ea648b471119` |
+| `pip_check_cu128.log` / `pip_check_vllm_cu130.log` | `9261363b733079a641c2e4cc9bc46ffa1d8336945a87f807b6cf68847dbc9b09` |
+| `release_check_cu128.log` / `release_check_vllm_cu130.log` | `c37301cd7b9c771e12fc2f57cb1ca0a73ed6d9e270ade04f1ac4a2e095930c09` |
+
 ## 结果文件与提交规则
 
 默认忽略：

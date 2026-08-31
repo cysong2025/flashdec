@@ -88,6 +88,7 @@ Scheduler 产生携带原始 K/V-free metadata snapshot 与 config 的容量决�
 - 外部基线证据提交 `d7d4feb` 的 GPU full regression 为 `453 passed, 94 subtests passed`；GitHub Actions 运行不依赖 GPU 的仓库检查子集。测试计数绑定具体 commit 和环境，不作为滚动徽章。
 - R6-A hardening 提交 `87d8a34` 在同一 RTX 5070/CUDA 12.8 开发环境完成当前代码回归：focused 为 `254 passed, 20 subtests passed`，full 为 `501 passed, 100 subtests passed`，clean-tree public release check 为 `PASS`。这组结果验证事务回收与 scheduler decision 边界，不替代绑定历史提交的性能矩阵。
 - R7 证据提交 `61836b6` 的 vLLM/cu130 专项为 `21 passed`；cu128 全仓库为 `531 passed, 1 skipped, 100 subtests passed`，唯一 skip 是 cu128 环境未安装 vLLM。两套环境 `pip check` 与 clean-tree public release gate 均为 `PASS`。测试计数只证明对应提交的 correctness，不改变上述性能门槛结果。
+- R8 证据发布提交 `f4caf29` 的 cu128 全仓库回归为 `600 passed, 1 skipped, 105 subtests passed`，vLLM/cu130 专项为 `245 passed, 5 subtests passed`；两套环境的 `pip check` 与 clean-tree public/evidence release gate 均为 `PASS`。唯一 skip 仍由 vLLM 专项实际覆盖，完整日志哈希见[复现指南](docs/reproducibility.md#2026-08-31-r8-发布回归)。
 
 图中数据由受版本控制的 Markdown summaries 派生。来源、trial 范围、ratio 方向和负结果见[结果索引](benchmarks/results/README.md)与[数据快照](benchmarks/results/public_results_snapshot.json)。
 
