@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,52 @@ SPEC = importlib.util.spec_from_file_location("vllm_model_latency", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
+
+
+def _attestation_fields(case, trial, input_len, dataset_sha256, backend):
+    if backend == "vllm_triton_attn":
+        return {field: "" for field in MODULE.SPLIT_ATTESTATION_CSV_FIELDS}
+    nonce = hashlib.sha256(f"nonce:{case}:{trial}".encode("utf-8")).hexdigest()
+    payload = {
+        "schema_version": 1,
+        "nonce": nonce,
+        "engine_pid": 1000 + trial,
+        "backend": "CUSTOM",
+        "case": case,
+        "trial": trial,
+        "dataset_sha256": dataset_sha256,
+        "git_commit": "abc1234",
+        "max_seq_len": input_len,
+        "logical_blocks": (input_len + 15) // 16,
+        "num_reqs": 8,
+        "num_splits": 8,
+        "num_q_heads": 16,
+        "num_kv_heads": 2,
+        "head_dim": 128,
+        "block_size": 16,
+        "query_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat16",
+        "cuda_graph_capture": trial % 2 == 0,
+    }
+    encoded = MODULE.canonical_attestation_bytes(payload)
+    values = {
+        "split_attestation_json": encoded.decode("utf-8").removesuffix("\n"),
+        "split_attestation_path": f"/raw/attest/{case}-{trial}.json",
+        "split_attestation_sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+    for field, value in payload.items():
+        values[f"split_attestation_{field}"] = value
+    return values
+
+
+def _rewrite_attestation(row, **changes):
+    payload = json.loads(row["split_attestation_json"])
+    payload.update(changes)
+    encoded = MODULE.canonical_attestation_bytes(payload)
+    row["split_attestation_json"] = encoded.decode("utf-8").removesuffix("\n")
+    row["split_attestation_sha256"] = hashlib.sha256(encoded).hexdigest()
+    for field, value in payload.items():
+        row[f"split_attestation_{field}"] = str(value)
 
 
 def _write_fixture(
@@ -83,6 +130,7 @@ def _write_fixture(
         "raw_json",
         "log",
         "command",
+        *MODULE.SPLIT_ATTESTATION_CSV_FIELDS,
     ]
     cases = {
         "qwen_b8_i512_o2": guardrail_ratio,
@@ -103,7 +151,7 @@ def _write_fixture(
             ):
                 rows.append(
                     {
-                        "schema_version": 4,
+                        "schema_version": 5,
                         "started_at": "2026-08-30T00:00:00+08:00",
                         "git_commit": "abc1234",
                         "git_worktree_clean": True,
@@ -184,6 +232,13 @@ def _write_fixture(
                         "raw_json": f"/raw/{case}-{trial}-{backend}.json",
                         "log": f"/raw/{case}-{trial}-{backend}.log",
                         "command": "python worker.py",
+                        **_attestation_fields(
+                            case,
+                            trial,
+                            input_len,
+                            dataset_sha256,
+                            backend,
+                        ),
                     }
                 )
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -213,6 +268,9 @@ def test_summary_accepts_target_win_and_guardrail(tmp_path):
         "second generated token covers the first eligible FlashDec split decode"
         in text
     )
+    assert "every CUSTOM worker supplied a unique, canonical" in text
+    assert "2/8 CUSTOM workers" not in text
+    assert "4/8 CUSTOM workers" in text
     assert hashlib.sha256(b"qwen_b8_i8192_o4096").hexdigest() in text
     assert output.read_text(encoding="utf-8") == text
 
@@ -230,6 +288,67 @@ def test_summary_rejects_cache_root_from_another_commit(tmp_path):
         writer.writerows(rows)
 
     with pytest.raises(ValueError, match="must contain the Git commit"):
+        MODULE.summarize(source, output)
+
+
+def test_summary_rejects_missing_flashdec_split_attestation(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    custom = next(row for row in rows if row["backend"] == "flashdec")
+    custom["split_attestation_json"] = ""
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="missing split attestation"):
+        MODULE.summarize(source, output)
+
+
+def test_summary_rejects_forged_or_wrong_split_observation(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    custom = next(row for row in rows if row["backend"] == "flashdec")
+    _rewrite_attestation(custom, num_splits=1)
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="multi-split launch"):
+        MODULE.summarize(source, output)
+
+
+def test_summary_rejects_duplicate_split_nonce_and_native_claim(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    custom_rows = [row for row in rows if row["backend"] == "flashdec"]
+    duplicate_nonce = custom_rows[0]["split_attestation_nonce"]
+    _rewrite_attestation(custom_rows[1], nonce=duplicate_nonce)
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="nonces must be unique"):
+        MODULE.summarize(source, output)
+
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    native = next(row for row in rows if row["backend"] == "vllm_triton_attn")
+    native["split_attestation_nonce"] = "f" * 64
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="native row must not contain"):
         MODULE.summarize(source, output)
 
 
@@ -339,6 +458,7 @@ def test_summary_rejects_different_dataset_for_paired_backend(tmp_path):
             and row["trial"] == "2"
         ):
             row["dataset_sha256"] = "f" * 64
+            _rewrite_attestation(row, dataset_sha256="f" * 64)
     with source.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
         writer.writeheader()
@@ -402,7 +522,7 @@ def test_summary_rejects_divergence_before_first_custom_decode_decision(tmp_path
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("schema_version", "3", "unsupported schema_version"),
+        ("schema_version", "4", "unsupported schema_version"),
         ("vllm_version", "9.9.9", "vLLM 0.25.1"),
         ("prime_iters", "2", "trial strength"),
         ("warmup_iters", "0", "trial strength"),

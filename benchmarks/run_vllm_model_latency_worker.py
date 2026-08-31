@@ -13,18 +13,26 @@ import hashlib
 import json
 import math
 import os
+import re
+import stat
 import statistics
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+from flashdec.vllm_attestation import (
+    SPLIT_ATTESTATION_ENV,
+    canonical_attestation_bytes,
+    validate_split_attestation,
+)
 
 
 DATASET_SCHEMA_VERSION = 2
 DATASET_GENERATION_PROTOCOL = (
     "sha256-indexed-u64be-mod-model-tokenizer-nonspecial-v2"
 )
-RESULT_SCHEMA_VERSION = 2
+RESULT_SCHEMA_VERSION = 3
 ACCURACY_PREFIX_LEN = 2
 TIMING_SCOPE = (
     "wall-clock blocking LLM.generate call only; full-length JIT-prime and "
@@ -160,6 +168,181 @@ def _token_ids_sha256(token_ids: list[list[int]]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _install_split_attestation_environment(
+    args: argparse.Namespace,
+    dataset: dict[str, Any],
+) -> tuple[Path, str, int, str, str] | None:
+    marker_values = (
+        args.split_attestation_path,
+        args.split_attestation_nonce,
+        args.split_attestation_trial,
+        args.split_attestation_git_commit,
+    )
+    inherited = {
+        name: os.environ[name]
+        for name in SPLIT_ATTESTATION_ENV.values()
+        if name in os.environ
+    }
+    if inherited:
+        raise RuntimeError(
+            "split-attestation environment must be owned by the worker CLI"
+        )
+    if args.backend == "TRITON_ATTN":
+        if any(value is not None for value in marker_values):
+            raise ValueError("native worker must not receive split attestation")
+        return None
+    if any(value is None for value in marker_values):
+        raise ValueError("CUSTOM worker requires complete split attestation arguments")
+
+    path = args.split_attestation_path
+    if not path.is_absolute():
+        raise ValueError("split-attestation path must be absolute")
+    if path.exists():
+        raise FileExistsError(f"refusing pre-existing split marker {path}")
+    if not path.parent.is_dir():
+        raise FileNotFoundError(
+            f"split-attestation parent directory not found: {path.parent}"
+        )
+    nonce = args.split_attestation_nonce
+    if not re.fullmatch(r"[0-9a-f]{64}", nonce):
+        raise ValueError("split-attestation nonce must be 64 lowercase hex digits")
+    trial = args.split_attestation_trial
+    if trial <= 0:
+        raise ValueError("split-attestation trial must be positive")
+    git_commit = args.split_attestation_git_commit
+    if not re.fullmatch(r"[0-9a-f]{7,64}", git_commit):
+        raise ValueError("split-attestation Git commit is invalid")
+    values = {
+        "path": str(path),
+        "nonce": nonce,
+        "case": dataset["case"],
+        "trial": str(trial),
+        "dataset_sha256": args.dataset_sha256,
+        "git_commit": git_commit,
+    }
+    for field, env_name in SPLIT_ATTESTATION_ENV.items():
+        os.environ[env_name] = values[field]
+    return path, nonce, trial, git_commit, args.dataset_sha256
+
+
+def _read_marker_bytes(path: Path) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("split-attestation marker must be a regular file")
+        if stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise ValueError("split-attestation marker permissions exceed 0600")
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > 65536:
+                raise ValueError("split-attestation marker is unexpectedly large")
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _verify_split_attestation(
+    binding: tuple[Path, str, int, str, str] | None,
+    *,
+    backend: str,
+    dataset: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    if backend == "TRITON_ATTN":
+        if binding is not None:
+            raise ValueError("native worker cannot validate split attestation")
+        return None, None, None
+    if binding is None:
+        raise ValueError("CUSTOM worker is missing split attestation binding")
+    path, nonce, trial, git_commit, dataset_sha256 = binding
+    try:
+        encoded = _read_marker_bytes(path)
+    except FileNotFoundError as error:
+        raise RuntimeError(
+            "CUSTOM JIT-prime completed without an observed FlashDec split launch"
+        ) from error
+    try:
+        payload = json.loads(encoded)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("split-attestation marker is not valid JSON") from error
+    validate_split_attestation(
+        payload,
+        expected_nonce=nonce,
+        expected_case=dataset["case"],
+        expected_trial=trial,
+        expected_dataset_sha256=dataset_sha256,
+        expected_git_commit=git_commit,
+        expected_min_seq_len=dataset["input_len"],
+        expected_num_reqs=dataset["batch_size"],
+    )
+    canonical = canonical_attestation_bytes(payload)
+    if encoded != canonical:
+        raise ValueError("split-attestation marker is not canonical JSON")
+    return payload, hashlib.sha256(encoded).hexdigest(), str(path)
+
+
+def _run_generation_phases(
+    llm: Any,
+    prompts: list[dict[str, list[int]]],
+    sampling_params: Any,
+    *,
+    batch_size: int,
+    output_len: int,
+    prime_iters: int,
+    warmup_iters: int,
+    num_iters: int,
+    after_prime: Callable[
+        [], tuple[dict[str, Any] | None, str | None, str | None]
+    ],
+) -> tuple[
+    list[str],
+    list[str],
+    list[float],
+    list[str],
+    list[list[int]],
+    tuple[dict[str, Any] | None, str | None, str | None],
+]:
+    prime_output_sha256 = []
+    for _ in range(prime_iters):
+        outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
+        token_ids = _output_token_ids(outputs, batch_size, output_len)
+        prime_output_sha256.append(_token_ids_sha256(token_ids))
+
+    # This callback is deliberately between the prime and warmup loops. It is
+    # the fail-closed boundary that prevents unproved CUSTOM work from reaching
+    # either warmup or a timed sample.
+    attestation = after_prime()
+
+    warmup_output_sha256 = []
+    for _ in range(warmup_iters):
+        outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
+        token_ids = _output_token_ids(outputs, batch_size, output_len)
+        warmup_output_sha256.append(_token_ids_sha256(token_ids))
+    latencies_s: list[float] = []
+    measured_output_sha256: list[str] = []
+    for _ in range(num_iters):
+        started = time.perf_counter()
+        outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
+        latencies_s.append(time.perf_counter() - started)
+        token_ids = _output_token_ids(outputs, batch_size, output_len)
+        measured_output_sha256.append(_token_ids_sha256(token_ids))
+    return (
+        prime_output_sha256,
+        warmup_output_sha256,
+        latencies_s,
+        measured_output_sha256,
+        token_ids,
+        attestation,
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=("TRITON_ATTN", "CUSTOM"), required=True)
@@ -175,6 +358,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-model-len", type=int, required=True)
     parser.add_argument("--max-num-seqs", type=int, required=True)
     parser.add_argument("--max-num-batched-tokens", type=int, required=True)
+    parser.add_argument("--split-attestation-path", type=Path)
+    parser.add_argument("--split-attestation-nonce")
+    parser.add_argument("--split-attestation-trial", type=int)
+    parser.add_argument("--split-attestation-git-commit")
     return parser.parse_args()
 
 
@@ -202,6 +389,9 @@ def main() -> None:
         raise ValueError("dataset batch_size exceeds max-num-seqs")
     if dataset["input_len"] + dataset["output_len"] > args.max_model_len:
         raise ValueError("dataset sequence length exceeds max-model-len")
+    split_attestation_binding = _install_split_attestation_environment(
+        args, dataset
+    )
 
     # Keep heavyweight GPU-only imports out of module import so dataset and
     # protocol validation remain unit-testable on machines without vLLM.
@@ -248,31 +438,33 @@ def main() -> None:
     # Their outputs are retained for audit but are deliberately not part of
     # the within-process determinism gate below: compilation may change prime
     # calls, while every subsequent warmup and measured call must be identical.
-    prime_output_sha256 = []
-    for _ in range(args.prime_iters):
-        outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
-        token_ids = _output_token_ids(
-            outputs, dataset["batch_size"], dataset["output_len"]
-        )
-        prime_output_sha256.append(_token_ids_sha256(token_ids))
-
-    warmup_output_sha256 = []
-    for _ in range(args.warmup_iters):
-        outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
-        token_ids = _output_token_ids(
-            outputs, dataset["batch_size"], dataset["output_len"]
-        )
-        warmup_output_sha256.append(_token_ids_sha256(token_ids))
-    latencies_s: list[float] = []
-    measured_output_sha256: list[str] = []
-    for _ in range(args.num_iters):
-        started = time.perf_counter()
-        outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
-        latencies_s.append(time.perf_counter() - started)
-        token_ids = _output_token_ids(
-            outputs, dataset["batch_size"], dataset["output_len"]
-        )
-        measured_output_sha256.append(_token_ids_sha256(token_ids))
+    (
+        prime_output_sha256,
+        warmup_output_sha256,
+        latencies_s,
+        measured_output_sha256,
+        token_ids,
+        split_attestation,
+    ) = _run_generation_phases(
+        llm,
+        prompts,
+        sampling_params,
+        batch_size=dataset["batch_size"],
+        output_len=dataset["output_len"],
+        prime_iters=args.prime_iters,
+        warmup_iters=args.warmup_iters,
+        num_iters=args.num_iters,
+        after_prime=lambda: _verify_split_attestation(
+            split_attestation_binding,
+            backend=args.backend,
+            dataset=dataset,
+        ),
+    )
+    (
+        split_activation_attestation,
+        split_activation_attestation_sha256,
+        split_activation_attestation_path,
+    ) = split_attestation
 
     output_hashes = [*warmup_output_sha256, *measured_output_sha256]
     if len(set(output_hashes)) != 1:
@@ -313,6 +505,11 @@ def main() -> None:
         "timing_scope": TIMING_SCOPE,
         "vllm_engine_multiprocessing": True,
         "accuracy_prefix_len": ACCURACY_PREFIX_LEN,
+        "split_activation_attestation": split_activation_attestation,
+        "split_activation_attestation_path": split_activation_attestation_path,
+        "split_activation_attestation_sha256": (
+            split_activation_attestation_sha256
+        ),
         "latencies_s": latencies_s,
         "avg_latency_s": statistics.fmean(latencies_s),
         "percentiles_s": {

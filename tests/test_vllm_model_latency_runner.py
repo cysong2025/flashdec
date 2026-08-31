@@ -3,6 +3,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -164,6 +165,10 @@ def test_runner_invokes_repository_worker_with_dataset_identity(tmp_path):
         max_num_seqs=8,
         max_num_batched_tokens=2048,
         output_json=output,
+        split_attestation_path=(tmp_path / "split.json").resolve(),
+        split_attestation_nonce="b" * 64,
+        split_attestation_trial=2,
+        split_attestation_git_commit="c" * 40,
     )
 
     assert command[1] == str(worker)
@@ -173,6 +178,8 @@ def test_runner_invokes_repository_worker_with_dataset_identity(tmp_path):
     assert command[command.index("--dataset-sha256") + 1] == digest
     assert command[command.index("--prime-iters") + 1] == "1"
     assert command[command.index("--sampling-seed") + 1] == "23"
+    assert command[command.index("--split-attestation-nonce") + 1] == "b" * 64
+    assert command[command.index("--split-attestation-trial") + 1] == "2"
 
 
 def test_opt_in_builtins_are_explicit_and_custom_cases_are_supported():
@@ -239,8 +246,32 @@ def _valid_worker_result(tmp_path, *, num_iters=1):
         ).encode("utf-8")
     ).hexdigest()
     latencies = [float(value) for value in range(1, num_iters + 1)]
+    attestation_path = (tmp_path / "split.json").resolve()
+    attestation_payload = {
+        "schema_version": 1,
+        "nonce": "b" * 64,
+        "engine_pid": 123,
+        "backend": "CUSTOM",
+        "case": case.name,
+        "trial": 2,
+        "dataset_sha256": digest,
+        "git_commit": "c" * 40,
+        "max_seq_len": 2,
+        "logical_blocks": 1,
+        "num_reqs": 1,
+        "num_splits": 2,
+        "num_q_heads": 16,
+        "num_kv_heads": 2,
+        "head_dim": 128,
+        "block_size": 16,
+        "query_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat16",
+        "cuda_graph_capture": False,
+    }
+    attestation_bytes = RUNNER.canonical_attestation_bytes(attestation_payload)
+    attestation_path.write_bytes(attestation_bytes)
     result = {
-        "schema_version": 2,
+        "schema_version": 3,
         "backend_arg": "CUSTOM",
         "case": case.name,
         "batch_size": case.batch_size,
@@ -265,6 +296,11 @@ def _valid_worker_result(tmp_path, *, num_iters=1):
         "timing_scope": RUNNER.TIMING_SCOPE,
         "vllm_engine_multiprocessing": True,
         "accuracy_prefix_len": RUNNER.ACCURACY_PREFIX_LEN,
+        "split_activation_attestation": attestation_payload,
+        "split_activation_attestation_path": str(attestation_path),
+        "split_activation_attestation_sha256": hashlib.sha256(
+            attestation_bytes
+        ).hexdigest(),
         "latencies_s": latencies,
         "avg_latency_s": sum(latencies) / len(latencies),
         "percentiles_s": {
@@ -287,8 +323,67 @@ def _valid_worker_result(tmp_path, *, num_iters=1):
         "prime_iters": 1,
         "warmup_iters": 1,
         "num_iters": num_iters,
+        "expected_attestation_path": attestation_path,
+        "expected_attestation_nonce": "b" * 64,
+        "expected_attestation_trial": 2,
+        "expected_attestation_git_commit": "c" * 40,
     }
     return result, kwargs, output_sha256
+
+
+def test_worker_attestation_check_runs_after_prime_before_warmup():
+    events = []
+
+    class FakeLLM:
+        def generate(self, prompts, sampling_params, use_tqdm):
+            events.append("generate")
+            candidate = SimpleNamespace(token_ids=[7, 8])
+            return [SimpleNamespace(outputs=[candidate])]
+
+    def attest():
+        events.append("attest")
+        return None, None, None
+
+    WORKER._run_generation_phases(
+        FakeLLM(),
+        [{"prompt_token_ids": [1]}],
+        object(),
+        batch_size=1,
+        output_len=2,
+        prime_iters=1,
+        warmup_iters=1,
+        num_iters=1,
+        after_prime=attest,
+    )
+
+    assert events == ["generate", "attest", "generate", "generate"]
+
+
+def test_worker_rejects_missing_or_forged_split_marker(tmp_path):
+    dataset = {
+        "case": "qwen_b8_i512_o2",
+        "batch_size": 8,
+        "input_len": 512,
+    }
+    binding = (
+        (tmp_path / "missing.json").resolve(),
+        "a" * 64,
+        1,
+        "b" * 40,
+        "c" * 64,
+    )
+    with pytest.raises(RuntimeError, match="without an observed FlashDec split"):
+        WORKER._verify_split_attestation(
+            binding, backend="CUSTOM", dataset=dataset
+        )
+
+    path = binding[0]
+    path.write_text('{"backend":"CUSTOM"}\n', encoding="utf-8")
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="fields differ from schema"):
+        WORKER._verify_split_attestation(
+            binding, backend="CUSTOM", dataset=dataset
+        )
 
 
 def test_runner_rejects_inconsistent_worker_output_hashes(tmp_path):
@@ -322,6 +417,27 @@ def test_runner_strictly_validates_jit_prime_hashes(tmp_path):
     with pytest.raises(ValueError, match="invalid JIT-prime output hashes"):
         RUNNER._validate_worker_result(result, **kwargs)
 
+
+def test_parent_revalidates_split_attestation_payload_and_marker(tmp_path):
+    result, kwargs, _output_sha256 = _valid_worker_result(tmp_path)
+    result["split_activation_attestation"]["num_splits"] = 1
+
+    with pytest.raises(ValueError, match="multi-split launch"):
+        RUNNER._validate_worker_result(result, **kwargs)
+
+
+def test_model_latency_schema_records_flat_and_canonical_attestation(tmp_path):
+    result, kwargs, _output_sha256 = _valid_worker_result(tmp_path)
+    validated = RUNNER._validate_worker_result(result, **kwargs)
+
+    values = RUNNER._attestation_csv_values(validated[6])
+
+    assert RUNNER.SCHEMA_VERSION == 5
+    assert RUNNER.WORKER_RESULT_SCHEMA_VERSION == 3
+    assert set(values) == set(RUNNER.SPLIT_ATTESTATION_CSV_FIELDS)
+    assert values["split_attestation_num_splits"] == 2
+    assert values["split_attestation_nonce"] == "b" * 64
+    assert json.loads(values["split_attestation_json"])["backend"] == "CUSTOM"
 
 def test_cross_backend_parity_requires_first_custom_decode_decision():
     parity = RUNNER._cross_backend_parity(

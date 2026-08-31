@@ -9,6 +9,10 @@ uniform single-token decoder attention over FP16/BF16 paged KV cache.
 from __future__ import annotations
 
 import os
+import re
+import threading
+from pathlib import Path
+from typing import Any
 
 import torch
 
@@ -20,10 +24,132 @@ from vllm.v1.attention.backends.triton_attn import (
 )
 
 from .kernels.paged_decode import _vllm_paged_decode_attention_into
+from .vllm_attestation import (
+    SPLIT_ATTESTATION_BACKEND,
+    SPLIT_ATTESTATION_ENV,
+    SPLIT_ATTESTATION_SCHEMA_VERSION,
+    canonical_attestation_bytes,
+    validate_split_attestation,
+)
 
 
 _VALID_REQUESTED_SPLITS = (0, 1, 2, 4, 8, 16)
 _VALID_NUM_SPLITS = _VALID_REQUESTED_SPLITS[1:]
+_ATTESTATION_LOCK = threading.Lock()
+_ATTESTED_PROCESS_PATHS: set[tuple[int, str]] = set()
+
+
+def _split_attestation_binding_from_env() -> dict[str, Any] | None:
+    values = {
+        field: os.environ.get(name)
+        for field, name in SPLIT_ATTESTATION_ENV.items()
+    }
+    present = {field for field, value in values.items() if value is not None}
+    if not present:
+        return None
+    if present != set(SPLIT_ATTESTATION_ENV):
+        missing = sorted(set(SPLIT_ATTESTATION_ENV) - present)
+        raise RuntimeError(
+            "incomplete FlashDec split-attestation environment; missing "
+            f"{missing}"
+        )
+    path = Path(values["path"])
+    if not path.is_absolute():
+        raise RuntimeError("FlashDec split-attestation path must be absolute")
+    try:
+        trial = int(values["trial"])
+    except ValueError as error:
+        raise RuntimeError(
+            "FlashDec split-attestation trial must be an integer"
+        ) from error
+    if trial <= 0:
+        raise RuntimeError("FlashDec split-attestation trial must be positive")
+    if not re.fullmatch(r"[0-9a-f]{64}", values["nonce"]):
+        raise RuntimeError(
+            "FlashDec split-attestation nonce must be 64 lowercase hex digits"
+        )
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", values["case"]):
+        raise RuntimeError("FlashDec split-attestation case is invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", values["dataset_sha256"]):
+        raise RuntimeError("FlashDec split-attestation dataset SHA-256 is invalid")
+    if not re.fullmatch(r"[0-9a-f]{7,64}", values["git_commit"]):
+        raise RuntimeError("FlashDec split-attestation Git commit is invalid")
+    return {
+        "path": str(path),
+        "nonce": values["nonce"],
+        "case": values["case"],
+        "trial": trial,
+        "dataset_sha256": values["dataset_sha256"],
+        "git_commit": values["git_commit"],
+    }
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    offset = 0
+    while offset < len(data):
+        try:
+            written = os.write(fd, data[offset:])
+        except InterruptedError:
+            continue
+        if written <= 0:
+            raise OSError("short write while creating split-attestation marker")
+        offset += written
+
+
+def _write_split_attestation(
+    binding: dict[str, Any],
+    *,
+    max_seq_len: int,
+    logical_blocks: int,
+    num_reqs: int,
+    num_splits: int,
+    num_q_heads: int,
+    num_kv_heads: int,
+    head_dim: int,
+    block_size: int,
+    query_dtype: str,
+    kv_cache_dtype: str,
+    cuda_graph_capture: bool,
+) -> None:
+    """Atomically record the first successful split launch in this engine."""
+
+    process_key = (os.getpid(), binding["path"])
+    if process_key in _ATTESTED_PROCESS_PATHS:
+        return
+    payload = {
+        "schema_version": SPLIT_ATTESTATION_SCHEMA_VERSION,
+        "nonce": binding["nonce"],
+        "engine_pid": os.getpid(),
+        "backend": SPLIT_ATTESTATION_BACKEND,
+        "case": binding["case"],
+        "trial": binding["trial"],
+        "dataset_sha256": binding["dataset_sha256"],
+        "git_commit": binding["git_commit"],
+        "max_seq_len": max_seq_len,
+        "logical_blocks": logical_blocks,
+        "num_reqs": num_reqs,
+        "num_splits": num_splits,
+        "num_q_heads": num_q_heads,
+        "num_kv_heads": num_kv_heads,
+        "head_dim": head_dim,
+        "block_size": block_size,
+        "query_dtype": query_dtype,
+        "kv_cache_dtype": kv_cache_dtype,
+        "cuda_graph_capture": cuda_graph_capture,
+    }
+    validate_split_attestation(payload)
+    encoded = canonical_attestation_bytes(payload)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    with _ATTESTATION_LOCK:
+        if process_key in _ATTESTED_PROCESS_PATHS:
+            return
+        fd = os.open(binding["path"], flags, 0o600)
+        try:
+            _write_all(fd, encoded)
+        finally:
+            os.close(fd)
+        _ATTESTED_PROCESS_PATHS.add(process_key)
 
 
 def _parse_requested_splits(value: str) -> int:
@@ -91,6 +217,10 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
         self._requested_splits = _parse_requested_splits(
             os.environ.get("FLASHDEC_VLLM_NUM_SPLITS", "0")
         )
+        # The normal integration path has no attestation environment and does
+        # no filesystem work. Formal workers opt in before constructing LLM so
+        # every per-layer backend instance inherits the same one-shot binding.
+        self._split_attestation_binding = _split_attestation_binding_from_env()
 
     def _supports_flashdec_decode(
         self,
@@ -237,4 +367,25 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
             sm_scale=self.scale,
             num_splits=num_splits,
         )
+        binding = getattr(self, "_split_attestation_binding", None)
+        if binding is not None:
+            _write_split_attestation(
+                binding,
+                max_seq_len=attn_metadata.max_seq_len,
+                logical_blocks=logical_blocks,
+                num_reqs=num_reqs,
+                num_splits=num_splits,
+                num_q_heads=self.num_heads,
+                num_kv_heads=self.num_kv_heads,
+                head_dim=self.head_size,
+                block_size=block_size,
+                query_dtype=str(query.dtype).removeprefix("torch."),
+                kv_cache_dtype=str(kv_cache.dtype).removeprefix("torch."),
+                cuda_graph_capture=bool(
+                    torch.cuda.is_current_stream_capturing()
+                ),
+            )
+            # Each layer pays at most one set lookup. CUDA Graph replay never
+            # re-enters this Python branch, and ordinary users never enable it.
+            self._split_attestation_binding = None
         return output

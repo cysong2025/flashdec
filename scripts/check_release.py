@@ -36,6 +36,7 @@ REQUIRED_PATHS = (
     "flashdec/scheduled_workload.py",
     "flashdec/scheduler.py",
     "flashdec/vllm_backend.py",
+    "flashdec/vllm_attestation.py",
     "flashdec/vllm_plugin.py",
     "flashdec/workload.py",
     "docs/API.md",

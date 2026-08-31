@@ -33,6 +33,7 @@ from benchmarks.summarize_vllm_model_latency import (
     TARGET_RATIO_LIMIT,
     TIMING_SCOPE as MODEL_LATENCY_SUMMARY_TIMING_SCOPE,
 )
+from flashdec.vllm_attestation import SPLIT_ATTESTATION_SCHEMA_VERSION
 from scripts.check_docs import PUBLIC_ENTRY_FILES
 from scripts.check_release import (
     PUBLIC_RELEASE_REQUIRED_PATHS,
@@ -252,8 +253,9 @@ def test_release_version_readers_support_pyproject_and_package(tmp_path):
 
 
 def test_release_model_latency_protocol_requires_explicit_jit_prime():
-    assert MODEL_LATENCY_WORKER_SCHEMA_VERSION == 2
-    assert MODEL_LATENCY_CSV_SCHEMA_VERSION == 4
+    assert SPLIT_ATTESTATION_SCHEMA_VERSION == 1
+    assert MODEL_LATENCY_WORKER_SCHEMA_VERSION == 3
+    assert MODEL_LATENCY_CSV_SCHEMA_VERSION == 5
     assert FORMAL_PRIME_ITERS == 1
     assert GUARDRAIL_CASE == "qwen_b8_i512_o2"
     assert FORMAL_CASE_SHAPES[GUARDRAIL_CASE] == (8, 512, 2)

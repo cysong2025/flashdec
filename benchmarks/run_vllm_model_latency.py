@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import secrets
 import shlex
 import statistics
 import subprocess
@@ -23,9 +24,16 @@ from flashdec.benchmark import (
     vllm_cache_root_for_commit,
     write_vllm_cache_log_metadata,
 )
+from flashdec.vllm_attestation import (
+    SPLIT_ATTESTATION_CSV_FIELDS,
+    SPLIT_ATTESTATION_ENV,
+    canonical_attestation_bytes,
+    validate_split_attestation,
+)
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
+WORKER_RESULT_SCHEMA_VERSION = 3
 DATASET_SCHEMA_VERSION = 2
 DATASET_GENERATION_PROTOCOL = (
     "sha256-indexed-u64be-mod-model-tokenizer-nonspecial-v2"
@@ -360,8 +368,24 @@ def _command(
     max_num_seqs: int,
     max_num_batched_tokens: int,
     output_json: Path,
+    split_attestation_path: Path | None = None,
+    split_attestation_nonce: str | None = None,
+    split_attestation_trial: int | None = None,
+    split_attestation_git_commit: str | None = None,
 ) -> list[str]:
-    return [
+    attestation_values = (
+        split_attestation_path,
+        split_attestation_nonce,
+        split_attestation_trial,
+        split_attestation_git_commit,
+    )
+    if backend == "CUSTOM" and any(value is None for value in attestation_values):
+        raise ValueError("CUSTOM command requires complete split attestation")
+    if backend != "CUSTOM" and any(
+        value is not None for value in attestation_values
+    ):
+        raise ValueError("native command must not receive split attestation")
+    command = [
         sys.executable,
         str(worker),
         "--backend",
@@ -391,6 +415,20 @@ def _command(
         "--output",
         str(output_json),
     ]
+    if backend == "CUSTOM":
+        command.extend(
+            [
+                "--split-attestation-path",
+                str(split_attestation_path),
+                "--split-attestation-nonce",
+                str(split_attestation_nonce),
+                "--split-attestation-trial",
+                str(split_attestation_trial),
+                "--split-attestation-git-commit",
+                str(split_attestation_git_commit),
+            ]
+        )
+    return command
 
 
 def _validate_worker_result(
@@ -405,6 +443,10 @@ def _validate_worker_result(
     prime_iters: int,
     warmup_iters: int,
     num_iters: int,
+    expected_attestation_path: Path | None = None,
+    expected_attestation_nonce: str | None = None,
+    expected_attestation_trial: int | None = None,
+    expected_attestation_git_commit: str | None = None,
     expected_environment: dict[str, str] | None = None,
 ) -> tuple[
     list[float],
@@ -413,9 +455,10 @@ def _validate_worker_result(
     float,
     str,
     tuple[tuple[int, ...], ...],
+    dict[str, Any] | None,
 ]:
     expected = {
-        "schema_version": 2,
+        "schema_version": WORKER_RESULT_SCHEMA_VERSION,
         "backend_arg": backend_arg,
         "case": case.name,
         "batch_size": case.batch_size,
@@ -453,6 +496,71 @@ def _validate_worker_result(
                 f"worker environment {field!r} differs: expected {value!r}, "
                 f"got {result.get(field)!r}"
             )
+
+    attestation_payload = result.get("split_activation_attestation")
+    attestation_path = result.get("split_activation_attestation_path")
+    attestation_sha256 = result.get("split_activation_attestation_sha256")
+    if backend_arg == "TRITON_ATTN":
+        if any(
+            value is not None
+            for value in (
+                attestation_payload,
+                attestation_path,
+                attestation_sha256,
+                expected_attestation_path,
+                expected_attestation_nonce,
+                expected_attestation_trial,
+                expected_attestation_git_commit,
+            )
+        ):
+            raise ValueError("native worker must not contain split attestation")
+        attestation_record = None
+    else:
+        if any(
+            value is None
+            for value in (
+                expected_attestation_path,
+                expected_attestation_nonce,
+                expected_attestation_trial,
+                expected_attestation_git_commit,
+            )
+        ):
+            raise ValueError("CUSTOM validation requires split attestation binding")
+        expected_path = expected_attestation_path
+        if not isinstance(attestation_path, str) or not Path(
+            attestation_path
+        ).is_absolute():
+            raise ValueError("worker returned invalid split-attestation path")
+        if Path(attestation_path) != expected_path:
+            raise ValueError("worker split-attestation path binding differs")
+        if not isinstance(attestation_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", attestation_sha256
+        ):
+            raise ValueError("worker returned invalid split-attestation SHA-256")
+        validate_split_attestation(
+            attestation_payload,
+            expected_nonce=expected_attestation_nonce,
+            expected_case=case.name,
+            expected_trial=expected_attestation_trial,
+            expected_dataset_sha256=dataset_sha256,
+            expected_git_commit=expected_attestation_git_commit,
+            expected_min_seq_len=case.input_len,
+            expected_num_reqs=case.batch_size,
+        )
+        encoded_attestation = canonical_attestation_bytes(attestation_payload)
+        if hashlib.sha256(encoded_attestation).hexdigest() != attestation_sha256:
+            raise ValueError("worker split-attestation SHA-256 differs from payload")
+        try:
+            on_disk_attestation = expected_path.read_bytes()
+        except FileNotFoundError as error:
+            raise ValueError("worker split-attestation marker is missing") from error
+        if on_disk_attestation != encoded_attestation:
+            raise ValueError("worker split-attestation marker differs from payload")
+        attestation_record = {
+            "path": attestation_path,
+            "sha256": attestation_sha256,
+            "payload": attestation_payload,
+        }
 
     latencies = [float(value) for value in result.get("latencies_s", [])]
     if len(latencies) != num_iters or any(
@@ -543,6 +651,7 @@ def _validate_worker_result(
         p90_s,
         output_sha256,
         tuple(tuple(tokens) for tokens in output_token_ids),
+        attestation_record,
     )
 
 
@@ -591,6 +700,46 @@ def _cross_backend_parity(
     }
 
 
+def _attestation_csv_values(
+    record: dict[str, Any] | None,
+) -> dict[str, object]:
+    if record is None:
+        return {field: "" for field in SPLIT_ATTESTATION_CSV_FIELDS}
+    payload = record["payload"]
+    values: dict[str, object] = {
+        "split_attestation_json": canonical_attestation_bytes(payload)
+        .decode("utf-8")
+        .removesuffix("\n"),
+        "split_attestation_path": record["path"],
+        "split_attestation_sha256": record["sha256"],
+    }
+    for field in (
+        "schema_version",
+        "nonce",
+        "engine_pid",
+        "backend",
+        "case",
+        "trial",
+        "dataset_sha256",
+        "git_commit",
+        "max_seq_len",
+        "logical_blocks",
+        "num_reqs",
+        "num_splits",
+        "num_q_heads",
+        "num_kv_heads",
+        "head_dim",
+        "block_size",
+        "query_dtype",
+        "kv_cache_dtype",
+        "cuda_graph_capture",
+    ):
+        values[f"split_attestation_{field}"] = payload[field]
+    if set(values) != set(SPLIT_ATTESTATION_CSV_FIELDS):
+        raise AssertionError("split-attestation CSV field mapping drifted")
+    return values
+
+
 def main() -> None:
     args = _parse_args()
     (
@@ -624,6 +773,8 @@ def main() -> None:
 
     raw_dir = args.output.parent / f"{args.output.stem}_raw"
     raw_dir.mkdir(parents=True, exist_ok=False)
+    attestation_dir = raw_dir / "split_attestations"
+    attestation_dir.mkdir()
     dataset_dir = raw_dir / "datasets"
     datasets: dict[str, tuple[Path, str]] = {}
     for case in selected:
@@ -695,6 +846,8 @@ def main() -> None:
         "accuracy_prefix_len": ACCURACY_PREFIX_LEN,
     }
     child_env = os.environ.copy()
+    for env_name in SPLIT_ATTESTATION_ENV.values():
+        child_env.pop(env_name, None)
     child_env["PYTHONHASHSEED"] = "0"
     child_env["VLLM_CACHE_ROOT"] = str(cache_root)
     rows: list[dict[str, object]] = []
@@ -712,6 +865,18 @@ def main() -> None:
                 stem = f"{case.name}_trial{trial}_{backend_name}"
                 output_json = raw_dir / f"{stem}.json"
                 log_path = raw_dir / f"{stem}.log"
+                if backend_arg == "CUSTOM":
+                    split_attestation_path = (
+                        attestation_dir / f"{stem}.split.json"
+                    ).resolve()
+                    split_attestation_nonce = secrets.token_hex(32)
+                    split_attestation_trial = trial
+                    split_attestation_git_commit = commit
+                else:
+                    split_attestation_path = None
+                    split_attestation_nonce = None
+                    split_attestation_trial = None
+                    split_attestation_git_commit = None
                 command = _command(
                     worker=worker,
                     model=model_path,
@@ -727,6 +892,10 @@ def main() -> None:
                     max_num_seqs=args.max_num_seqs,
                     max_num_batched_tokens=args.max_num_batched_tokens,
                     output_json=output_json,
+                    split_attestation_path=split_attestation_path,
+                    split_attestation_nonce=split_attestation_nonce,
+                    split_attestation_trial=split_attestation_trial,
+                    split_attestation_git_commit=split_attestation_git_commit,
                 )
                 with log_path.open("w", encoding="utf-8") as log:
                     write_vllm_cache_log_metadata(
@@ -756,6 +925,7 @@ def main() -> None:
                     p90_s,
                     output_sha256,
                     output_token_ids,
+                    attestation_record,
                 ) = _validate_worker_result(
                     result,
                     case=case,
@@ -767,6 +937,12 @@ def main() -> None:
                     prime_iters=args.prime_iters,
                     warmup_iters=args.warmup_iters,
                     num_iters=args.num_iters,
+                    expected_attestation_path=split_attestation_path,
+                    expected_attestation_nonce=split_attestation_nonce,
+                    expected_attestation_trial=split_attestation_trial,
+                    expected_attestation_git_commit=(
+                        split_attestation_git_commit
+                    ),
                     expected_environment={
                         "device": common["device"],
                         "torch_version": common["torch_version"],
@@ -798,6 +974,7 @@ def main() -> None:
                     "raw_json": str(output_json),
                     "log": str(log_path),
                     "command": shlex.join(command),
+                    **_attestation_csv_values(attestation_record),
                 }
                 rows.append(row)
                 pair_key = (case.name, trial)

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import math
 import re
 import statistics
@@ -12,6 +14,12 @@ from collections import defaultdict
 from pathlib import Path
 
 from flashdec.benchmark import validate_vllm_cache_root
+from flashdec.vllm_attestation import (
+    SPLIT_ATTESTATION_CSV_FIELDS,
+    VALID_SPLIT_COUNTS,
+    canonical_attestation_bytes,
+    validate_split_attestation,
+)
 
 
 BACKENDS = ("vllm_triton_attn", "flashdec")
@@ -113,11 +121,98 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         "raw_json",
         "log",
         "command",
-    }
+    } | set(SPLIT_ATTESTATION_CSV_FIELDS)
     missing = required - set(rows[0])
     if missing:
         raise ValueError(f"missing columns: {sorted(missing)}")
     return rows
+
+
+def _validate_row_attestation(
+    row: dict[str, str],
+    *,
+    seen_paths: set[str],
+    seen_nonces: set[str],
+) -> bool | None:
+    if row["backend"] == "vllm_triton_attn":
+        if any(row[field] != "" for field in SPLIT_ATTESTATION_CSV_FIELDS):
+            raise ValueError("native row must not contain split attestation")
+        return None
+
+    if any(row[field] == "" for field in SPLIT_ATTESTATION_CSV_FIELDS):
+        raise ValueError("FlashDec row is missing split attestation")
+    marker_path = row["split_attestation_path"]
+    nonce = row["split_attestation_nonce"]
+    if not Path(marker_path).is_absolute():
+        raise ValueError("split-attestation marker path must be absolute")
+    if marker_path in seen_paths:
+        raise ValueError("split-attestation marker paths must be unique")
+    if nonce in seen_nonces:
+        raise ValueError("split-attestation nonces must be unique")
+    seen_paths.add(marker_path)
+    seen_nonces.add(nonce)
+
+    try:
+        payload = json.loads(row["split_attestation_json"])
+    except json.JSONDecodeError as error:
+        raise ValueError("split-attestation CSV JSON is invalid") from error
+    validate_split_attestation(
+        payload,
+        expected_nonce=nonce,
+        expected_case=row["case"],
+        expected_trial=int(row["trial"]),
+        expected_dataset_sha256=row["dataset_sha256"],
+        expected_git_commit=row["git_commit"],
+        expected_min_seq_len=int(row["input_len"]),
+        expected_num_reqs=8,
+    )
+    canonical = canonical_attestation_bytes(payload)
+    canonical_text = canonical.decode("utf-8").removesuffix("\n")
+    if row["split_attestation_json"] != canonical_text:
+        raise ValueError("split-attestation CSV JSON is not canonical")
+    if hashlib.sha256(canonical).hexdigest() != row["split_attestation_sha256"]:
+        raise ValueError("split-attestation SHA-256 differs from payload")
+
+    flattened = {
+        "schema_version",
+        "nonce",
+        "engine_pid",
+        "backend",
+        "case",
+        "trial",
+        "dataset_sha256",
+        "git_commit",
+        "max_seq_len",
+        "logical_blocks",
+        "num_reqs",
+        "num_splits",
+        "num_q_heads",
+        "num_kv_heads",
+        "head_dim",
+        "block_size",
+        "query_dtype",
+        "kv_cache_dtype",
+        "cuda_graph_capture",
+    }
+    for field in flattened:
+        if row[f"split_attestation_{field}"] != str(payload[field]):
+            raise ValueError(
+                f"split-attestation flattened {field} differs from payload"
+            )
+    if (
+        payload["num_splits"] not in VALID_SPLIT_COUNTS
+        or payload["num_reqs"] != 8
+        or payload["num_q_heads"] != 16
+        or payload["num_kv_heads"] != 2
+        or payload["head_dim"] != 128
+        or payload["block_size"] not in (16, 32)
+        or payload["query_dtype"] != "bfloat16"
+        or payload["kv_cache_dtype"] != "bfloat16"
+    ):
+        raise ValueError(
+            "split-attestation observed shape differs from formal protocol"
+        )
+    return payload["cuda_graph_capture"]
 
 
 def summarize(input_path: Path, output_path: Path) -> str:
@@ -166,10 +261,13 @@ def summarize(input_path: Path, output_path: Path) -> str:
     case_datasets: dict[str, tuple[str, ...]] = {}
     case_output_hashes: dict[str, set[str]] = defaultdict(set)
     backend_output_hashes: dict[tuple[str, str], set[str]] = defaultdict(set)
+    split_attestation_paths: set[str] = set()
+    split_attestation_nonces: set[str] = set()
+    split_capture_states: list[bool] = []
     for row in rows:
         if any(row.get(field) != first.get(field) for field in invariant_fields):
             raise ValueError("environment/model/protocol invariants differ across rows")
-        if row["schema_version"] != "4":
+        if row["schema_version"] != "5":
             raise ValueError("unsupported schema_version")
         validate_vllm_cache_root(row["vllm_cache_root"], row["git_commit"])
         if row["git_worktree_clean"] != "True":
@@ -245,6 +343,13 @@ def summarize(input_path: Path, output_path: Path) -> str:
         )
         if expected_shape is None or actual_shape != expected_shape:
             raise ValueError("case name/shape differs from the frozen formal matrix")
+        capture_state = _validate_row_attestation(
+            row,
+            seen_paths=split_attestation_paths,
+            seen_nonces=split_attestation_nonces,
+        )
+        if capture_state is not None:
+            split_capture_states.append(capture_state)
         dataset_invariants = (
             row["batch_size"],
             row["input_len"],
@@ -297,6 +402,8 @@ def summarize(input_path: Path, output_path: Path) -> str:
         paired[key][row["backend"]] = row
     if any(set(pair) != set(BACKENDS) for pair in paired.values()):
         raise ValueError("every case/trial must contain both paired backends")
+    if len(split_capture_states) != len(paired):
+        raise ValueError("every FlashDec row must carry one split attestation")
 
     parity_by_case: dict[str, list[dict[str, int | bool]]] = defaultdict(list)
     for (case, _trial), pair in paired.items():
@@ -469,6 +576,16 @@ def summarize(input_path: Path, output_path: Path) -> str:
             f"- Integration guardrail: `{GUARDRAIL_CASE}` uses the 512-token "
             "prompt boundary and generates exactly two tokens; the second "
             "generated token covers the first eligible FlashDec split decode."
+        ),
+        (
+            "- Split activation: every CUSTOM worker supplied a unique, "
+            "canonical engine-process marker proving a successful multi-split "
+            "FlashDec launch before warmup/timing."
+        ),
+        (
+            "- First observed split occurred during CUDA Graph capture in "
+            f"{sum(split_capture_states)}/{len(split_capture_states)} CUSTOM "
+            "workers (recorded, not a pass/fail condition)."
         ),
         f"- Git commit: `{first['git_commit']}`; clean at start: True.",
         "- Per-case prompt dataset identities:",

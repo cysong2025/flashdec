@@ -1,3 +1,5 @@
+import json
+import stat
 from types import SimpleNamespace
 
 import pytest
@@ -61,6 +63,17 @@ def _metadata(num_reqs=3, max_seq_len=1024, workspace_capacity=64):
         softmax_segm_max=object(),
         softmax_segm_expsum=object(),
     )
+
+
+def _attestation_binding(path):
+    return {
+        "path": str(path.resolve()),
+        "nonce": "a" * 64,
+        "case": "qwen_b8_i512_o2",
+        "trial": 1,
+        "dataset_sha256": "b" * 64,
+        "git_commit": "c" * 40,
+    }
 
 
 @pytest.mark.parametrize("value", ["0", "1", "2", "4", "8", "16"])
@@ -213,6 +226,127 @@ def test_eligible_context_boundary_passes_original_tensors_and_legal_split(
         "sm_scale": 128**-0.5,
         "num_splits": 16,
     }
+
+
+def test_successful_multi_split_writes_one_canonical_attestation(
+    monkeypatch, tmp_path
+):
+    impl = _impl_without_vllm_initialization()
+    marker_path = tmp_path / "split.json"
+    impl._split_attestation_binding = _attestation_binding(marker_path)
+    monkeypatch.setattr(
+        TritonAttentionImpl,
+        "forward",
+        lambda self, *args: pytest.fail("eligible split must not fall back"),
+    )
+    launches = []
+
+    def record_launcher(*args, **kwargs):
+        launches.append((args, kwargs))
+        return args[6]
+
+    monkeypatch.setattr(
+        backend_module, "_vllm_paged_decode_attention_into", record_launcher
+    )
+    monkeypatch.setattr(
+        torch.cuda, "is_current_stream_capturing", lambda: True
+    )
+    query = torch.empty((8, 16, 128), dtype=torch.bfloat16)
+    key = torch.empty((8, 2, 128), dtype=torch.bfloat16)
+    value = torch.empty_like(key)
+    output = torch.empty_like(query)
+    kv_cache = torch.empty((257, 2, 16, 2, 128), dtype=torch.bfloat16)
+    metadata = _metadata(num_reqs=8, max_seq_len=8192)
+    layer = SimpleNamespace(kv_sharing_target_layer_name=None)
+
+    assert impl.forward(
+        layer, query, key, value, kv_cache, metadata, output
+    ) is output
+    assert len(launches) == 1
+    payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker_path.read_bytes() == backend_module.canonical_attestation_bytes(
+        payload
+    )
+    assert stat.S_IMODE(marker_path.stat().st_mode) == 0o600
+    assert payload == {
+        "schema_version": 1,
+        "nonce": "a" * 64,
+        "engine_pid": backend_module.os.getpid(),
+        "backend": "CUSTOM",
+        "case": "qwen_b8_i512_o2",
+        "trial": 1,
+        "dataset_sha256": "b" * 64,
+        "git_commit": "c" * 40,
+        "max_seq_len": 8192,
+        "logical_blocks": 512,
+        "num_reqs": 8,
+        "num_splits": 8,
+        "num_q_heads": 16,
+        "num_kv_heads": 2,
+        "head_dim": 128,
+        "block_size": 16,
+        "query_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat16",
+        "cuda_graph_capture": True,
+    }
+    assert impl._split_attestation_binding is None
+
+
+def test_single_split_fallback_does_not_write_attestation(monkeypatch, tmp_path):
+    impl = _impl_without_vllm_initialization()
+    impl._requested_splits = 1
+    marker_path = tmp_path / "split.json"
+    impl._split_attestation_binding = _attestation_binding(marker_path)
+    fallback_result = object()
+    monkeypatch.setattr(
+        TritonAttentionImpl,
+        "forward",
+        lambda self, *args: fallback_result,
+    )
+    query = torch.empty((8, 16, 128), dtype=torch.bfloat16)
+    key = torch.empty((8, 2, 128), dtype=torch.bfloat16)
+    value = torch.empty_like(key)
+    output = torch.empty_like(query)
+    kv_cache = torch.empty((65, 2, 16, 2, 128), dtype=torch.bfloat16)
+
+    assert impl.forward(
+        SimpleNamespace(kv_sharing_target_layer_name=None),
+        query,
+        key,
+        value,
+        kv_cache,
+        _metadata(num_reqs=8),
+        output,
+    ) is fallback_result
+    assert not marker_path.exists()
+
+
+def test_failed_split_launcher_does_not_write_attestation(monkeypatch, tmp_path):
+    impl = _impl_without_vllm_initialization()
+    marker_path = tmp_path / "split.json"
+    impl._split_attestation_binding = _attestation_binding(marker_path)
+    monkeypatch.setattr(
+        backend_module,
+        "_vllm_paged_decode_attention_into",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("launch failed")),
+    )
+    query = torch.empty((8, 16, 128), dtype=torch.bfloat16)
+    key = torch.empty((8, 2, 128), dtype=torch.bfloat16)
+    value = torch.empty_like(key)
+    output = torch.empty_like(query)
+    kv_cache = torch.empty((65, 2, 16, 2, 128), dtype=torch.bfloat16)
+
+    with pytest.raises(RuntimeError, match="launch failed"):
+        impl.forward(
+            SimpleNamespace(kv_sharing_target_layer_name=None),
+            query,
+            key,
+            value,
+            kv_cache,
+            _metadata(num_reqs=8),
+            output,
+        )
+    assert not marker_path.exists()
 
 
 @pytest.mark.parametrize(
