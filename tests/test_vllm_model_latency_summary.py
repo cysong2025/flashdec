@@ -16,7 +16,7 @@ SPEC.loader.exec_module(MODULE)
 
 
 def _write_fixture(
-    path, target_ratio=0.96, guardrail_ratio=1.01, trials=(1, 2, 3)
+    path, target_ratio=0.96, guardrail_ratio=1.01, trials=(1, 2, 3, 4)
 ):
     fields = [
         "schema_version",
@@ -85,10 +85,15 @@ def _write_fixture(
     ]
     cases = {
         "qwen_b8_i128_o128": guardrail_ratio,
-        "qwen_b8_i2048_o128": target_ratio,
+        "qwen_b8_i8192_o4096": target_ratio,
     }
     rows = []
     for case, ratio in cases.items():
+        input_len, output_len = {
+            "qwen_b8_i128_o128": (128, 128),
+            "qwen_b8_i8192_o4096": (8192, 4096),
+        }[case]
+        generated_tokens = 8 * output_len
         dataset_sha256 = hashlib.sha256(case.encode("utf-8")).hexdigest()
         for trial in trials:
             for backend, p50 in (
@@ -113,15 +118,15 @@ def _write_fixture(
                         "model_manifest_sha256": "c" * 64,
                         "dtype": "bfloat16",
                         "kv_cache_dtype": "bfloat16",
-                        "max_model_len": 4096,
+                        "max_model_len": 12288,
                         "max_num_seqs": 8,
                         "max_num_batched_tokens": 2048,
-                        "gpu_memory_utilization": 0.78,
+                        "gpu_memory_utilization": 0.85,
                         "compilation_mode": "default_inductor_cudagraph",
                         "vllm_cache_root": "/tmp/vllm-cache/abc1234",
                         "flashdec_num_splits": "auto",
-                        "warmup_iters": 3,
-                        "num_iters": 5,
+                        "warmup_iters": 1,
+                        "num_iters": 1,
                         "dataset_seed": 20260830,
                         "dataset_generation_protocol": (
                             "sha256-indexed-u64be-mod-model-tokenizer-"
@@ -132,8 +137,8 @@ def _write_fixture(
                         "skip_tokenizer_init": True,
                         "sampling_n": 1,
                         "sampling_temperature": 0.0,
-                        "sampling_min_tokens": 128,
-                        "sampling_max_tokens": 128,
+                        "sampling_min_tokens": output_len,
+                        "sampling_max_tokens": output_len,
                         "sampling_ignore_eos": True,
                         "sampling_detokenize": False,
                         "timing_scope": (
@@ -145,8 +150,8 @@ def _write_fixture(
                         "accuracy_prefix_len": 2,
                         "case": case,
                         "batch_size": 8,
-                        "input_len": 128 if "i128" in case else 2048,
-                        "output_len": 128,
+                        "input_len": input_len,
+                        "output_len": output_len,
                         "backend": backend,
                         "backend_arg": {
                             "vllm_triton_attn": "TRITON_ATTN",
@@ -164,15 +169,15 @@ def _write_fixture(
                             f"output:{case}".encode("utf-8")
                         ).hexdigest(),
                         "cross_backend_exact_sequences": 8,
-                        "cross_backend_common_prefix_tokens": 1024,
-                        "cross_backend_min_common_prefix_tokens": 128,
-                        "cross_backend_generated_tokens": 1024,
+                        "cross_backend_common_prefix_tokens": generated_tokens,
+                        "cross_backend_min_common_prefix_tokens": output_len,
+                        "cross_backend_generated_tokens": generated_tokens,
                         "cross_backend_full_hash_equal": True,
                         "cross_backend_accuracy_prefix_pass": True,
                         "avg_latency_ms": p50,
                         "p50_latency_ms": p50,
                         "p90_latency_ms": p50,
-                        "output_tokens_per_s": 1024.0 * 1000.0 / p50,
+                        "output_tokens_per_s": generated_tokens * 1000.0 / p50,
                         "raw_json": f"/raw/{case}-{trial}-{backend}.json",
                         "log": f"/raw/{case}-{trial}-{backend}.log",
                         "command": "python worker.py",
@@ -195,7 +200,10 @@ def test_summary_accepts_target_win_and_guardrail(tmp_path):
     assert "4.00%" in text
     assert "Commit-scoped vLLM cache: `/tmp/vllm-cache/abc1234`" in text
     assert "fixed token IDs; seed `20260830`" in text
-    assert hashlib.sha256(b"qwen_b8_i2048_o128").hexdigest() in text
+    assert "# R8 Qwen2.5-3B vLLM Model Latency Summary" in text
+    assert "4 trials per case" in text
+    assert "confirmatory four-trial balanced AB/BA run" in text
+    assert hashlib.sha256(b"qwen_b8_i8192_o4096").hexdigest() in text
     assert output.read_text(encoding="utf-8") == text
 
 
@@ -218,12 +226,15 @@ def test_summary_rejects_cache_root_from_another_commit(tmp_path):
 def test_summary_rejects_missing_target_win(tmp_path):
     source = tmp_path / "input.csv"
     output = tmp_path / "summary.md"
-    _write_fixture(source, target_ratio=0.996)
+    _write_fixture(source, target_ratio=0.971)
 
     with pytest.raises(ValueError, match="performance gate failed"):
         MODULE.summarize(source, output)
 
-    assert "target <= 0.995x: FAIL" in output.read_text(encoding="utf-8")
+    assert "target <= 0.970x" in output.read_text(encoding="utf-8")
+    assert "at least 3% end-to-end latency reduction): FAIL" in output.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_summary_rejects_short_context_regression(tmp_path):
@@ -244,13 +255,13 @@ def test_summary_rejects_unstable_ratio(tmp_path):
     rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
     for row in rows:
         if (
-            row["case"] == "qwen_b8_i2048_o128"
+            row["case"] == "qwen_b8_i8192_o4096"
             and row["backend"] == "flashdec"
-            and row["trial"] == "3"
+            and row["trial"] == "4"
         ):
             for field in ("avg_latency_ms", "p50_latency_ms", "p90_latency_ms"):
                 row[field] = "850.0"
-            row["output_tokens_per_s"] = str(1024.0 * 1000.0 / 850.0)
+            row["output_tokens_per_s"] = str(32768.0 * 1000.0 / 850.0)
     with source.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
         writer.writeheader()
@@ -264,13 +275,43 @@ def test_summary_rejects_unstable_ratio(tmp_path):
     )
 
 
-def test_summary_requires_three_paired_process_trials(tmp_path):
+def test_summary_requires_four_paired_process_trials(tmp_path):
     source = tmp_path / "input.csv"
     output = tmp_path / "summary.md"
-    _write_fixture(source, trials=(1, 2))
+    _write_fixture(source, trials=(1, 2, 3))
 
     with pytest.raises(ValueError, match="frozen paired trials"):
         MODULE.summarize(source, output)
+
+
+def test_reported_effect_sizes_follow_paired_median_ratio(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    native_by_trial = {1: 100.0, 2: 1000.0, 3: 100.0, 4: 1000.0}
+    ratio_by_trial = {1: 0.945, 2: 0.955, 3: 0.965, 4: 0.974}
+    for row in rows:
+        if row["case"] != "qwen_b8_i8192_o4096":
+            continue
+        trial = int(row["trial"])
+        p50 = native_by_trial[trial]
+        if row["backend"] == "flashdec":
+            p50 *= ratio_by_trial[trial]
+        for field in ("avg_latency_ms", "p50_latency_ms", "p90_latency_ms"):
+            row[field] = str(p50)
+        row["output_tokens_per_s"] = str(32768.0 * 1000.0 / p50)
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    text = MODULE.summarize(source, output)
+
+    assert (
+        "| qwen_b8_i8192_o4096 | 4 | 550.000 | 525.750 | 0.9600x "
+        "[0.9450,0.9740] | 4.00% | 4.17% |"
+    ) in text
 
 
 def test_summary_rejects_different_dataset_for_paired_backend(tmp_path):
@@ -280,7 +321,7 @@ def test_summary_rejects_different_dataset_for_paired_backend(tmp_path):
     rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
     for row in rows:
         if (
-            row["case"] == "qwen_b8_i2048_o128"
+            row["case"] == "qwen_b8_i8192_o4096"
             and row["backend"] == "flashdec"
             and row["trial"] == "2"
         ):
@@ -300,9 +341,9 @@ def test_summary_accepts_late_autoregressive_output_divergence(tmp_path):
     _write_fixture(source)
     rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
     for row in rows:
-        if row["case"] == "qwen_b8_i2048_o128":
+        if row["case"] == "qwen_b8_i8192_o4096":
             row["cross_backend_exact_sequences"] = "7"
-            row["cross_backend_common_prefix_tokens"] = "1023"
+            row["cross_backend_common_prefix_tokens"] = str(7 * 4096 + 127)
             row["cross_backend_min_common_prefix_tokens"] = "127"
             row["cross_backend_full_hash_equal"] = "False"
             if row["backend"] == "flashdec":
@@ -323,9 +364,9 @@ def test_summary_rejects_divergence_before_first_custom_decode_decision(tmp_path
     _write_fixture(source)
     rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
     for row in rows:
-        if row["case"] == "qwen_b8_i2048_o128":
+        if row["case"] == "qwen_b8_i8192_o4096":
             row["cross_backend_exact_sequences"] = "7"
-            row["cross_backend_common_prefix_tokens"] = "897"
+            row["cross_backend_common_prefix_tokens"] = str(7 * 4096 + 1)
             row["cross_backend_min_common_prefix_tokens"] = "1"
             row["cross_backend_full_hash_equal"] = "False"
             row["cross_backend_accuracy_prefix_pass"] = "False"
@@ -349,7 +390,11 @@ def test_summary_rejects_divergence_before_first_custom_decode_decision(tmp_path
     [
         ("vllm_version", "9.9.9", "vLLM 0.25.1"),
         ("warmup_iters", "0", "trial strength"),
-        ("max_num_seqs", "1", "capacity/compilation"),
+        ("num_iters", "2", "trial strength"),
+        ("max_model_len", "12287", "capacity/compilation"),
+        ("max_num_seqs", "7", "capacity/compilation"),
+        ("max_num_batched_tokens", "1024", "capacity/compilation"),
+        ("gpu_memory_utilization", "0.84", "capacity/compilation"),
     ],
 )
 def test_summary_rejects_nonformal_environment_fields(
@@ -376,7 +421,7 @@ def test_summary_rejects_wrong_case_shape(tmp_path):
     _write_fixture(source)
     rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
     for row in rows:
-        if row["case"] == "qwen_b8_i2048_o128":
+        if row["case"] == "qwen_b8_i8192_o4096":
             row["batch_size"] = "1"
     with source.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=rows[0].keys())

@@ -120,7 +120,7 @@ def test_runner_invokes_repository_worker_with_dataset_identity(tmp_path):
     assert command[command.index("--sampling-seed") + 1] == "23"
 
 
-def test_decode_heavy_builtin_is_explicit_and_custom_cases_are_supported():
+def test_decode_heavy_builtins_are_explicit_and_custom_cases_are_supported():
     defaults = RUNNER._resolve_cases(None, None)
     assert [case.name for case in defaults] == [
         "qwen_b8_i128_o128",
@@ -129,6 +129,9 @@ def test_decode_heavy_builtin_is_explicit_and_custom_cases_are_supported():
 
     long_case = RUNNER._resolve_cases(["qwen_b8_i2048_o2048"], None)
     assert long_case == [RUNNER.Case("qwen_b8_i2048_o2048", 8, 2048, 2048, False)]
+
+    r8_target = RUNNER._resolve_cases(["qwen_b8_i8192_o4096"], None)
+    assert r8_target == [RUNNER.Case("qwen_b8_i8192_o4096", 8, 8192, 4096, False)]
 
     custom = RUNNER._resolve_cases(None, ["qwen_b4_i3072_o512:4:3072:512"])
     assert custom == [RUNNER.Case("qwen_b4_i3072_o512", 4, 3072, 512, False)]

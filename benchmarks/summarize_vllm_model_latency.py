@@ -19,17 +19,17 @@ BACKEND_ARGS = {
     "vllm_triton_attn": "TRITON_ATTN",
     "flashdec": "CUSTOM",
 }
-TARGET_CASE = "qwen_b8_i2048_o128"
+TARGET_CASE = "qwen_b8_i8192_o4096"
 GUARDRAIL_CASE = "qwen_b8_i128_o128"
 FORMAL_CASE_SHAPES = {
     GUARDRAIL_CASE: (8, 128, 128),
-    TARGET_CASE: (8, 2048, 128),
+    TARGET_CASE: (8, 8192, 4096),
 }
-FORMAL_TRIALS = {1, 2, 3}
-FORMAL_WARMUP_ITERS = 3
-FORMAL_NUM_ITERS = 5
+FORMAL_TRIALS = {1, 2, 3, 4}
+FORMAL_WARMUP_ITERS = 1
+FORMAL_NUM_ITERS = 1
 ACCURACY_PREFIX_LEN = 2
-TARGET_RATIO_LIMIT = 0.995
+TARGET_RATIO_LIMIT = 0.970
 GUARDRAIL_RATIO_LIMIT = 1.02
 MAX_RATIO_SPREAD = 0.03
 DATASET_GENERATION_PROTOCOL = (
@@ -181,10 +181,10 @@ def summarize(input_path: Path, output_path: Path) -> str:
         if row["dtype"] != "bfloat16" or row["kv_cache_dtype"] != "bfloat16":
             raise ValueError("formal model latency requires BF16 model and KV cache")
         if (
-            row["max_model_len"] != "4096"
+            row["max_model_len"] != "12288"
             or row["max_num_seqs"] != "8"
             or row["max_num_batched_tokens"] != "2048"
-            or not math.isclose(float(row["gpu_memory_utilization"]), 0.78)
+            or not math.isclose(float(row["gpu_memory_utilization"]), 0.85)
             or row["compilation_mode"] != "default_inductor_cudagraph"
             or row["flashdec_num_splits"] != "auto"
         ):
@@ -384,17 +384,20 @@ def summarize(input_path: Path, output_path: Path) -> str:
             / float(pair["vllm_triton_attn"]["p50_latency_ms"])
             for pair in pairs
         ]
+        paired_median_ratio = statistics.median(ratios)
         results.append(
             {
                 "case": case,
                 "trials": len(pairs),
                 "native": native,
                 "flashdec": flashdec,
-                "ratio": statistics.median(ratios),
+                "ratio": paired_median_ratio,
                 "ratio_min": min(ratios),
                 "ratio_max": max(ratios),
-                "reduction_pct": (1.0 - flashdec / native) * 100.0,
-                "throughput_uplift_pct": (native / flashdec - 1.0) * 100.0,
+                "reduction_pct": (1.0 - paired_median_ratio) * 100.0,
+                "throughput_uplift_pct": (
+                    1.0 / paired_median_ratio - 1.0
+                ) * 100.0,
             }
         )
 
@@ -418,12 +421,15 @@ def summarize(input_path: Path, output_path: Path) -> str:
     )
 
     lines = [
-        "# R7 Qwen2.5-3B vLLM Model Latency Summary",
+        "# R8 Qwen2.5-3B vLLM Model Latency Summary",
         "",
         "## Validation",
         "",
         f"- Input: `{input_path}`.",
-        f"- Rows: {len(rows)}; paired process trials: {len(paired)}.",
+        (
+            f"- Rows: {len(rows)}; paired backend process pairs: {len(paired)} "
+            f"({len(FORMAL_TRIALS)} trials per case)."
+        ),
         f"- Device: {first['device']}.",
         f"- Model: {first['model_id']} / {first['dtype']}.",
         f"- Model config SHA-256: `{first['model_config_sha256']}`.",
@@ -469,7 +475,8 @@ def summarize(input_path: Path, output_path: Path) -> str:
         (
             "Ratios are `FlashDec/vLLM Triton`; values below 1 favor FlashDec. "
             "Latency is fixed-batch, end-to-end `LLM.generate` time with model "
-            "loading and compilation excluded."
+            "loading and compilation excluded. Reduction and TPS uplift are "
+            "derived from the same paired-median ratio used by the gate."
         ),
         "",
         (
@@ -493,10 +500,11 @@ def summarize(input_path: Path, output_path: Path) -> str:
             "",
             (
                 "These pilot-informed thresholds were frozen before the "
-                "confirmatory three-trial run."
+                "confirmatory four-trial balanced AB/BA run."
             ),
             (
-                f"- B8 input2048/output128 target <= {TARGET_RATIO_LIMIT:.3f}x: "
+                f"- B8 input8192/output4096 target <= {TARGET_RATIO_LIMIT:.3f}x "
+                "(at least 3% end-to-end latency reduction): "
                 f"{'PASS' if target_pass else 'FAIL'}."
             ),
             (

@@ -61,8 +61,10 @@ class Case:
 CASES = (
     Case("qwen_b8_i128_o128", 8, 128, 128),
     Case("qwen_b8_i2048_o128", 8, 2048, 128),
-    # Explicit opt-in until this decode-heavy case becomes a frozen formal gate.
+    # Decode-heavy cases are explicit opt-ins so historical default runs remain
+    # unchanged and callers must deliberately provision their longer capacity.
     Case("qwen_b8_i2048_o2048", 8, 2048, 2048, run_by_default=False),
+    Case("qwen_b8_i8192_o4096", 8, 8192, 4096, run_by_default=False),
 )
 
 
@@ -266,7 +268,8 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         help=(
             "Run only a named built-in or --case-spec case; may be repeated. "
-            "The decode-heavy qwen_b8_i2048_o2048 built-in is opt-in."
+            "The decode-heavy qwen_b8_i2048_o2048 and qwen_b8_i8192_o4096 "
+            "built-ins are opt-in."
         ),
     )
     parser.add_argument(
