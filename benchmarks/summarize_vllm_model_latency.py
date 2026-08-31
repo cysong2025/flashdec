@@ -585,7 +585,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
         (
             "- First observed split occurred during CUDA Graph capture in "
             f"{sum(split_capture_states)}/{len(split_capture_states)} CUSTOM "
-            "workers (recorded, not a pass/fail condition)."
+            "workers (required by the fail-closed activation gate)."
         ),
         f"- Git commit: `{first['git_commit']}`; clean at start: True.",
         "- Per-case prompt dataset identities:",

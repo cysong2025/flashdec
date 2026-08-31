@@ -292,6 +292,47 @@ def test_successful_multi_split_writes_one_canonical_attestation(
     assert impl._split_attestation_binding is None
 
 
+def test_eager_split_does_not_consume_attestation_before_captured_split(
+    monkeypatch, tmp_path
+):
+    impl = _impl_without_vllm_initialization()
+    marker_path = tmp_path / "split.json"
+    binding = _attestation_binding(marker_path)
+    impl._split_attestation_binding = binding
+    monkeypatch.setattr(
+        backend_module,
+        "_vllm_paged_decode_attention_into",
+        lambda *args, **kwargs: args[6],
+    )
+    capture_states = iter((False, True))
+    monkeypatch.setattr(
+        torch.cuda,
+        "is_current_stream_capturing",
+        lambda: next(capture_states),
+    )
+    query = torch.empty((8, 16, 128), dtype=torch.bfloat16)
+    key = torch.empty((8, 2, 128), dtype=torch.bfloat16)
+    value = torch.empty_like(key)
+    output = torch.empty_like(query)
+    kv_cache = torch.empty((65, 2, 16, 2, 128), dtype=torch.bfloat16)
+    metadata = _metadata(num_reqs=8)
+    layer = SimpleNamespace(kv_sharing_target_layer_name=None)
+
+    assert impl.forward(
+        layer, query, key, value, kv_cache, metadata, output
+    ) is output
+    assert not marker_path.exists()
+    assert impl._split_attestation_binding is binding
+
+    assert impl.forward(
+        layer, query, key, value, kv_cache, metadata, output
+    ) is output
+    assert json.loads(marker_path.read_text(encoding="utf-8"))[
+        "cuda_graph_capture"
+    ] is True
+    assert impl._split_attestation_binding is None
+
+
 def test_single_split_fallback_does_not_write_attestation(monkeypatch, tmp_path):
     impl = _impl_without_vllm_initialization()
     impl._requested_splits = 1

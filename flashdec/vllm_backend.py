@@ -368,7 +368,7 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
             num_splits=num_splits,
         )
         binding = getattr(self, "_split_attestation_binding", None)
-        if binding is not None:
+        if binding is not None and torch.cuda.is_current_stream_capturing():
             _write_split_attestation(
                 binding,
                 max_seq_len=attn_metadata.max_seq_len,
@@ -381,9 +381,7 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
                 block_size=block_size,
                 query_dtype=str(query.dtype).removeprefix("torch."),
                 kv_cache_dtype=str(kv_cache.dtype).removeprefix("torch."),
-                cuda_graph_capture=bool(
-                    torch.cuda.is_current_stream_capturing()
-                ),
+                cuda_graph_capture=True,
             )
             # Each layer pays at most one set lookup. CUDA Graph replay never
             # re-enters this Python branch, and ordinary users never enable it.

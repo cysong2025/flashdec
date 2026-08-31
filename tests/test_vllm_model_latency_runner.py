@@ -266,7 +266,7 @@ def _valid_worker_result(tmp_path, *, num_iters=1):
         "block_size": 16,
         "query_dtype": "bfloat16",
         "kv_cache_dtype": "bfloat16",
-        "cuda_graph_capture": False,
+        "cuda_graph_capture": True,
     }
     attestation_bytes = RUNNER.canonical_attestation_bytes(attestation_payload)
     attestation_path.write_bytes(attestation_bytes)
@@ -381,6 +381,34 @@ def test_worker_rejects_missing_or_forged_split_marker(tmp_path):
     path.write_text('{"backend":"CUSTOM"}\n', encoding="utf-8")
     path.chmod(0o600)
     with pytest.raises(ValueError, match="fields differ from schema"):
+        WORKER._verify_split_attestation(
+            binding, backend="CUSTOM", dataset=dataset
+        )
+
+    eager_only = {
+        "schema_version": 1,
+        "nonce": "a" * 64,
+        "engine_pid": 123,
+        "backend": "CUSTOM",
+        "case": "qwen_b8_i512_o2",
+        "trial": 1,
+        "dataset_sha256": "c" * 64,
+        "git_commit": "b" * 40,
+        "max_seq_len": 512,
+        "logical_blocks": 32,
+        "num_reqs": 8,
+        "num_splits": 8,
+        "num_q_heads": 16,
+        "num_kv_heads": 2,
+        "head_dim": 128,
+        "block_size": 16,
+        "query_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat16",
+        "cuda_graph_capture": False,
+    }
+    path.write_bytes(RUNNER.canonical_attestation_bytes(eager_only))
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="CUDA Graph capture-time launch"):
         WORKER._verify_split_attestation(
             binding, backend="CUSTOM", dataset=dataset
         )

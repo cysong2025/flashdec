@@ -39,7 +39,7 @@ def _attestation_fields(case, trial, input_len, dataset_sha256, backend):
         "block_size": 16,
         "query_dtype": "bfloat16",
         "kv_cache_dtype": "bfloat16",
-        "cuda_graph_capture": trial % 2 == 0,
+        "cuda_graph_capture": True,
     }
     encoded = MODULE.canonical_attestation_bytes(payload)
     values = {
@@ -269,8 +269,8 @@ def test_summary_accepts_target_win_and_guardrail(tmp_path):
         in text
     )
     assert "every CUSTOM worker supplied a unique, canonical" in text
-    assert "2/8 CUSTOM workers" not in text
-    assert "4/8 CUSTOM workers" in text
+    assert "8/8 CUSTOM workers" in text
+    assert "required by the fail-closed activation gate" in text
     assert hashlib.sha256(b"qwen_b8_i8192_o4096").hexdigest() in text
     assert output.read_text(encoding="utf-8") == text
 
@@ -320,6 +320,22 @@ def test_summary_rejects_forged_or_wrong_split_observation(tmp_path):
         writer.writerows(rows)
 
     with pytest.raises(ValueError, match="multi-split launch"):
+        MODULE.summarize(source, output)
+
+
+def test_summary_rejects_eager_only_split_attestation(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    custom = next(row for row in rows if row["backend"] == "flashdec")
+    _rewrite_attestation(custom, cuda_graph_capture=False)
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="CUDA Graph capture-time launch"):
         MODULE.summarize(source, output)
 
 

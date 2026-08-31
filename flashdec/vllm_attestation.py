@@ -168,6 +168,10 @@ def validate_split_attestation(
         raise ValueError("split attestation query/cache dtypes differ")
     if not isinstance(payload["cuda_graph_capture"], bool):
         raise ValueError("split attestation cuda_graph_capture must be boolean")
+    if payload["cuda_graph_capture"] is not True:
+        raise ValueError(
+            "split attestation must prove a CUDA Graph capture-time launch"
+        )
 
     expected_values = {
         "nonce": expected_nonce,
