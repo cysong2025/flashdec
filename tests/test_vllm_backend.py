@@ -45,7 +45,7 @@ def _impl_without_vllm_initialization():
     return impl
 
 
-def _metadata(num_reqs=3, max_seq_len=1024):
+def _metadata(num_reqs=3, max_seq_len=1024, workspace_capacity=64):
     return SimpleNamespace(
         query_start_loc=torch.empty(num_reqs + 1, dtype=torch.int32),
         max_seq_len=max_seq_len,
@@ -55,7 +55,9 @@ def _metadata(num_reqs=3, max_seq_len=1024):
         block_table=torch.empty((num_reqs, 64), dtype=torch.int32),
         seq_lens=torch.empty(num_reqs, dtype=torch.int32),
         slot_mapping=torch.empty(num_reqs, dtype=torch.int64),
-        softmax_segm_output=SimpleNamespace(shape=(64, 16, 16, 128)),
+        softmax_segm_output=SimpleNamespace(
+            shape=(workspace_capacity, 16, 16, 128)
+        ),
         softmax_segm_max=object(),
         softmax_segm_expsum=object(),
     )
@@ -152,6 +154,13 @@ def test_eligible_context_boundary_passes_original_tensors_and_legal_split(
         pytest.fail("eligible fused decode must not launch a separate KV update")
 
     monkeypatch.setattr(impl, "do_kv_cache_update", unexpected_update)
+    monkeypatch.setattr(
+        TritonAttentionImpl,
+        "forward",
+        lambda self, *args: pytest.fail(
+            "eligible multi-split decode must not use native fallback"
+        ),
+    )
     recorded = {}
 
     def record_launcher(*args, **kwargs):
@@ -204,6 +213,76 @@ def test_eligible_context_boundary_passes_original_tensors_and_legal_split(
         "sm_scale": 128**-0.5,
         "num_splits": 16,
     }
+
+
+@pytest.mark.parametrize(
+    ("requested_splits", "num_reqs", "workspace_capacity"),
+    [
+        (1, 3, 64),
+        (0, 64, 64),
+        (0, 3, 2),
+    ],
+    ids=("explicit-one", "auto-one-high-batch", "workspace-forces-one"),
+)
+def test_final_single_split_updates_kv_then_uses_native_fallback(
+    monkeypatch, requested_splits, num_reqs, workspace_capacity
+):
+    impl = _impl_without_vllm_initialization()
+    impl._requested_splits = requested_splits
+    calls = []
+
+    def record_update(*args):
+        calls.append(("update", args))
+
+    marker = object()
+
+    def record_fallback(self, *args):
+        calls.append(("fallback", args))
+        return marker
+
+    def unexpected_launcher(*args, **kwargs):
+        pytest.fail("single-split decode must not enter the FlashDec kernel")
+
+    monkeypatch.setattr(impl, "do_kv_cache_update", record_update)
+    monkeypatch.setattr(TritonAttentionImpl, "forward", record_fallback)
+    monkeypatch.setattr(
+        backend_module,
+        "_vllm_paged_decode_attention_into",
+        unexpected_launcher,
+    )
+    query = torch.empty((num_reqs, 16, 128), dtype=torch.float16)
+    key = torch.empty((num_reqs, 2, 128), dtype=torch.float16)
+    value = torch.empty_like(key)
+    output = torch.empty_like(query)
+    kv_cache = torch.empty((65, 2, 16, 2, 128), dtype=torch.float16)
+    metadata = _metadata(
+        num_reqs=num_reqs,
+        max_seq_len=1024,
+        workspace_capacity=workspace_capacity,
+    )
+    layer = SimpleNamespace(kv_sharing_target_layer_name=None)
+
+    returned = impl.forward(
+        layer,
+        query,
+        key,
+        value,
+        kv_cache,
+        metadata,
+        output,
+    )
+
+    assert returned is marker
+    assert calls == [
+        (
+            "update",
+            (layer, key, value, kv_cache, metadata.slot_mapping),
+        ),
+        (
+            "fallback",
+            (layer, query, key, value, kv_cache, metadata, output, None, None),
+        ),
+    ]
 
 
 def test_context_511_updates_kv_then_uses_native_fallback(monkeypatch):

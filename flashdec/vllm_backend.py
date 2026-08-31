@@ -147,6 +147,41 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
             and self.num_heads // self.num_kv_heads in (4, 8, 16)
         )
 
+    def _forward_with_triton(
+        self,
+        layer: torch.nn.Module,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        kv_cache: torch.Tensor,
+        attn_metadata: TritonAttentionMetadata | None,
+        output: torch.Tensor,
+        output_scale: torch.Tensor | None,
+        output_block_scale: torch.Tensor | None,
+        *,
+        update_kv: bool,
+    ) -> torch.Tensor:
+        if update_kv:
+            assert attn_metadata is not None
+            self.do_kv_cache_update(
+                layer,
+                key,
+                value,
+                kv_cache,
+                attn_metadata.slot_mapping,
+            )
+        return super().forward(
+            layer,
+            query,
+            key,
+            value,
+            kv_cache,
+            attn_metadata,
+            output,
+            output_scale,
+            output_block_scale,
+        )
+
     def forward(
         self,
         layer: torch.nn.Module,
@@ -174,15 +209,7 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
             output_scale,
             output_block_scale,
         ):
-            if attn_metadata is not None and owns_kv:
-                self.do_kv_cache_update(
-                    layer,
-                    key,
-                    value,
-                    kv_cache,
-                    attn_metadata.slot_mapping,
-                )
-            return super().forward(
+            return self._forward_with_triton(
                 layer,
                 query,
                 key,
@@ -192,6 +219,7 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
                 output,
                 output_scale,
                 output_block_scale,
+                update_kv=attn_metadata is not None and owns_kv,
             )
 
         # Uniform single-token decode has one query token per metadata row. In
@@ -210,6 +238,19 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
         )
         if num_reqs > attn_metadata.softmax_segm_output.shape[0]:
             num_splits = 1
+        if num_splits == 1:
+            return self._forward_with_triton(
+                layer,
+                query,
+                key,
+                value,
+                kv_cache,
+                attn_metadata,
+                output,
+                output_scale,
+                output_block_scale,
+                update_kv=True,
+            )
 
         _vllm_paged_decode_attention_into(
             query,
