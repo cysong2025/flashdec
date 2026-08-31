@@ -748,7 +748,9 @@ def test_release_tree_requires_public_results_chart_surface():
         "benchmarks/results/public_results_snapshot.json",
         "docs/assets/flashdec-results-overview-dark.svg",
         "docs/assets/flashdec-results-overview-light.svg",
+        "scripts/generate_public_architecture.py",
         "scripts/generate_public_results_chart.py",
+        "tests/test_public_architecture.py",
         "tests/test_public_results_chart.py",
     ):
         assert relative in REQUIRED_PATHS

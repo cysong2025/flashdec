@@ -95,6 +95,7 @@ REQUIRED_PATHS = (
     "scripts/check_env.py",
     "scripts/check_docs.py",
     "scripts/check_release.py",
+    "scripts/generate_public_architecture.py",
     "scripts/generate_public_results_chart.py",
     "scripts/README.md",
     "scripts/run_validation.py",
@@ -132,6 +133,7 @@ REQUIRED_PATHS = (
     "tests/test_vllm_model_latency_summary.py",
     "tests/test_vllm_model_latency_runner.py",
     "tests/test_vllm_serving_benchmark_summary.py",
+    "tests/test_public_architecture.py",
     "tests/test_public_results_chart.py",
 )
 

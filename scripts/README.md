@@ -31,14 +31,16 @@ python scripts/check_docs.py
 
 该脚本扫描 README、CHANGELOG、CONTRIBUTING、`docs/`、`benchmarks/`、`scripts/` 和 `.github/` 中的 Markdown 链接及 HTML `src`/`srcset` 图片资源，拒绝缺失目标、逃逸出仓库的相对路径，以及与项目实现无关的个人评估措辞；外部 URL 不发起网络请求。`benchmarks/results/` 下由 Git 忽略的 `*_quick_summary.md`、`*_smoke.md` 和 `local_backups/` 不进入扫描。
 
-公开实验概览图：
+README 架构图与公开实验概览图：
 
 ```bash
+python scripts/generate_public_architecture.py
+python scripts/generate_public_architecture.py --check
 python scripts/generate_public_results_chart.py
 python scripts/generate_public_results_chart.py --check
 ```
 
-生成器读取 `benchmarks/results/public_results_snapshot.json`，解析并验证 canonical summary 的 validation metadata、目标 Markdown 表格及 outcome section，再确定性生成 GitHub 深色/浅色主题 SVG。该 JSON 是从已验证 Markdown summary 提取的公开展示快照，不是原始 benchmark dataset；canonical summary 始终是权威来源。
+两个生成器都会确定性生成 GitHub 深色/浅色主题 SVG。性能图读取 `benchmarks/results/public_results_snapshot.json`，解析并验证 Qwen/vLLM、runtime 和外部 baseline 的 canonical summaries；该 JSON 是公开展示快照，不是原始 benchmark dataset，canonical Markdown 始终是权威来源。
 
 仓库结构检查：
 

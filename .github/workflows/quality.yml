@@ -55,6 +55,7 @@ jobs:
           tests/test_flashinfer_baseline_benchmark.py
           tests/test_flashinfer_baseline_summary.py
           tests/test_summary_default_paths.py
+          tests/test_public_architecture.py
           tests/test_public_results_chart.py
 
   python-310-compat:
@@ -75,6 +76,7 @@ jobs:
           python -m pytest -q
           tests/test_docs_check.py
           tests/test_release_check.py
+          tests/test_public_architecture.py
           tests/test_public_results_chart.py
       - name: Check public release tree
         run: python scripts/check_release.py --require-evidence --require-public

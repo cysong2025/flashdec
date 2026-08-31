@@ -2,34 +2,32 @@
 
 # ⚡ FlashDec
 
-**从 PagedAttention kernel 到可验证的单 GPU LLM decode runtime**
+**A transactional, paged-decode runtime for single-GPU LLM inference**
 
-*A correctness-first decode runtime built with PyTorch, Triton and CUDA.*
+从 Triton kernel、Paged KV Cache 到 vLLM/Qwen2.5-3B 端到端验证。
 
 [![Repository checks](https://github.com/cysong2025/flashdec/actions/workflows/quality.yml/badge.svg)](https://github.com/cysong2025/flashdec/actions/workflows/quality.yml)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
-![CUDA](https://img.shields.io/badge/CUDA-validated%2012.8-76B900?logo=nvidia&logoColor=white)
-![Triton](https://img.shields.io/badge/Triton-validated%203.6-654FF0)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.11-EE4C2C?logo=pytorch&logoColor=white)
+![CUDA](https://img.shields.io/badge/CUDA-12.8%20%7C%2013.0-76B900?logo=nvidia&logoColor=white)
+![Triton](https://img.shields.io/badge/Triton-3.6-654FF0)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+[Quick start](#快速开始) · [Architecture](docs/design.md) · [Performance](docs/performance_report.md) · [API](docs/API.md) · [Reproduce](docs/reproducibility.md)
 
 </div>
 
-FlashDec 用一条可审计的数据路径研究单 token decode：请求如何拥有 paged KV block，调度器如何在容量压力下保证进展，多层 K/V 写入如何原子提交，以及 kernel 优化能否穿过 runtime 开销形成完整 step 收益。
+FlashDec 优化大模型逐 token 生成阶段的数据路径：它用事务化的 Paged KV Cache 管理请求状态，以 Triton/CUDA kernel 完成 RoPE、KV append 和 paged attention，并通过 out-of-tree 插件接入 vLLM。vLLM 继续负责模型、prefill、调度、sampling 与 serving；FlashDec 只替换满足条件的 single-token decode attention，并在不支持的场景自动回退。
 
-核心 runtime 面向单 GPU、caller-provided Q/K/V，不自行实现完整模型或 serving 服务。可选的 vLLM out-of-tree backend 把 eligible single-token decode 接入真实 Qwen2.5-3B；模型、prefill、调度、sampling 与 HTTP server 仍由 vLLM 拥有。PyTorch reference 定义数值语义；PagedKVCache 独占 block、`seq_len` 与事务状态；Triton/CUDA 负责受这些状态约束的数据路径。
+| | 代表性结果 | 测量边界 |
+| --- | ---: | --- |
+| 🚀 Qwen2.5-3B 完整生成延迟 | **−4.58%** | B8 / input 8192 / output 4096，offline `LLM.generate` |
+| ⚡ 输出吞吐 | **+4.80%** | 与上面相同的 4 轮 balanced AB/BA 实验 |
+| 🧩 vLLM decode-attention p50 | **−19.75% / −20.74%** | B8 / context 1024、2048，kernel-only |
+| 🧠 Shared-prefix KV 容量 | **−68.8%** | 固定 48-block pool，admission `9/16 → 16/16` |
 
-## 研究问题
-
-| 问题 | FlashDec 的回答 | 主要证据 |
-| --- | --- | --- |
-| logical token 如何映射到非连续 physical KV blocks？ | 独立 dense/paged reference、token-major cache、显式 block table 与 masked online softmax | [warp selection](benchmarks/results/paged_decode_warp_selection_summary.md) · [block-size](benchmarks/results/paged_decode_block_size_summary.md) · [layout](benchmarks/results/paged_decode_kv_layout_summary.md) · [default profile](benchmarks/results/paged_decode_default_profile_summary.md) |
-| 谁拥有 block、`seq_len` 和 request lifecycle？ | PagedKVCache 是唯一权威状态源；kernel 和 benchmark 不推进 lifecycle | [Paged KV 设计](docs/design_paged_kv.md) · [DecodeEngine 设计](docs/design_decode_engine.md) |
-| KV 容量不足时如何避免 boundary deadlock 与 starvation？ | lifetime block commitment、FIFO + aging、公平 runnable subset、policy/snapshot-bound decision | [scheduler matrix](benchmarks/results/scheduler_capacity_progress_summary.md) |
-| 多层 token 如何只提交一次并支持整体回滚？ | 所有 layer 共享预留位置，按序写入，batch 原子 commit/abort，终态元数据有界回收 | [multi-layer matrix](benchmarks/results/multi_layer_transaction_summary.md) · [transaction design](docs/design_multi_layer_kv_transaction.md) |
-| shared prefix 的收益究竟来自哪里？ | 只共享 immutable full blocks，以 refcount/LRU 管理；容量与 admission 收益和 latency 分开报告 | [8-trial confirmation](benchmarks/results/shared_prefix_capacity_summary.md) |
-| kernel 优化如何传播到系统，又如何公平比较外部实现？ | 分离 append-only、complete-step、profiler、外部 kernel、真实模型与在线 serving；保留未过门槛结果 | [性能报告](docs/performance_report.md) · [FlashInfer baseline](benchmarks/results/flashinfer_paged_decode_baseline_summary.md) · [vLLM Qwen kernel](benchmarks/results/vllm_qwen_attention_summary.md) · [R8 长上下文端到端](benchmarks/results/vllm_qwen_long_context_model_latency_summary.md) |
-
-完整的问题定义、假设和证据链见[研究问题](docs/research_questions.md)。
+> [!NOTE]
+> 端到端结果来自 RTX 5070 上固定的 Qwen2.5-3B BF16 长上下文离线 workload，baseline 为显式 vLLM `TRITON_ATTN`，不代表所有模型、在线流量或 vLLM 默认最快配置。完整协议、范围和负结果见[性能报告](docs/performance_report.md)。
 
 ## 架构
 
@@ -37,64 +35,50 @@ FlashDec 用一条可审计的数据路径研究单 token decode：请求如何�
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/flashdec-architecture-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="docs/assets/flashdec-architecture-light.svg">
-    <img src="docs/assets/flashdec-architecture-light.svg" width="100%" alt="FlashDec architecture showing the caller, scheduler, DecodeEngine, transactional PagedKVCache, fused RoPE and KV append, paged decode attention, and the evidence boundary.">
+    <img src="docs/assets/flashdec-architecture-light.svg" width="100%" alt="FlashDec integration architecture from vLLM and the plugin router through the transactional runtime to Triton and CUDA kernels.">
   </picture>
 </p>
 
-```text
-RequestSpec / caller-provided Q,K,V
-                 │
-                 ▼
-       Block-aware Scheduler
-                 │ policy + snapshot-bound decision
-                 ▼
-            DecodeEngine
-                 │ token transaction
-                 ▼
-          PagedKVCache runtime
-       ownership / refcount / rollback
-                 │
-       ┌─────────┴─────────┐
-       ▼                   ▼
-Fused RoPE + KV append   Triton paged decode
-       └─────────┬─────────┘
-                 ▼
-      correctness + benchmark evidence
-```
+| 层次 | FlashDec 提供的能力 |
+| --- | --- |
+| vLLM 集成 | `general_plugins` 注册、`CUSTOM` attention backend、严格 eligibility 检查和原生 Triton fallback |
+| Decode runtime | block-aware scheduler、`DecodeEngine`、跨层 token transaction、失败回滚与 lifecycle validation |
+| KV memory | physical block allocator、block table、shared-prefix refcount/LRU、request-private tail |
+| GPU data path | fused RoPE + KV append、grouped-GQA split-KV paged attention、query-head reducer |
+| Evidence | PyTorch reference、跨 backend parity、执行路径 attestation、commit-bound benchmark summaries |
 
-Scheduler 产生携带原始 K/V-free metadata snapshot 与 config 的容量决策；DecodeEngine 从权威状态重建 snapshot、按 config 重跑 canonical policy 后再编排执行；PagedKVCache 管理 ownership、事务、`seq_len` 和 shared-prefix lifetime。完整不变量见[总体设计](docs/design.md)。
+### vLLM 是如何接入的？
 
-可选 vLLM integration 位于核心 runtime 边界之外：vLLM 提供真实模型、prefill、KV allocation、scheduler 和 API server，FlashDec 只替换满足严格条件的 decode attention；不支持的调用自动回退原生 Triton backend。详见 [vLLM backend 设计](docs/design_vllm_backend.md)。
+FlashDec **没有维护修改版 vLLM，也没有接管整套推理引擎**。插件复用 vLLM 的模型执行和 KV layout，在 uniform single-token decode、支持的 dtype/head shape 等条件满足时选择 FlashDec kernel；prefill、mixed batch 或其他不支持路径继续使用 vLLM Triton backend。正式实验还会校验 CUDA Graph capture marker，避免“配置了插件但实际没有执行”的假阳性。
 
-## 主要发现
+实现合同与 fallback 边界见 [vLLM backend design](docs/design_vllm_backend.md)。
+
+## 性能概览
 
 <p align="center">
   <a href="docs/assets/flashdec-results-overview-light.svg">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/assets/flashdec-results-overview-dark.svg">
       <source media="(prefers-color-scheme: light)" srcset="docs/assets/flashdec-results-overview-light.svg">
-      <img src="docs/assets/flashdec-results-overview-light.svg" width="100%" alt="Selected FlashDec evidence for scheduler progress, shared-prefix capacity, transaction optimization, integrated lifecycle validation, and the FlashInfer kernel comparison.">
+      <img src="docs/assets/flashdec-results-overview-light.svg" width="100%" alt="FlashDec results across Qwen end-to-end generation, vLLM attention, KV capacity and runtime mechanisms.">
     </picture>
   </a>
 </p>
 
-- Scheduler 的主要价值是容量安全和进展保证：boundary case 中 lifetime policy 完成率为 `100%`，cancel baseline 为 `50%`，greedy baseline 为 `0%`。
-- 75% shared-prefix hit 将 context physical blocks 从 `64/64` 降至 `20/64`，节省 `68.8%`（`5.5 MiB`）容量，并把固定池 admission 从 `9/16` 提高到 `16/16`；latency 没有稳定方向。
-- Cache-owned trusted transaction 移除了每 layer 的重复 device reduction 与 host scalar sync；persistent-metadata 候选仅 `13/16` 组稳定，未采用。
-- 固定 FlashInfer `0.6.15.post1` 的共同 paged-decode kernel 对比中，FlashDec/FlashInfer p50 latency ratio 为 `1.2003x`（CUDA core）和 `1.2284x`（tensor core）；比值大于 1 表示 FlashInfer 更低延迟。该结论不外推到完整 runtime。
-- 固定 vLLM `0.25.1` 与 Qwen2.5-3B BF16 shape 的外部 kernel gate 中，FlashDec 在 B8/ctx1024 和 B8/ctx2048 的 p50 分别为 vLLM Triton 的 `0.8025x` 和 `0.7926x`，即降低 `19.75%` 和 `20.74%`；B1/B4 guardrail 全部通过。
-- R7 真实 Qwen evidence 保留 Amdahl 边界：固定批量模型 p50 只改善 `0.16%–0.41%`，未达到预注册模型目标；在线 median/p90 TPOT 分别改善约 `0.31%/0.27%`，但 throughput 中位数 `1.0019x` 略低于 `1.002x` 门槛，因此整体 serving gate 为 `FAIL`。不能把约 20% kernel 收益写成约 20% serving 加速。
-- R8 长上下文正式门槛在 Qwen2.5-3B BF16 `B8/i8192/o4096` 上将端到端 p50 latency 降低 `4.58%`，tokens/s 提升 `4.80%`；`B8/i512/o2` guardrail 为 `PASS`。这是 offline fixed-batch、blocking `LLM.generate` 边界下，FlashDec 与显式 vLLM `TRITON_ATTN` baseline 的对比；它不是在线 serving 结果，baseline 也不代表 vLLM 的默认或最快配置。详见 [R8 正式 summary](benchmarks/results/vllm_qwen_long_context_model_latency_summary.md)。
-- 外部基线证据提交 `d7d4feb` 的 GPU full regression 为 `453 passed, 94 subtests passed`；GitHub Actions 运行不依赖 GPU 的仓库检查子集。测试计数绑定具体 commit 和环境，不作为滚动徽章。
-- R6-A hardening 提交 `87d8a34` 在同一 RTX 5070/CUDA 12.8 开发环境完成当前代码回归：focused 为 `254 passed, 20 subtests passed`，full 为 `501 passed, 100 subtests passed`，clean-tree public release check 为 `PASS`。这组结果验证事务回收与 scheduler decision 边界，不替代绑定历史提交的性能矩阵。
-- R7 证据提交 `61836b6` 的 vLLM/cu130 专项为 `21 passed`；cu128 全仓库为 `531 passed, 1 skipped, 100 subtests passed`，唯一 skip 是 cu128 环境未安装 vLLM。两套环境 `pip check` 与 clean-tree public release gate 均为 `PASS`。测试计数只证明对应提交的 correctness，不改变上述性能门槛结果。
-- R8 证据发布提交 `f4caf29` 的 cu128 全仓库回归为 `600 passed, 1 skipped, 105 subtests passed`，vLLM/cu130 专项为 `245 passed, 5 subtests passed`；两套环境的 `pip check` 与 clean-tree public/evidence release gate 均为 `PASS`。唯一 skip 仍由 vLLM 专项实际覆盖，完整日志哈希见[复现指南](docs/reproducibility.md#2026-08-31-r8-发布回归)。
+| 结果层次 | FlashDec 对比对象 | 结果 | 结论 |
+| --- | --- | ---: | --- |
+| 完整 Qwen `LLM.generate` | vLLM `TRITON_ATTN` | `0.9542x` latency | 长上下文目标通过；短路径 guard 为 `1.0029x` |
+| Qwen attention kernel | vLLM Triton | `0.8025x / 0.7926x` p50 | B8 两个目标 shape 通过 |
+| Cache-owned transaction | checked dispatch | `1.7307x` p50 speedup | 仅适用于 cache-owned metadata |
+| Shared prefix | private context blocks | `68.8%` KV capacity saved | 容量收益，不宣称稳定 latency 收益 |
+| Boundary scheduler | greedy step-only | `100% vs 0%` completion | correctness/progress，不是 latency 对比 |
+| External kernel check | FlashInfer 0.6.15 | `1.2003x / 1.2284x` latency ratio | FlashInfer 更快；只代表共同 kernel shape |
 
-图中数据由受版本控制的 Markdown summaries 派生。来源、trial 范围、ratio 方向和负结果见[结果索引](benchmarks/results/README.md)与[数据快照](benchmarks/results/public_results_snapshot.json)。
+图表由受版本控制的数据快照和 canonical summaries 确定性生成。不同层次的 ratio 方向和计时范围不能互相换算；原始结论见[结果索引](benchmarks/results/README.md)。
 
 ## 快速开始
 
-推荐 Linux/WSL 与 Python 3.10+。CUDA extension 需要与 PyTorch CUDA build 匹配的 Toolkit、NVCC 和 Ninja。
+推荐 Linux/WSL、Python 3.10+，以及与 PyTorch CUDA build 匹配的 CUDA Toolkit、NVCC 和 Ninja。
 
 ```bash
 git clone https://github.com/cysong2025/flashdec.git
@@ -109,38 +93,25 @@ python scripts/check_env.py
 python -m pytest -q -ra
 ```
 
-这条开发安装路径只适用于满足支持矩阵的环境，不构成对任意 Python/CUDA 组合的兼容性保证。请先核对 Python、PyTorch CUDA build、Toolkit/NVCC 与 GPU 架构；已验证组合和分层命令见[兼容性说明](docs/compatibility.md)与[复现指南](docs/reproducibility.md)。FlashInfer 对比必须使用独立环境和 [`constraints/flashinfer-cu128.txt`](constraints/flashinfer-cu128.txt)。
+先查看[兼容性矩阵](docs/compatibility.md)。FlashInfer 和 vLLM 使用隔离的固定环境，避免 pip 替换已经验证的 PyTorch/CUDA stack；对应安装和 Qwen 命令见[复现指南](docs/reproducibility.md)。
 
-vLLM integration 使用固定的 `vLLM==0.25.1` 环境。为避免解析器替换既有 Torch/CUDA stack，推荐先准备兼容的 vLLM 环境，再用 `python -m pip install --no-deps -e .` 安装 FlashDec；完整 Qwen 命令与 WSL 环境变量见[复现指南](docs/reproducibility.md#vllm-qwen25-3b-外部比较)。
-
-无需 GPU 的仓库检查：
-
-```bash
-python scripts/check_docs.py
-python scripts/check_release.py --require-evidence --require-public
-python -m compileall -q flashdec tests benchmarks scripts
-```
-
-## API 速览
-
-Paged decode：
+## API 示例
 
 ```python
 import flashdec
 
-head_dim = q.shape[-1]
-out = flashdec.decode(
+output = flashdec.decode(
     q,
     k_cache,
     v_cache,
     block_tables,
     seq_lens,
-    sm_scale=head_dim**-0.5,
+    sm_scale=q.shape[-1] ** -0.5,
     block_size=32,
 )
 ```
 
-Multi-layer token transaction：
+事务化多层调用：
 
 ```python
 tx = engine.begin_step(request_ids)
@@ -149,37 +120,24 @@ for layer_idx, (q, k, v) in enumerate(zip(q_by_layer, k_by_layer, v_by_layer)):
 result = engine.commit_step(tx)
 ```
 
-任一 `step_layer()` 失败都会 abort 整个 token；调用方必须丢弃此前 layer outputs。接口契约见[API 文档](docs/API.md)。
+任一 layer 失败都会 abort 整个 token；调用方必须丢弃此前返回的 layer outputs。完整张量约定和状态契约见 [API documentation](docs/API.md)。
 
-## 仓库结构
+## 文档
 
-| 路径 | 内容 |
+| 想了解什么 | 从这里开始 |
 | --- | --- |
-| [`flashdec/`](flashdec) | Paged KV runtime、scheduler、DecodeEngine 与 Triton/CUDA data path |
-| [`tests/`](tests) | reference、状态机、kernel、失败路径与证据校验 |
-| [`benchmarks/`](benchmarks) | benchmark runners、profilers 和 strict summarizers |
-| [`benchmarks/results/`](benchmarks/results) | 审核后提交的正式 Markdown 证据；原始 CSV/log 不进入 Git |
-| [`docs/`](docs) | 研究问题、设计、兼容性、性能方法和复现说明 |
-| [`scripts/`](scripts) | 环境、文档、证据与仓库一致性检查 |
+| 系统分层与数据流 | [Architecture](docs/design.md) |
+| vLLM 插件和 fallback | [vLLM backend](docs/design_vllm_backend.md) |
+| API 与状态语义 | [API reference](docs/API.md) |
+| 性能数字和适用边界 | [Performance report](docs/performance_report.md) |
+| 环境、测试与 benchmark | [Reproducibility](docs/reproducibility.md) |
+| 全部设计和实验文档 | [Documentation index](docs/INDEX.md) |
 
-推荐阅读顺序：
+## 项目边界
 
-1. [研究问题](docs/research_questions.md)
-2. [总体设计](docs/design.md)
-3. [API 文档](docs/API.md)
-4. [性能报告](docs/performance_report.md)
-5. [结果索引](benchmarks/results/README.md)
-6. [复现指南](docs/reproducibility.md)
+FlashDec 核心面向单 GPU、single-token decode、FP16/BF16 和 caller-provided Q/K/V。它不自行实现 tokenizer、完整 Transformer/prefill、sampling、HTTP/RPC 服务、生产级 continuous batching、TP/PP、多机或 swap/offload；可选 vLLM 插件复用其中一部分外部能力，但不把它们变成 FlashDec 自有实现。
 
-完整导航见[文档索引](docs/INDEX.md)。
-
-## 范围边界
-
-FlashDec 包含单 GPU single-token decode、FP16/BF16、MHA/GQA/MQA、caller-provided Q/K/V、transactional context import 和 caller-built immutable shared-prefix blocks。
-
-FlashDec 核心不包含完整 Transformer/prefill forward、tokenizer、sampling、HTTP/RPC serving、生产级 continuous batching、TP/PP、多机、swap/offload 或自动 prefix content hashing。可选 vLLM plugin 复用这些外部能力，但不把它们变成 FlashDec 自有实现。不同 shape、layout、scheduler 或计时边界的结果不能直接解释为工业 serving 系统的 speedup。
-
-贡献前请阅读[贡献指南](CONTRIBUTING.md)与[行为准则](CODE_OF_CONDUCT.md)；使用问题见[支持说明](SUPPORT.md)，安全问题见[安全政策](SECURITY.md)，引用信息见[`CITATION.cff`](CITATION.cff)。
+欢迎提交 issue 或 pull request。贡献前请阅读[贡献指南](CONTRIBUTING.md)、[行为准则](CODE_OF_CONDUCT.md)和[安全政策](SECURITY.md)。
 
 ## License
 

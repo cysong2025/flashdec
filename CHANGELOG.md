@@ -35,5 +35,5 @@ FlashDec `0.0.0` 是研究原型版本。本文件只记录版本级能力变化
 - 增加公开 API 文档、研究问题导航、兼容性矩阵、复现指南、贡献指南、安全政策、行为准则、支持说明和引用元数据。
 - 增加 GitHub Actions 的 dependency-free repository checks、Python 3.10 compatibility checks、Markdown/HTML resource validation，以及 repository/evidence integrity checker。
 - 增加 `scripts/run_validation.py`，用于分层 CUDA/tracked-clean 预检、dry-run、产物校验和仓库外结果导出。
-- 增加由 canonical summaries 派生的 light/dark 研究结果图；生成器验证 commit、matrix、trial、ratio direction 和负结果后再确定性输出 SVG。
-- 文档结构改为“研究问题 → 系统设计 → 实验方法 → 可复现证据”，公开树只保留可长期维护的设计、实验与复现资料。
+- 增加可确定性生成的 light/dark 架构图与性能概览图；性能图从 canonical summaries 校验 Qwen/vLLM、runtime 和外部 baseline 结果后生成 SVG。
+- 精简 GitHub 首页与结果索引，按“使用 → 架构 → 性能 → 深入实现”组织文档；阶段回归计数、外置路径和逐轮过程记录不再占用项目入口。

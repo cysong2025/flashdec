@@ -253,8 +253,8 @@ def _validate_provenance(
 
 def validate_snapshot(data: dict[str, Any], *, root: Path = ROOT) -> None:
     """Validate the snapshot by parsing canonical tables and outcome sections."""
-    if data.get("schema_version") != 2:
-        raise ValueError("snapshot schema_version must be 2")
+    if data.get("schema_version") != 3:
+        raise ValueError("snapshot schema_version must be 3")
 
     artifact = data.get("artifact", {})
     expected_artifact = {
@@ -268,19 +268,114 @@ def validate_snapshot(data: dict[str, Any], *, root: Path = ROOT) -> None:
     if "not comparable across panels" not in artifact.get("ratio_boundary", ""):
         raise ValueError("artifact.ratio_boundary must forbid cross-panel comparison")
 
+    model_end_to_end = data["vllm_model_end_to_end"]
+    vllm_attention = data["vllm_attention"]
     scheduler = data["scheduler_progress"]
     shared_prefix = data["shared_prefix_capacity"]
     optimization = data["optimization_outcomes"]
     outcomes = optimization["entries"]
     integrated = data["integrated_lifecycle"]
     external_baseline = data["flashinfer_kernel_baseline"]
-    sections = [scheduler, shared_prefix, *outcomes, integrated, external_baseline]
+    sections = [
+        model_end_to_end,
+        vllm_attention,
+        scheduler,
+        shared_prefix,
+        *outcomes,
+        integrated,
+        external_baseline,
+    ]
     source_texts: dict[str, str] = {}
     for section in sections:
         source = root / section["source"]
         if not source.is_file():
             raise ValueError(f"canonical source does not exist: {section['source']}")
         source_texts[section["source"]] = source.read_text(encoding="utf-8")
+
+    if model_end_to_end.get("kind") != "offline_fixed_batch_llm_generate":
+        raise ValueError("model result must retain its offline fixed-batch boundary")
+    if model_end_to_end.get("baseline") != "vLLM 0.25.1 TRITON_ATTN":
+        raise ValueError("model result must name the explicit vLLM baseline")
+    model_text = source_texts[model_end_to_end["source"]]
+    model_validation = re.search(
+        r"(?m)^- Rows: (\d+); paired backend process pairs: \d+ "
+        r"\((\d+) trials per case\)\.$",
+        model_text,
+    )
+    model_commit = re.search(r"(?m)^- Git commit: `([0-9a-f]+)`;", model_text)
+    model_device = re.search(r"(?m)^- Device: (.+)\.$", model_text)
+    if model_validation is None or model_commit is None or model_device is None:
+        raise ValueError("model canonical source validation metadata is incomplete")
+    if (
+        int(model_validation.group(1)) != model_end_to_end["rows"]
+        or int(model_validation.group(2)) != model_end_to_end["trials"]
+        or model_commit.group(1) != model_end_to_end["evidence_commit"]
+        or model_device.group(1) != artifact["device"]
+    ):
+        raise ValueError("model snapshot provenance differs from canonical source")
+    model_rows = {
+        row["case"]: row for row in _markdown_table(model_text, "Paired Results")
+    }
+    target = model_rows.get(model_end_to_end["target_case"])
+    guard = model_rows.get(model_end_to_end["guard_case"])
+    if target is None or guard is None:
+        raise ValueError("model canonical target or guard case is missing")
+    target_ratio = _ratio_range(target["ratio [min,max]"])
+    guard_ratio = _ratio_range(guard["ratio [min,max]"])[0]
+    if (
+        target_ratio
+        != (
+            model_end_to_end["latency_ratio"],
+            *model_end_to_end["latency_range"],
+        )
+        or float(target["latency reduction"].rstrip("%"))
+        != model_end_to_end["latency_reduction_percent"]
+        or float(target["output TPS uplift"].rstrip("%"))
+        != model_end_to_end["output_tps_uplift_percent"]
+        or guard_ratio != model_end_to_end["guard_latency_ratio"]
+    ):
+        raise ValueError("model snapshot results differ from canonical source")
+
+    if vllm_attention.get("kind") != "single_token_decode_attention_kernel":
+        raise ValueError("vLLM attention result must remain kernel-only")
+    attention_text = source_texts[vllm_attention["source"]]
+    attention_rows_meta = re.search(
+        r"(?m)^- Rows: (\d+); paired trials: (\d+)\.$",
+        attention_text,
+    )
+    attention_commit = re.search(
+        r"(?m)^- Git commit: `([0-9a-f]+)`;",
+        attention_text,
+    )
+    attention_device = re.search(r"(?m)^- Device: (.+)\.$", attention_text)
+    if (
+        attention_rows_meta is None
+        or attention_commit is None
+        or attention_device is None
+    ):
+        raise ValueError("vLLM attention canonical metadata is incomplete")
+    if (
+        attention_commit.group(1) != vllm_attention["evidence_commit"]
+        or int(attention_rows_meta.group(1)) != vllm_attention["rows"]
+        or int(attention_rows_meta.group(2))
+        != len(_markdown_table(attention_text, "Paired Results"))
+        * vllm_attention["trials"]
+        or attention_device.group(1) != artifact["device"]
+    ):
+        raise ValueError("vLLM attention snapshot provenance differs from canonical source")
+    attention_rows = {
+        row["case"]: row
+        for row in _markdown_table(attention_text, "Paired Results")
+    }
+    for case in vllm_attention["cases"]:
+        canonical = attention_rows.get(case["id"])
+        if canonical is None:
+            raise ValueError(f"missing canonical attention case: {case['id']}")
+        ratio = _ratio_range(canonical["ratio [min,max]"])[0]
+        if ratio != case["latency_ratio"] or round((1.0 - ratio) * 100, 2) != case[
+            "latency_reduction_percent"
+        ]:
+            raise ValueError(f"attention snapshot result changed: {case['id']}")
 
     if scheduler.get("kind") != "correctness_and_progress":
         raise ValueError(
@@ -568,41 +663,32 @@ def validate_snapshot(data: dict[str, Any], *, root: Path = ROOT) -> None:
         raise ValueError("external-baseline observed p50 range counts changed")
 
 
-def _style(palette: dict[str, str]) -> str:
-    values = dict(palette)
-    return """
-      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Arial, sans-serif; }
-      .eyebrow { fill: %(blue)s; font-size: 17px; font-weight: 750; letter-spacing: 1.6px; }
-      .title { fill: %(text)s; font-size: 42px; font-weight: 760; letter-spacing: -0.8px; }
-      .subtitle { fill: %(muted)s; font-size: 19px; font-weight: 450; }
-      .panel-title { fill: %(text)s; font-size: 24px; font-weight: 730; }
-      .panel-subtitle { fill: %(muted)s; font-size: 16px; font-weight: 450; }
-      .label { fill: %(text)s; font-size: 17px; font-weight: 650; }
-      .small { fill: %(muted)s; font-size: 17px; font-weight: 500; }
-      .tiny { fill: %(muted)s; font-size: 16px; font-weight: 500; }
-      .value { fill: %(text)s; font-size: 20px; font-weight: 760; font-variant-numeric: tabular-nums; }
-      .value-green { fill: %(green)s; font-size: 20px; font-weight: 760; font-variant-numeric: tabular-nums; }
-      .value-red { fill: %(red)s; font-size: 18px; font-weight: 780; }
-      .bar-label { fill: %(text)s; font-size: 15px; font-weight: 750; text-anchor: middle; }
-      .footer { fill: %(muted)s; font-size: 16px; font-weight: 500; text-anchor: middle; }
-      .panel { fill: %(panel)s; stroke: %(border)s; stroke-width: 1; }
-      .row { fill: %(panel_alt)s; stroke: %(border)s; stroke-width: 1; }
-      .grid { stroke: %(grid)s; stroke-width: 1; }
-      .axis { stroke: %(faint)s; stroke-width: 1; }
-      .complete { fill: %(green_soft)s; stroke: %(green)s; stroke-width: 1.5; }
-      .cancelled { fill: url(#cancel-pattern); stroke: %(amber)s; stroke-width: 1.5; }
-      .deadlock { fill: %(red_soft)s; stroke: %(red)s; stroke-width: 2; }
-      .context-bar { fill: %(blue_soft)s; stroke: %(blue)s; stroke-width: 1.5; }
-      .admission-line { fill: none; stroke: %(green)s; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
-      .admission-dot { fill: %(panel)s; stroke: %(green)s; stroke-width: 3; }
-      .ratio-line { stroke: %(purple)s; stroke-width: 7; stroke-linecap: round; }
-      .ratio-dot { fill: %(panel)s; stroke: %(purple)s; stroke-width: 5; }
-    """ % values
+def _style(p: dict[str, str]) -> str:
+    return f"""
+      text {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Arial, sans-serif; }}
+      .eyebrow {{ fill: {p['purple']}; font-size: 15px; font-weight: 760; letter-spacing: 1.5px; }}
+      .title {{ fill: {p['text']}; font-size: 38px; font-weight: 780; letter-spacing: -0.7px; }}
+      .subtitle {{ fill: {p['muted']}; font-size: 16px; font-weight: 480; }}
+      .panel-title {{ fill: {p['text']}; font-size: 21px; font-weight: 740; }}
+      .panel-copy {{ fill: {p['muted']}; font-size: 14px; font-weight: 500; }}
+      .metric {{ fill: {p['green']}; font-size: 48px; font-weight: 800; font-variant-numeric: tabular-nums; }}
+      .metric-small {{ fill: {p['text']}; font-size: 29px; font-weight: 780; font-variant-numeric: tabular-nums; }}
+      .metric-label {{ fill: {p['muted']}; font-size: 14px; font-weight: 650; }}
+      .label {{ fill: {p['text']}; font-size: 15px; font-weight: 680; }}
+      .tiny {{ fill: {p['muted']}; font-size: 12px; font-weight: 520; }}
+      .footer {{ fill: {p['muted']}; font-size: 12px; font-weight: 520; text-anchor: middle; }}
+      .panel {{ fill: {p['panel']}; stroke: {p['border']}; stroke-width: 1.1; }}
+      .card {{ fill: {p['panel_alt']}; stroke: {p['border']}; stroke-width: 1; }}
+      .baseline {{ fill: {p['grid']}; }}
+      .flashdec {{ fill: {p['purple']}; }}
+      .good {{ fill: {p['green']}; }}
+      .bar-label {{ fill: {p['text']}; font-size: 12px; font-weight: 700; }}
+    """.strip()
 
 
 def _panel(svg: SVG, x: int, y: int, width: int, height: int, panel_id: str, label: str) -> None:
     svg.open("g", id=panel_id, role="group", aria_label=label)
-    svg.element("rect", x=x, y=y + 7, width=width, height=height, rx=20, fill="url(#panel-shadow)")
+    svg.element("rect", x=x, y=y + 6, width=width, height=height, rx=20, fill="url(#panel-shadow)")
     svg.element("rect", class_="panel", x=x, y=y, width=width, height=height, rx=20)
 
 
@@ -610,255 +696,62 @@ def _panel_end(svg: SVG) -> None:
     svg.close("g")
 
 
-def _render_scheduler_progress(
-    svg: SVG,
-    data: dict[str, Any],
-    p: dict[str, str],
-) -> None:
-    x, y, width, height = 64, 178, 674, 382
-    _panel(
-        svg,
-        x,
-        y,
-        width,
-        height,
-        "scheduler-progress-panel",
-        "Scheduler progress outcomes",
-    )
-    svg.text(x + 30, y + 43, "Scheduler progress", "panel-title")
-    svg.text(x + 30, y + 69, "Boundary-pressure case · 2 requests · FP16/BF16 agree", "panel-subtitle")
-
-    bar_x = x + 266
-    segment_width = 90
-    segment_gap = 7
-    rows = data["policies"]
-    for index, row in enumerate(rows):
-        row_y = y + 112 + index * 76
-        svg.text(x + 30, row_y + 18, row["label"], "label")
-        if row["id"] == "lifetime_fifo_aging":
-            states = ["complete", "complete"]
-            status = "2/2 COMPLETE"
-            status_class = "value-green"
-        elif row["id"] == "cancel_on_backpressure":
-            states = ["complete", "cancelled"]
-            status = "1/2 COMPLETE"
-            status_class = "label"
-        else:
-            states = ["deadlock", "deadlock"]
-            status = "DEADLOCK"
-            status_class = "value-red"
-        for request_index, state in enumerate(states):
-            segment_x = bar_x + request_index * (segment_width + segment_gap)
-            svg.element(
-                "rect",
-                class_=state,
-                x=segment_x,
-                y=row_y,
-                width=segment_width,
-                height=30,
-                rx=8,
-            )
-            glyph = "✓ complete" if state == "complete" else "× cancelled" if state == "cancelled" else "! blocked"
-            svg.text(segment_x + segment_width / 2, row_y + 20, glyph, "bar-label")
-        svg.text(x + width - 30, row_y + 20, status, status_class, text_anchor="end")
-
-    legend_y = y + height - 32
-    svg.element("circle", cx=x + 33, cy=legend_y - 4, r=5, fill=p["green"])
-    svg.text(x + 45, legend_y, "completed", "tiny")
-    svg.element("circle", cx=x + 132, cy=legend_y - 4, r=5, fill=p["amber"])
-    svg.text(x + 144, legend_y, "cancelled", "tiny")
-    svg.element("circle", cx=x + 232, cy=legend_y - 4, r=5, fill=p["red"])
-    svg.text(x + 244, legend_y, "deadlock", "tiny")
-    svg.text(x + width - 30, legend_y, "Correctness/progress evidence — not latency", "tiny", text_anchor="end")
+def _render_model_panel(svg: SVG, data: dict[str, Any], p: dict[str, str]) -> None:
+    x, y, width, height = 50, 148, 630, 268
+    _panel(svg, x, y, width, height, "model-panel", "Qwen end-to-end generation result")
+    svg.element("rect", x=x + 24, y=y + 22, width=116, height=24, rx=12, fill=p["green_soft"], stroke=p["green"])
+    svg.text(x + 82, y + 39, "END-TO-END", "eyebrow", text_anchor="middle")
+    svg.text(x + 24, y + 78, "Qwen2.5-3B long-context generation", "panel-title")
+    svg.text(x + 24, y + 101, "B8 · input 8192 · output 4096 · BF16 · 4 paired trials", "panel-copy")
+    svg.text(x + 24, y + 166, f"−{data['latency_reduction_percent']:.2f}%", "metric")
+    svg.text(x + 30, y + 191, "LLM.generate latency", "metric-label")
+    svg.text(x + 328, y + 166, f"+{data['output_tps_uplift_percent']:.2f}%", "metric")
+    svg.text(x + 334, y + 191, "output tokens / second", "metric-label")
+    bar_x, bar_y, bar_width = x + 24, y + 218, width - 48
+    svg.element("rect", x=bar_x, y=bar_y, width=bar_width, height=14, rx=7, class_="baseline")
+    svg.element("rect", x=bar_x, y=bar_y, width=bar_width * data["latency_ratio"], height=14, rx=7, class_="flashdec")
+    svg.text(bar_x, bar_y + 34, "FlashDec", "bar-label")
+    svg.text(bar_x + bar_width, bar_y + 34, f"{data['latency_ratio']:.4f}× vs {data['baseline']}", "bar-label", text_anchor="end")
     _panel_end(svg)
 
 
-def _render_shared_prefix_capacity(
-    svg: SVG,
-    data: dict[str, Any],
-    p: dict[str, str],
-) -> None:
-    x, y, width, height = 762, 178, 674, 382
-    _panel(
-        svg,
-        x,
-        y,
-        width,
-        height,
-        "shared-prefix-capacity-panel",
-        "Shared-prefix capacity and admission",
-    )
-    svg.text(x + 30, y + 43, "Shared-prefix capacity", "panel-title")
-    svg.text(x + 30, y + 69, "48-block admission pool · 64 logical context blocks", "panel-subtitle")
-
-    legend_y = y + 101
-    svg.element("rect", class_="context-bar", x=x + 31, y=legend_y - 12, width=17, height=12, rx=3)
-    svg.text(x + 56, legend_y, "physical context blocks", "tiny")
-    svg.element("line", class_="admission-line", x1=x + 238, y1=legend_y - 6, x2=x + 270, y2=legend_y - 6)
-    svg.element("circle", class_="admission-dot", cx=x + 254, cy=legend_y - 6, r=5)
-    svg.text(x + 280, legend_y, "admitted requests / 16", "tiny")
-    svg.text(x + width - 30, legend_y, "saved KV-pool MiB below", "tiny", text_anchor="end")
-
-    chart_left = x + 70
-    chart_right = x + width - 40
-    chart_top = y + 135
-    chart_bottom = y + 291
-    for fraction in (0.0, 0.5, 1.0):
-        line_y = chart_bottom - fraction * (chart_bottom - chart_top)
-        svg.element("line", class_="grid", x1=chart_left, y1=line_y, x2=chart_right, y2=line_y)
-        svg.text(chart_left - 12, line_y + 4, str(int(64 * fraction)), "tiny", text_anchor="end")
-
-    points = data["points"]
-    x_positions = [chart_left + 52 + index * 132 for index in range(4)]
-    admission_points = []
-    for point, point_x in zip(points, x_positions):
-        bar_height = point["physical_context_blocks"] / 64 * (chart_bottom - chart_top)
-        svg.element(
-            "rect",
-            class_="context-bar",
-            x=point_x - 28,
-            y=chart_bottom - bar_height,
-            width=56,
-            height=bar_height,
-            rx=8,
-        )
-        svg.text(point_x - 16, chart_bottom - bar_height - 9, str(point["physical_context_blocks"]), "bar-label")
-        admission_y = chart_bottom - point["admitted_requests"] / 16 * (chart_bottom - chart_top)
-        admission_points.append((point_x, admission_y, point["admitted_requests"]))
-
-    svg.element(
-        "polyline",
-        class_="admission-line",
-        points=" ".join(f"{_number(px)},{_number(py)}" for px, py, _ in admission_points),
-    )
-    for (point_x, point_y, admitted), point in zip(admission_points, points):
-        svg.element("circle", class_="admission-dot", cx=point_x, cy=point_y, r=7)
-        svg.text(point_x + 23, point_y - 13, f"{admitted}/16", "bar-label")
-        svg.text(point_x, chart_bottom + 22, f"{point['hit_rate_percent']}% hit", "small", text_anchor="middle")
-        saved = point["saved_kv_capacity_mib"]
-        svg.text(point_x, chart_bottom + 43, f"+{saved:.1f} MiB", "tiny", text_anchor="middle")
-
-    svg.text(
-        x + width / 2,
-        y + height - 19,
-        "KV-pool capacity—not process VRAM · 75% hit: 20/64 blocks, 16/16 admitted",
-        "tiny",
-        text_anchor="middle",
-    )
+def _render_attention_panel(svg: SVG, data: dict[str, Any], p: dict[str, str]) -> None:
+    x, y, width, height = 720, 148, 630, 268
+    _panel(svg, x, y, width, height, "attention-panel", "vLLM attention kernel result")
+    svg.element("rect", x=x + 24, y=y + 22, width=112, height=24, rx=12, fill=p["purple_soft"], stroke=p["purple"])
+    svg.text(x + 80, y + 39, "KERNEL", "eyebrow", text_anchor="middle")
+    svg.text(x + 24, y + 78, "vLLM decode-attention p50", "panel-title")
+    svg.text(x + 24, y + 101, "Qwen grouped-GQA · B8 · FlashDec / vLLM Triton", "panel-copy")
+    chart_x, chart_width = x + 190, width - 230
+    for index, case in enumerate(data["cases"]):
+        row_y = y + 145 + index * 70
+        svg.text(x + 24, row_y + 5, f"context {case['context_tokens']}", "label")
+        svg.text(x + 24, row_y + 25, f"−{case['latency_reduction_percent']:.2f}%", "metric-label")
+        svg.element("rect", x=chart_x, y=row_y - 8, width=chart_width, height=16, rx=8, class_="baseline")
+        svg.element("rect", x=chart_x, y=row_y - 8, width=chart_width * case["latency_ratio"], height=16, rx=8, class_="flashdec")
+        svg.text(chart_x + chart_width, row_y + 29, f"{case['latency_ratio']:.4f}×", "bar-label", text_anchor="end")
     _panel_end(svg)
 
 
-def _render_scorecard(
+def _metric_card(
     svg: SVG,
-    data: dict[str, Any],
-    integrated_lifecycle: dict[str, Any],
-    p: dict[str, str],
+    *,
+    x: int,
+    title: str,
+    value: str,
+    copy: str,
+    boundary: str,
+    color: str,
+    soft: str,
 ) -> None:
-    x, y, width, height = 64, 584, 674, 416
-    _panel(svg, x, y, width, height, "scorecard-panel", "Transaction optimization outcomes")
-    svg.text(x + 30, y + 43, "Transaction optimization", "panel-title")
-    svg.text(x + 30, y + 69, "p50 ratio · stable groups · evidence disposition", "panel-subtitle")
-
-    svg.text(x + 31, y + 104, "PATH / FEATURE", "tiny")
-    svg.text(x + 392, y + 104, "P50", "tiny", text_anchor="end")
-    svg.text(x + 475, y + 104, "STABLE", "tiny", text_anchor="middle")
-    svg.text(x + width - 31, y + 104, "OUTCOME", "tiny", text_anchor="end")
-
-    outcome_labels = {
-        "observed": "OBSERVED",
-        "accepted": "ADOPTED",
-        "rejected_and_rolled_back": "NOT ADOPTED",
-    }
-    for index, row in enumerate(data["entries"]):
-        row_y = y + 122 + index * 82
-        svg.element("rect", class_="row", x=x + 22, y=row_y, width=width - 44, height=68, rx=13)
-        svg.text(x + 38, row_y + 25, row["feature"], "label")
-        svg.text(x + 38, row_y + 47, row["ratio_direction"], "tiny")
-        svg.text(x + 392, row_y + 30, f"{row['p50_ratio']:.4f}×", "value", text_anchor="end")
-        svg.text(x + 475, row_y + 29, f"{row['stable_groups']}/{row['total_groups']}", "value", text_anchor="middle")
-        svg.text(x + 475, row_y + 48, "min > 1", "tiny", text_anchor="middle")
-        rejected = row["outcome"] == "rejected_and_rolled_back"
-        pill_width = 112 if rejected else 104
-        pill_x = x + width - 38 - pill_width
-        svg.element(
-            "rect",
-            x=pill_x,
-            y=row_y + 17,
-            width=pill_width,
-            height=32,
-            rx=16,
-            fill=p["red_soft"] if rejected else p["green_soft"],
-            stroke=p["red"] if rejected else p["green"],
-        )
-        svg.text(
-            pill_x + pill_width / 2,
-            row_y + 38,
-            outcome_labels[row["outcome"]],
-            "value-red" if rejected else "value-green",
-            text_anchor="middle",
-        )
-
-    svg.text(
-        x + 30,
-        y + height - 20,
-        "Integrated lifecycle · "
-        f"{integrated_lifecycle['rows']} validated rows / "
-        f"{integrated_lifecycle['trials']} trials",
-        "tiny",
-    )
-    svg.text(x + width - 30, y + height - 20, "Persistent metadata was not adopted", "tiny", text_anchor="end")
-    _panel_end(svg)
-
-
-def _render_flashinfer_kernel_baseline(
-    svg: SVG,
-    data: dict[str, Any],
-    p: dict[str, str],
-) -> None:
-    x, y, width, height = 762, 584, 674, 416
-    _panel(
-        svg,
-        x,
-        y,
-        width,
-        height,
-        "flashinfer-kernel-baseline-panel",
-        "FlashInfer kernel-only baseline",
-    )
-    svg.text(x + 30, y + 43, "External kernel baseline", "panel-title")
-    svg.text(x + 30, y + 69, "Common-shape paged decode · geometric mean across 8 groups", "panel-subtitle")
-
-    plot_left = x + 254
-    plot_right = x + width - 56
-    plot_top = y + 140
-    plot_bottom = y + 275
-    for tick in (1.0, 1.1, 1.2, 1.3):
-        tick_x = plot_left + (tick - 1.0) / 0.3 * (plot_right - plot_left)
-        svg.element("line", class_="grid", x1=tick_x, y1=plot_top - 12, x2=tick_x, y2=plot_bottom)
-        svg.text(tick_x, plot_top - 21, f"{tick:.1f}×", "tiny", text_anchor="middle")
-    svg.text(plot_right, plot_top - 44, "higher → FlashInfer lower p50", "tiny", text_anchor="end")
-
-    for index, backend in enumerate(data["backends"]):
-        row_y = plot_top + 30 + index * 82
-        value = backend["p50_ratio_geometric_mean"]
-        value_x = plot_left + (value - 1.0) / 0.3 * (plot_right - plot_left)
-        svg.text(x + 30, row_y + 5, backend["label"], "label")
-        svg.text(x + 30, row_y + 25, "FlashDec / FlashInfer p50", "tiny")
-        svg.element("line", class_="ratio-line", x1=plot_left, y1=row_y, x2=value_x, y2=row_y)
-        svg.element("circle", class_="ratio-dot", cx=value_x, cy=row_y, r=9)
-        svg.text(x + width - 30, row_y + 6, f"{value:.4f}×", "value", text_anchor="end")
-
-    note_y = y + 292
-    svg.element("rect", x=x + 24, y=note_y, width=width - 48, height=91, rx=14, fill=p["purple_soft"], stroke=p["purple"])
-    svg.text(x + 41, note_y + 27, ">1 favors FlashInfer · descriptive p50 evidence only", "label")
-    svg.text(
-        x + 41,
-        note_y + 51,
-        f"{data['observed_p50_ranges_above_one']}/{data['total_p50_ranges']} observed three-trial ranges are above 1; this is descriptive kernel evidence.",
-        "small",
-    )
-    svg.text(x + 41, note_y + 74, "KERNEL-ONLY · excludes scheduler, KV ownership and end-to-end serving", "tiny")
-    _panel_end(svg)
+    y, width, height = 448, 400, 184
+    svg.element("rect", x=x, y=y + 5, width=width, height=height, rx=18, fill="url(#panel-shadow)")
+    svg.element("rect", x=x, y=y, width=width, height=height, rx=18, fill=soft, stroke=color, stroke_width="1.2")
+    svg.element("circle", cx=x + 30, cy=y + 31, r=8, fill=color)
+    svg.text(x + 50, y + 37, title, "panel-title")
+    svg.text(x + 24, y + 97, value, "metric-small")
+    svg.text(x + 24, y + 124, copy, "label")
+    svg.text(x + 24, y + 155, boundary, "tiny")
 
 
 def render_svg(data: dict[str, Any], theme: str) -> str:
@@ -871,32 +764,28 @@ def render_svg(data: dict[str, Any], theme: str) -> str:
     svg.open(
         "svg",
         xmlns="http://www.w3.org/2000/svg",
-        width="1500",
-        height="1080",
-        viewBox="0 0 1500 1080",
+        width="1400",
+        height="760",
+        viewBox="0 0 1400 760",
         role="img",
         aria_labelledby="chart-title chart-description",
         data_theme=theme,
     )
-    svg.element("title", "FlashDec auditable research evidence overview", id="chart-title")
+    svg.element("title", "FlashDec performance at a glance", id="chart-title")
     svg.element(
         "desc",
-        "Four panels summarize scheduler progress, shared-prefix KV-pool capacity, "
-        "transaction optimization outcomes including a negative result and integrated lifecycle validation, "
-        "and the FlashInfer kernel-only p50 comparison. Data was derived from validated canonical "
-        "Markdown summaries on an NVIDIA GeForce RTX 5070 and is not a raw dataset.",
+        "Selected validated results for Qwen end-to-end generation, vLLM attention, shared-prefix capacity, transaction dispatch and scheduler progress. A compact note retains the FlashInfer kernel-only negative comparison.",
         id="chart-description",
     )
-    outcomes_by_id = {
+    outcomes = {
         row["id"]: row for row in data["optimization_outcomes"]["entries"]
     }
     evidence_sections = [
-        ("scheduler_progress", data["scheduler_progress"]),
-        ("fused_append", outcomes_by_id["fused_append"]),
+        ("vllm_model_end_to_end", data["vllm_model_end_to_end"]),
+        ("vllm_attention", data["vllm_attention"]),
         ("shared_prefix_capacity", data["shared_prefix_capacity"]),
-        ("trusted_transaction", outcomes_by_id["trusted_transaction"]),
-        ("persistent_metadata", outcomes_by_id["persistent_metadata"]),
-        ("integrated_lifecycle", data["integrated_lifecycle"]),
+        ("trusted_transaction", outcomes["trusted_transaction"]),
+        ("scheduler_progress", data["scheduler_progress"]),
         ("flashinfer_kernel_baseline", data["flashinfer_kernel_baseline"]),
     ]
     metadata = {
@@ -911,58 +800,83 @@ def render_svg(data: dict[str, Any], theme: str) -> str:
             for evidence_id, section in evidence_sections
         ],
         "snapshot": "benchmarks/results/public_results_snapshot.json",
-        "sources": sorted(
-            {
-                data["scheduler_progress"]["source"],
-                data["shared_prefix_capacity"]["source"],
-                data["flashinfer_kernel_baseline"]["source"],
-                *(row["source"] for row in data["optimization_outcomes"]["entries"]),
-                data["integrated_lifecycle"]["source"],
-            }
-        ),
+        "sources": sorted({section["source"] for _, section in evidence_sections}),
     }
     svg.element("metadata", json.dumps(metadata, sort_keys=True, separators=(",", ":")), id="evidence-metadata")
     svg.open("defs")
-    svg.open("linearGradient", id="header-glow", x1="0", y1="0", x2="1", y2="1")
-    svg.element("stop", offset="0%", stop_color=p["blue"], stop_opacity="0.22")
-    svg.element("stop", offset="100%", stop_color=p["purple"], stop_opacity="0.03")
+    svg.open("linearGradient", id="background", x1="0", y1="0", x2="1", y2="1")
+    svg.element("stop", offset="0%", stop_color=p["background"])
+    svg.element("stop", offset="100%", stop_color=p["purple_soft"], stop_opacity="0.35")
     svg.close("linearGradient")
     svg.open("linearGradient", id="panel-shadow", x1="0", y1="0", x2="0", y2="1")
     svg.element("stop", offset="0%", stop_color=p["shadow"], stop_opacity="0")
     svg.element("stop", offset="100%", stop_color=p["shadow"], stop_opacity="1")
     svg.close("linearGradient")
-    svg.open("pattern", id="cancel-pattern", width="8", height="8", patternUnits="userSpaceOnUse", patternTransform="rotate(45)")
-    svg.element("rect", width="8", height="8", fill=p["amber_soft"])
-    svg.element("line", x1="0", y1="0", x2="0", y2="8", stroke=p["amber"], stroke_width="3", stroke_opacity="0.45")
-    svg.close("pattern")
     svg.open("style")
-    svg.raw(_style(p).strip())
+    svg.raw(_style(p))
     svg.close("style")
     svg.close("defs")
 
-    svg.element("rect", width="1500", height="1080", fill=p["background"])
-    svg.element("ellipse", cx="1270", cy="20", rx="370", ry="215", fill="url(#header-glow)", aria_hidden="true")
-    svg.element("rect", x="64", y="48", width="308", height="31", rx="15.5", fill=p["blue_soft"], stroke=p["blue"], aria_hidden="true")
-    svg.text(218, 69, "AUDITABLE EVIDENCE SNAPSHOT", "eyebrow", text_anchor="middle")
-    svg.text(64, 126, data["artifact"]["title"], "title")
-    svg.text(64, 157, "RTX 5070 · derived from validated canonical summaries · processed snapshot, not a raw dataset", "subtitle")
+    svg.element("rect", width="1400", height="760", rx="26", fill="url(#background)", stroke=p["border"])
+    svg.text(50, 48, "VALIDATED PERFORMANCE SNAPSHOT", "eyebrow")
+    svg.text(50, 91, data["artifact"]["title"], "title")
+    svg.text(50, 120, "RTX 5070 · Qwen2.5-3B + vLLM results first · internal mechanisms kept in scope", "subtitle")
 
-    _render_scheduler_progress(svg, data["scheduler_progress"], p)
-    _render_shared_prefix_capacity(svg, data["shared_prefix_capacity"], p)
-    _render_scorecard(
-        svg,
-        data["optimization_outcomes"],
-        data["integrated_lifecycle"],
-        p,
+    _render_model_panel(svg, data["vllm_model_end_to_end"], p)
+    _render_attention_panel(svg, data["vllm_attention"], p)
+
+    prefix = data["shared_prefix_capacity"]["points"][-1]
+    trusted = outcomes["trusted_transaction"]
+    lifetime = next(
+        row
+        for row in data["scheduler_progress"]["policies"]
+        if row["id"] == "lifetime_fifo_aging"
     )
-    _render_flashinfer_kernel_baseline(
+    greedy = next(
+        row
+        for row in data["scheduler_progress"]["policies"]
+        if row["id"] == "greedy_step_only"
+    )
+    _metric_card(
         svg,
-        data["flashinfer_kernel_baseline"],
-        p,
+        x=50,
+        title="KV capacity",
+        value=f"−{prefix['physical_context_blocks'] / data['shared_prefix_capacity']['logical_context_blocks'] * -100 + 100:.1f}%",
+        copy=f"physical context blocks · admission {prefix['admitted_requests']}/16",
+        boundary="75% prefix hit · fixed KV pool · not process VRAM",
+        color=p["blue"],
+        soft=p["blue_soft"],
+    )
+    _metric_card(
+        svg,
+        x=500,
+        title="Transaction dispatch",
+        value=f"{trusted['p50_ratio']:.4f}×",
+        copy="complete-token p50 · trusted vs checked",
+        boundary=f"{trusted['stable_groups']}/{trusted['total_groups']} groups · cache-owned metadata only",
+        color=p["purple"],
+        soft=p["purple_soft"],
+    )
+    _metric_card(
+        svg,
+        x=950,
+        title="Scheduler progress",
+        value=f"{lifetime['completed'] / 2 * 100:.0f}% vs {greedy['completed'] / 2 * 100:.0f}%",
+        copy="boundary-case request completion",
+        boundary="lifetime commitment vs greedy · progress, not latency",
+        color=p["green"],
+        soft=p["green_soft"],
     )
 
-    svg.text(750, 1037, "Ratios retain each source's direction and are not comparable across panels.", "footer")
-    svg.text(750, 1061, "Canonical Markdown remains authoritative · theme-specific SVGs are deterministic", "footer")
+    flashinfer = data["flashinfer_kernel_baseline"]
+    values = " / ".join(
+        f"{row['p50_ratio_geometric_mean']:.4f}×" for row in flashinfer["backends"]
+    )
+    svg.element("rect", x="50", y="655", width="1300", height="54", rx="16", fill=p["panel"], stroke=p["border"])
+    svg.text(72, 679, "External reality check", "label")
+    svg.text(232, 679, f"FlashDec / FlashInfer p50 = {values}; FlashInfer is lower-latency for this kernel-only matrix.", "panel-copy")
+    svg.text(72, 699, "This result does not include scheduler, KV ownership, prefix cache or end-to-end model execution.", "tiny")
+    svg.text(700, 738, "Canonical Markdown is authoritative · ratio directions differ across panels and are not composable", "footer")
     svg.close("svg")
     return svg.finish()
 

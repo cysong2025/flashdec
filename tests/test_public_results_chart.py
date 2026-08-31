@@ -31,6 +31,8 @@ class PublicResultsChartTests(unittest.TestCase):
         self.assertIn("not comparable across panels", artifact["ratio_boundary"])
 
         sources = {
+            self.data["vllm_model_end_to_end"]["source"],
+            self.data["vllm_attention"]["source"],
             self.data["scheduler_progress"]["source"],
             self.data["shared_prefix_capacity"]["source"],
             self.data["integrated_lifecycle"]["source"],
@@ -50,6 +52,8 @@ class PublicResultsChartTests(unittest.TestCase):
                 "benchmarks/results/persistent_metadata_candidate_summary.md",
                 "benchmarks/results/integrated_runtime_lifecycle_summary.md",
                 "benchmarks/results/flashinfer_paged_decode_baseline_summary.md",
+                "benchmarks/results/vllm_qwen_attention_summary.md",
+                "benchmarks/results/vllm_qwen_long_context_model_latency_summary.md",
             },
         )
         self.assertTrue(all(ROOT.joinpath(source).is_file() for source in sources))
@@ -58,6 +62,8 @@ class PublicResultsChartTests(unittest.TestCase):
             row["id"]: row for row in self.data["optimization_outcomes"]["entries"]
         }
         provenance = {
+            "vllm_model_end_to_end": self.data["vllm_model_end_to_end"],
+            "vllm_attention": self.data["vllm_attention"],
             "scheduler_progress": self.data["scheduler_progress"],
             "fused_append": optimization["fused_append"],
             "shared_prefix_capacity": self.data["shared_prefix_capacity"],
@@ -78,6 +84,16 @@ class PublicResultsChartTests(unittest.TestCase):
                 for evidence_id, section in provenance.items()
             },
             {
+                "vllm_model_end_to_end": (
+                    "3ba68e3f5317f1a9e2f0a2830697c55de6dfe9d0",
+                    16,
+                    4,
+                ),
+                "vllm_attention": (
+                    "1cc25d4df9ffccb5bd804132e19eb1bce01df94e",
+                    50,
+                    5,
+                ),
                 "scheduler_progress": ("16de9d4", 36, 3),
                 "fused_append": ("fa0f89a", 144, 3),
                 "shared_prefix_capacity": ("fe72e27", 64, 8),
@@ -89,9 +105,11 @@ class PublicResultsChartTests(unittest.TestCase):
         )
 
     def test_snapshot_schema_uses_mechanism_names(self):
-        self.assertEqual(self.data["schema_version"], 2)
+        self.assertEqual(self.data["schema_version"], 3)
         self.assertTrue(
             {
+                "vllm_model_end_to_end",
+                "vllm_attention",
                 "scheduler_progress",
                 "shared_prefix_capacity",
                 "optimization_outcomes",
@@ -123,6 +141,30 @@ class PublicResultsChartTests(unittest.TestCase):
         self.assertNotIn("stage", set(mapping_keys(self.data)))
 
     def test_snapshot_preserves_required_results_and_boundaries(self):
+        model = self.data["vllm_model_end_to_end"]
+        self.assertEqual(model["kind"], "offline_fixed_batch_llm_generate")
+        self.assertEqual(model["baseline"], "vLLM 0.25.1 TRITON_ATTN")
+        self.assertEqual(
+            (
+                model["latency_ratio"],
+                model["latency_range"],
+                model["latency_reduction_percent"],
+                model["output_tps_uplift_percent"],
+                model["guard_latency_ratio"],
+            ),
+            (0.9542, [0.953, 0.956], 4.58, 4.8, 1.0029),
+        )
+
+        attention = self.data["vllm_attention"]
+        self.assertEqual(attention["kind"], "single_token_decode_attention_kernel")
+        self.assertEqual(
+            [
+                (row["context_tokens"], row["latency_ratio"], row["latency_reduction_percent"])
+                for row in attention["cases"]
+            ],
+            [(1024, 0.8025, 19.75), (2048, 0.7926, 20.74)],
+        )
+
         scheduler = self.data["scheduler_progress"]
         outcomes = {
             row["id"]: (row["completed"], row["cancelled"], row["deadlock"])
@@ -223,12 +265,11 @@ class PublicResultsChartTests(unittest.TestCase):
             self.assertEqual(
                 [item["id"] for item in embedded["evidence"]],
                 [
-                    "scheduler_progress",
-                    "fused_append",
+                    "vllm_model_end_to_end",
+                    "vllm_attention",
                     "shared_prefix_capacity",
                     "trusted_transaction",
-                    "persistent_metadata",
-                    "integrated_lifecycle",
+                    "scheduler_progress",
                     "flashinfer_kernel_baseline",
                 ],
             )
@@ -238,20 +279,19 @@ class PublicResultsChartTests(unittest.TestCase):
             self.assertNotIn("class-=", tracked)
             self.assertIn('class="panel"', tracked)
             visible_text = " ".join(document.itertext())
-            self.assertIn("Persistent metadata was not adopted", visible_text)
-            self.assertIn("Integrated lifecycle", visible_text)
-            self.assertIn("NOT ADOPTED", visible_text)
-            self.assertIn(">1 favors FlashInfer", visible_text)
-            self.assertIn("KERNEL-ONLY", visible_text)
-            self.assertIn("not a raw dataset", visible_text)
-            self.assertIn("not comparable across panels", visible_text)
+            self.assertIn("Qwen2.5-3B long-context generation", visible_text)
+            self.assertIn("−4.58%", visible_text)
+            self.assertIn("+4.80%", visible_text)
+            self.assertIn("vLLM decode-attention p50", visible_text)
+            self.assertIn("External reality check", visible_text)
+            self.assertIn("FlashInfer is lower-latency", visible_text)
+            self.assertIn("ratio directions differ across panels", visible_text)
             for commit in (
+                "3ba68e3f5317f1a9e2f0a2830697c55de6dfe9d0",
+                "1cc25d4df9ffccb5bd804132e19eb1bce01df94e",
                 "16de9d4",
-                "fa0f89a",
                 "fe72e27",
                 "4018449",
-                "8047a9c",
-                "6912894",
                 "d7d4feb",
             ):
                 self.assertIn(commit, tracked)

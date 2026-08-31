@@ -1,12 +1,51 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "artifact": {
-    "title": "FlashDec Research Evidence Overview",
+    "title": "FlashDec Performance at a Glance",
     "device": "NVIDIA GeForce RTX 5070",
     "provenance": "Derived from validated canonical Markdown summaries.",
     "data_class": "Curated processed snapshot; not a raw benchmark dataset.",
     "authority": "The canonical Markdown summaries remain authoritative.",
     "ratio_boundary": "Every ratio preserves its source-specific direction; ratio magnitudes are not comparable across panels."
+  },
+  "vllm_model_end_to_end": {
+    "source": "benchmarks/results/vllm_qwen_long_context_model_latency_summary.md",
+    "evidence_commit": "3ba68e3f5317f1a9e2f0a2830697c55de6dfe9d0",
+    "rows": 16,
+    "trials": 4,
+    "kind": "offline_fixed_batch_llm_generate",
+    "model": "Qwen2.5-3B-Instruct",
+    "dtype": "bfloat16",
+    "baseline": "vLLM 0.25.1 TRITON_ATTN",
+    "target_case": "qwen_b8_i8192_o4096",
+    "latency_ratio": 0.9542,
+    "latency_range": [0.9530, 0.9560],
+    "latency_reduction_percent": 4.58,
+    "output_tps_uplift_percent": 4.80,
+    "guard_case": "qwen_b8_i512_o2",
+    "guard_latency_ratio": 1.0029
+  },
+  "vllm_attention": {
+    "source": "benchmarks/results/vllm_qwen_attention_summary.md",
+    "evidence_commit": "1cc25d4df9ffccb5bd804132e19eb1bce01df94e",
+    "rows": 50,
+    "trials": 5,
+    "kind": "single_token_decode_attention_kernel",
+    "baseline": "vLLM 0.25.1 Triton",
+    "cases": [
+      {
+        "id": "qwen_b8_ctx1024",
+        "context_tokens": 1024,
+        "latency_ratio": 0.8025,
+        "latency_reduction_percent": 19.75
+      },
+      {
+        "id": "qwen_b8_ctx2048",
+        "context_tokens": 2048,
+        "latency_ratio": 0.7926,
+        "latency_reduction_percent": 20.74
+      }
+    ]
   },
   "scheduler_progress": {
     "source": "benchmarks/results/scheduler_capacity_progress_summary.md",
