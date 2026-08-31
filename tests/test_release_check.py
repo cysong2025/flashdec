@@ -249,7 +249,7 @@ def test_release_version_readers_support_pyproject_and_package(tmp_path):
 def test_release_model_latency_protocol_requires_explicit_jit_prime():
     assert MODEL_LATENCY_WORKER_SCHEMA_VERSION == 2
     assert MODEL_LATENCY_CSV_SCHEMA_VERSION == 4
-    assert FORMAL_PRIME_ITERS == 1
+    assert FORMAL_PRIME_ITERS == 2
     assert (
         MODEL_LATENCY_TIMING_SCOPE
         == MODEL_LATENCY_WORKER_TIMING_SCOPE

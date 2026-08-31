@@ -126,7 +126,7 @@ def _write_fixture(
                         "compilation_mode": "default_inductor_cudagraph",
                         "vllm_cache_root": "/tmp/vllm-cache/abc1234",
                         "flashdec_num_splits": "auto",
-                        "prime_iters": 1,
+                        "prime_iters": 2,
                         "warmup_iters": 1,
                         "num_iters": 1,
                         "dataset_seed": 20260830,
@@ -206,7 +206,8 @@ def test_summary_accepts_target_win_and_guardrail(tmp_path):
     assert "# R8 Qwen2.5-3B vLLM Model Latency Summary" in text
     assert "4 trials per case" in text
     assert "confirmatory four-trial balanced AB/BA run" in text
-    assert "1 full-length JIT-prime, 1 warmup, and 1 measured iterations" in text
+    assert "full-length JIT-prime `2`; full-length warmup `1`; measured `1`" in text
+    assert "JIT-prime output hashes are retained in raw worker JSON" in text
     assert hashlib.sha256(b"qwen_b8_i8192_o4096").hexdigest() in text
     assert output.read_text(encoding="utf-8") == text
 
@@ -394,7 +395,7 @@ def test_summary_rejects_divergence_before_first_custom_decode_decision(tmp_path
     [
         ("schema_version", "3", "unsupported schema_version"),
         ("vllm_version", "9.9.9", "vLLM 0.25.1"),
-        ("prime_iters", "0", "trial strength"),
+        ("prime_iters", "1", "trial strength"),
         ("warmup_iters", "0", "trial strength"),
         ("num_iters", "2", "trial strength"),
         ("max_model_len", "12287", "capacity/compilation"),

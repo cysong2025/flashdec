@@ -246,7 +246,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--trials", type=int, default=3)
-    parser.add_argument("--prime-iters", type=int, default=1)
+    parser.add_argument("--prime-iters", type=int, default=2)
     parser.add_argument("--warmup-iters", type=int, default=3)
     parser.add_argument("--num-iters", type=int, default=5)
     parser.add_argument("--dataset-seed", type=int, default=20260830)

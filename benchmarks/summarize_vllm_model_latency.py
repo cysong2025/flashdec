@@ -26,7 +26,7 @@ FORMAL_CASE_SHAPES = {
     TARGET_CASE: (8, 8192, 4096),
 }
 FORMAL_TRIALS = {1, 2, 3, 4}
-FORMAL_PRIME_ITERS = 1
+FORMAL_PRIME_ITERS = 2
 FORMAL_WARMUP_ITERS = 1
 FORMAL_NUM_ITERS = 1
 ACCURACY_PREFIX_LEN = 2
@@ -457,9 +457,13 @@ def summarize(input_path: Path, output_path: Path) -> str:
         ),
         f"- Commit-scoped vLLM cache: `{first['vllm_cache_root']}`.",
         (
-            f"- Per process: {first['prime_iters']} full-length JIT-prime, "
-            f"{first['warmup_iters']} warmup, and "
-            f"{first['num_iters']} measured iterations."
+            "- Per-process iteration counts: full-length JIT-prime "
+            f"`{first['prime_iters']}`; full-length warmup "
+            f"`{first['warmup_iters']}`; measured `{first['num_iters']}`."
+        ),
+        (
+            "- JIT-prime output hashes are retained in raw worker JSON for "
+            "audit only; warmup and measured hashes remain the determinism gate."
         ),
         f"- Git commit: `{first['git_commit']}`; clean at start: True.",
         "- Per-case prompt dataset identities:",

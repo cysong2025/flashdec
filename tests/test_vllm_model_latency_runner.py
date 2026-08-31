@@ -25,7 +25,7 @@ RUNNER = _load(RUNNER_SCRIPT, "vllm_model_latency_runner_test")
 WORKER = _load(WORKER_SCRIPT, "vllm_model_latency_worker_test")
 
 
-def test_parent_defaults_to_one_full_length_jit_prime(monkeypatch, tmp_path):
+def test_parent_defaults_to_two_full_length_jit_primes(monkeypatch, tmp_path):
     monkeypatch.setattr(
         sys,
         "argv",
@@ -38,7 +38,7 @@ def test_parent_defaults_to_one_full_length_jit_prime(monkeypatch, tmp_path):
         ],
     )
 
-    assert RUNNER._parse_args().prime_iters == 1
+    assert RUNNER._parse_args().prime_iters == 2
 
 
 def test_worker_requires_explicit_jit_prime_count(monkeypatch, tmp_path):
@@ -155,7 +155,7 @@ def test_runner_invokes_repository_worker_with_dataset_identity(tmp_path):
         dataset=dataset,
         dataset_sha256=digest,
         backend="CUSTOM",
-        prime_iters=1,
+        prime_iters=2,
         warmup_iters=2,
         num_iters=5,
         sampling_seed=23,
@@ -171,7 +171,7 @@ def test_runner_invokes_repository_worker_with_dataset_identity(tmp_path):
     assert "latency" not in command
     assert command[command.index("--dataset") + 1] == str(dataset)
     assert command[command.index("--dataset-sha256") + 1] == digest
-    assert command[command.index("--prime-iters") + 1] == "1"
+    assert command[command.index("--prime-iters") + 1] == "2"
     assert command[command.index("--sampling-seed") + 1] == "23"
 
 
