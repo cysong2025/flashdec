@@ -242,12 +242,12 @@ def main() -> None:
         for prompt in dataset["prompt_token_ids"]
     ]
 
-    # The first full-length call is an explicit JIT-prime phase. Some vLLM
+    # These full-length calls are an explicit JIT-prime phase. Some vLLM
     # kernels are compiled lazily only after the graph reaches its longest
-    # decode shape, so a shorter prefill-time compile cannot replace this call.
-    # Its output is retained for audit but is deliberately not part of the
-    # within-process determinism gate below: compilation may change the first
-    # call, while every subsequent warmup and measured call must be identical.
+    # decode shape, so a shorter prefill-time compile cannot replace them.
+    # Their outputs are retained for audit but are deliberately not part of
+    # the within-process determinism gate below: compilation may change prime
+    # calls, while every subsequent warmup and measured call must be identical.
     prime_output_sha256 = []
     for _ in range(args.prime_iters):
         outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
@@ -278,7 +278,10 @@ def main() -> None:
     if len(set(output_hashes)) != 1:
         raise RuntimeError(
             "fixed greedy decoding produced different token sequences within "
-            "one worker process"
+            "one worker process; "
+            f"prime_sha256={prime_output_sha256!r}; "
+            f"warmup_sha256={warmup_output_sha256!r}; "
+            f"measured_sha256={measured_output_sha256!r}"
         )
     output_token_ids_sha256 = measured_output_sha256[0]
 
