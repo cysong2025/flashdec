@@ -105,6 +105,8 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
             return False
         if self.attn_type != AttentionType.DECODER:
             return False
+        if attn_metadata.max_seq_len < 512:
+            return False
         if attn_metadata.max_query_len != 1 or attn_metadata.use_cascade:
             return False
         if attn_metadata.causal is not True:
@@ -206,10 +208,7 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
             num_kv_heads=self.num_kv_heads,
             logical_blocks=logical_blocks,
         )
-        if (
-            attn_metadata.max_seq_len < 512
-            or num_reqs > attn_metadata.softmax_segm_output.shape[0]
-        ):
+        if num_reqs > attn_metadata.softmax_segm_output.shape[0]:
             num_splits = 1
 
         _vllm_paged_decode_attention_into(

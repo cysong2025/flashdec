@@ -11,6 +11,7 @@ from flashdec.vllm_backend import (
     FlashDecAttentionBackend,
     FlashDecAttentionImpl,
 )
+from vllm.v1.attention.backend import AttentionType
 from vllm.v1.attention.backends.triton_attn import TritonAttentionImpl
 
 
@@ -34,6 +35,13 @@ def _impl_without_vllm_initialization():
     impl.head_size = 128
     impl.scale = 128**-0.5
     impl._requested_splits = 0
+    impl.attn_type = AttentionType.DECODER
+    impl.need_to_return_lse_for_decode = False
+    impl.kv_cache_dtype = "auto"
+    impl.alibi_slopes = None
+    impl.sinks = None
+    impl.sliding_window = (-1, -1)
+    impl.logits_soft_cap = 0
     return impl
 
 
@@ -41,6 +49,9 @@ def _metadata(num_reqs=3, max_seq_len=1024):
     return SimpleNamespace(
         query_start_loc=torch.empty(num_reqs + 1, dtype=torch.int32),
         max_seq_len=max_seq_len,
+        max_query_len=1,
+        use_cascade=False,
+        causal=True,
         block_table=torch.empty((num_reqs, 64), dtype=torch.int32),
         seq_lens=torch.empty(num_reqs, dtype=torch.int32),
         slot_mapping=torch.empty(num_reqs, dtype=torch.int64),
@@ -131,11 +142,11 @@ def test_explicit_split_policy_caps_to_power_of_two_context_boundary(
     )
 
 
-def test_eligible_forward_passes_original_vllm_tensors_to_unchecked_launcher(
-    monkeypatch,
+@pytest.mark.parametrize("max_seq_len", [512, 1024])
+def test_eligible_context_boundary_passes_original_tensors_and_legal_split(
+    monkeypatch, max_seq_len
 ):
     impl = _impl_without_vllm_initialization()
-    monkeypatch.setattr(impl, "_supports_flashdec_decode", lambda *args: True)
 
     def unexpected_update(*args):
         pytest.fail("eligible fused decode must not launch a separate KV update")
@@ -158,7 +169,7 @@ def test_eligible_forward_passes_original_vllm_tensors_to_unchecked_launcher(
     value = torch.empty_like(key)
     output = torch.empty_like(query)
     kv_cache = torch.empty((5, 2, 16, 2, 128), dtype=torch.float16)
-    metadata = _metadata()
+    metadata = _metadata(max_seq_len=max_seq_len)
     layer = SimpleNamespace(kv_sharing_target_layer_name=None)
 
     returned = impl.forward(
@@ -195,9 +206,8 @@ def test_eligible_forward_passes_original_vllm_tensors_to_unchecked_launcher(
     }
 
 
-def test_unsupported_forward_keeps_single_update_then_native_fallback(monkeypatch):
+def test_context_511_updates_kv_then_uses_native_fallback(monkeypatch):
     impl = _impl_without_vllm_initialization()
-    monkeypatch.setattr(impl, "_supports_flashdec_decode", lambda *args: False)
     calls = []
 
     def record_update(*args):
@@ -211,9 +221,12 @@ def test_unsupported_forward_keeps_single_update_then_native_fallback(monkeypatc
 
     monkeypatch.setattr(impl, "do_kv_cache_update", record_update)
     monkeypatch.setattr(TritonAttentionImpl, "forward", record_fallback)
-    values = [object() for _ in range(5)]
-    query, key, value, kv_cache, output = values
-    metadata = SimpleNamespace(slot_mapping=object())
+    query = torch.empty((4, 16, 128), dtype=torch.float16)
+    key = torch.empty((4, 2, 128), dtype=torch.float16)
+    value = torch.empty_like(key)
+    output = torch.empty_like(query)
+    kv_cache = torch.empty((5, 2, 16, 2, 128), dtype=torch.float16)
+    metadata = _metadata(max_seq_len=511)
     layer = SimpleNamespace(kv_sharing_target_layer_name=None)
 
     returned = impl.forward(
