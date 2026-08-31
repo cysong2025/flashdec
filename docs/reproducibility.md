@@ -597,11 +597,13 @@ python scripts/check_release.py --require-clean --require-evidence
 
 ## vLLM Qwen2.5-3B 外部比较
 
-R7 使用与核心 cu128/FlashInfer 环境隔离的 vLLM 环境。正式证据固定为 Python 3.12.3、`vLLM==0.25.1`、PyTorch `2.11.0+cu130`、Triton 3.6.0、PyTorch CUDA 13.0、RTX 5070 和本地 Qwen2.5-3B-Instruct BF16 weights。`vllm` extra 是版本声明，不建议在已有 Torch 环境中让 pip 自由解析整套 CUDA 依赖；优先复用已验证的 vLLM environment，再使用 `--no-deps` editable install。
+R7 使用与核心 cu128/FlashInfer 环境隔离的 vLLM 环境。正式证据固定为 Python 3.12.3、`vLLM==0.25.1`、PyTorch `2.11.0+cu130`、Triton 3.6.0、PyTorch CUDA 13.0、RTX 5070 和本地 Qwen2.5-3B-Instruct BF16 weights。`vllm` extra 是版本声明，不建议在已有 Torch 环境中让 pip 自由解析整套 CUDA 依赖；优先复用已验证的 vLLM environment，再使用 `--no-deps` editable install。下面的 R7 runner/summarizer 命令绑定历史闭环提交 `61836b6`，应在该提交的独立 worktree/clone 中运行；当前 HEAD 已冻结 R8 protocol，不能重新生成历史 12-row R7 summary。
 
 ```bash
 source /home/<user>/projects/QwenServe-12G/.venv/bin/activate
-cd /home/<user>/projects/flashdec
+git -C /home/<user>/projects/flashdec worktree add \
+  /home/<user>/projects/flashdec-r7-evidence 61836b6
+cd /home/<user>/projects/flashdec-r7-evidence
 
 python -m pip install --no-deps -e .
 python -m pip check
@@ -655,7 +657,71 @@ R7 的审核结果必须连同负结果一起解释：
 | fixed-batch model | 两个 case 都略快，但 target `0.9976x <= 0.995x` 失败 |
 | online serving | median/p90 TPOT gate 通过；throughput `1.0019x >= 1.002x` 失败 |
 
-model-latency 与 serving summarizer 会先写出完整 summary，再因冻结门槛失败返回非零；这不是 runner 故障。不得通过删除 gate、四舍五入或覆盖 summary 把它改为通过。canonical summaries 见 [R7 结果索引](../benchmarks/results/README.md#r7-vllm-qwen外部比较)，fast-path/fallback/数值边界见 [vLLM backend 设计](design_vllm_backend.md)。
+历史提交 `61836b6` 上的 model-latency 与 serving summarizer 会先写出完整 summary，再因冻结门槛失败返回非零；这不是 runner 故障。不得通过删除 gate、四舍五入，或用当前 R8 summarizer 覆盖 summary 把它改为通过。canonical summaries 见 [R7 结果索引](../benchmarks/results/README.md#r7-vllm-qwen外部比较)，fast-path/fallback/数值边界见 [vLLM backend 设计](design_vllm_backend.md)。
+
+### 2026-08-31 R8 长上下文 fixed-batch 闭环
+
+R8 不覆盖 R7 的 model/serving 负结果，而是在 commit `3ba68e3` 上冻结一个新的长上下文 fixed-batch 目标。模型文件先按 `$MODEL_DIR/SHA256SUMS` 全量校验；正式 runner 为每个 case 启动 4 个独立 process pairs（共 8 对），并以 balanced AB/BA 顺序运行固定的 `TRITON_ATTN` 和 `CUSTOM`：
+
+```bash
+export VLLM_PLUGINS=flashdec
+export VLLM_USE_FLASHINFER_SAMPLER=0
+export VLLM_WSL2_ENABLE_PIN_MEMORY=1
+export VLLM_ENABLE_V1_MULTIPROCESSING=1
+unset FLASHDEC_VLLM_NUM_SPLITS
+export MODEL_DIR=/home/<user>/models/Qwen2.5-3B-Instruct
+export RESULT_DIR=/home/<user>/flashdec_results/r8_$(git rev-parse --short HEAD)_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$RESULT_DIR"
+set -o pipefail
+
+(cd "$MODEL_DIR" && sha256sum --check SHA256SUMS) \
+  2>&1 | tee "$RESULT_DIR/model_sha256.log"
+
+python benchmarks/run_vllm_model_latency.py \
+  --model "$MODEL_DIR" \
+  --output "$RESULT_DIR/model_latency.csv" \
+  --case qwen_b8_i512_o2 \
+  --case qwen_b8_i8192_o4096 \
+  --trials 4 \
+  --prime-iters 1 \
+  --warmup-iters 1 \
+  --num-iters 1 \
+  --gpu-memory-utilization 0.85 \
+  --max-model-len 12288 \
+  --max-num-seqs 8 \
+  --max-num-batched-tokens 2048 \
+  --vllm-cache-base "$RESULT_DIR/vllm-cache" \
+  --require-clean \
+  2>&1 | tee "$RESULT_DIR/run.log"
+
+python benchmarks/summarize_vllm_model_latency.py \
+  "$RESULT_DIR/model_latency.csv" \
+  --output "$RESULT_DIR/model_latency_summary.md" \
+  2>&1 | tee "$RESULT_DIR/summary.log"
+```
+
+正式 result directory `r8_3ba68e3_formal_trials4` 的 strict summary 返回 0，结果如下：
+
+| 层次 | paired latency ratio | 冻结门槛与结果 |
+| --- | ---: | --- |
+| B8 input512/output2 guard | `1.0029x [0.9890,1.0100]` | `<= 1.05x`，PASS |
+| B8 input8192/output4096 target | `0.9542x [0.9530,0.9560]` | `<= 0.970x`，PASS |
+
+target 对应 latency 降低 `4.58%`、output TPS 提升 `4.80%`。长上下文跨 backend 的最小共同前缀为 49 tokens、完整一致 7/8；每个 backend 的 warmup/measured 完整输出 hash 在各 trial 内稳定。8 个 `CUSTOM` workers 各自产生一个唯一 marker，全部通过 B8/Q16/KV2/D128/BF16/8-split、case/trial/dataset/commit binding 和 `cuda_graph_capture=true` 校验。
+
+marker 只证明对应 decode CUDA Graph 在 capture 阶段包含成功的 FlashDec multi-split launch；它不是每次 measured replay 的 device-side 直接观测。worker/parent runner 读盘校验 marker 后把 canonical JSON、SHA-256、路径与绑定投影写入 CSV；formal summarizer 复核这些 CSV 字段及其一致性，native rows 则必须没有 marker。summarizer 本身不重新读取原始 marker 文件。
+
+原始证据没有提交到 Git，保留在上述 result directory；关键 SHA-256 为：
+
+| artifact | SHA-256 |
+| --- | --- |
+| `model_latency.csv` | `ae57b1788abb61847e1faa4ee1a6ab57de0fba309c2cb5317d660e4913d503e2` |
+| `model_latency_summary.md` | `f511af02757b66cc75007768c5df7e9180ae31f3ed34853d00d00038e9354520` |
+| `run.log` | `8c1956118f877f4f006c4fba50f9c91c814dcc283457c84ebc3ec59723a4b7f7` |
+| `summary.log` | `1c8b5e95716fbd1a84528e8d39d6420d1d0b7b3a9023403c854edba2a4509bc6` |
+| `evidence_manifest.sha256` | `cf7ea96e39133ff4bf12959877b177c31547d9eb6f17273e94ab35d19946fd57` |
+
+canonical Markdown 见 [R8 长上下文模型摘要](../benchmarks/results/vllm_qwen_long_context_model_latency_summary.md)。这里的端到端范围是离线固定 B8 的 blocking `LLM.generate`，包含 model execution、scheduler、KV cache、sampling 和 Python API，排除 startup/model load、full-length JIT-prime 和 warmup。它不等同于 online serving，不能用于声称 TTFT、TPOT、并发请求吞吐或对 vLLM 默认/最快 backend 的收益；外部 baseline 明确固定为 `TRITON_ATTN`。
 
 ## 结果文件与提交规则
 

@@ -27,7 +27,7 @@ FlashDec 用一条可审计的数据路径研究单 token decode：请求如何�
 | KV 容量不足时如何避免 boundary deadlock 与 starvation？ | lifetime block commitment、FIFO + aging、公平 runnable subset、policy/snapshot-bound decision | [scheduler matrix](benchmarks/results/scheduler_capacity_progress_summary.md) |
 | 多层 token 如何只提交一次并支持整体回滚？ | 所有 layer 共享预留位置，按序写入，batch 原子 commit/abort，终态元数据有界回收 | [multi-layer matrix](benchmarks/results/multi_layer_transaction_summary.md) · [transaction design](docs/design_multi_layer_kv_transaction.md) |
 | shared prefix 的收益究竟来自哪里？ | 只共享 immutable full blocks，以 refcount/LRU 管理；容量与 admission 收益和 latency 分开报告 | [8-trial confirmation](benchmarks/results/shared_prefix_capacity_summary.md) |
-| kernel 优化如何传播到系统，又如何公平比较外部实现？ | 分离 append-only、complete-step、profiler、外部 kernel、真实模型与在线 serving；保留未过门槛结果 | [性能报告](docs/performance_report.md) · [FlashInfer baseline](benchmarks/results/flashinfer_paged_decode_baseline_summary.md) · [vLLM Qwen kernel](benchmarks/results/vllm_qwen_attention_summary.md) |
+| kernel 优化如何传播到系统，又如何公平比较外部实现？ | 分离 append-only、complete-step、profiler、外部 kernel、真实模型与在线 serving；保留未过门槛结果 | [性能报告](docs/performance_report.md) · [FlashInfer baseline](benchmarks/results/flashinfer_paged_decode_baseline_summary.md) · [vLLM Qwen kernel](benchmarks/results/vllm_qwen_attention_summary.md) · [R8 长上下文端到端](benchmarks/results/vllm_qwen_long_context_model_latency_summary.md) |
 
 完整的问题定义、假设和证据链见[研究问题](docs/research_questions.md)。
 
@@ -83,7 +83,8 @@ Scheduler 产生携带原始 K/V-free metadata snapshot 与 config 的容量决�
 - Cache-owned trusted transaction 移除了每 layer 的重复 device reduction 与 host scalar sync；persistent-metadata 候选仅 `13/16` 组稳定，未采用。
 - 固定 FlashInfer `0.6.15.post1` 的共同 paged-decode kernel 对比中，FlashDec/FlashInfer p50 latency ratio 为 `1.2003x`（CUDA core）和 `1.2284x`（tensor core）；比值大于 1 表示 FlashInfer 更低延迟。该结论不外推到完整 runtime。
 - 固定 vLLM `0.25.1` 与 Qwen2.5-3B BF16 shape 的外部 kernel gate 中，FlashDec 在 B8/ctx1024 和 B8/ctx2048 的 p50 分别为 vLLM Triton 的 `0.8025x` 和 `0.7926x`，即降低 `19.75%` 和 `20.74%`；B1/B4 guardrail 全部通过。
-- 真实 Qwen evidence 保留 Amdahl 边界：固定批量模型 p50 只改善 `0.16%–0.41%`，未达到预注册模型目标；在线 median/p90 TPOT 分别改善约 `0.31%/0.27%`，但 throughput 中位数 `1.0019x` 略低于 `1.002x` 门槛，因此整体 serving gate 为 `FAIL`。不能把约 20% kernel 收益写成约 20% serving 加速。
+- R7 真实 Qwen evidence 保留 Amdahl 边界：固定批量模型 p50 只改善 `0.16%–0.41%`，未达到预注册模型目标；在线 median/p90 TPOT 分别改善约 `0.31%/0.27%`，但 throughput 中位数 `1.0019x` 略低于 `1.002x` 门槛，因此整体 serving gate 为 `FAIL`。不能把约 20% kernel 收益写成约 20% serving 加速。
+- R8 长上下文正式门槛在 Qwen2.5-3B BF16 `B8/i8192/o4096` 上将端到端 p50 latency 降低 `4.58%`，tokens/s 提升 `4.80%`；`B8/i512/o2` guardrail 为 `PASS`。这是 offline fixed-batch、blocking `LLM.generate` 边界下，FlashDec 与显式 vLLM `TRITON_ATTN` baseline 的对比；它不是在线 serving 结果，baseline 也不代表 vLLM 的默认或最快配置。详见 [R8 正式 summary](benchmarks/results/vllm_qwen_long_context_model_latency_summary.md)。
 - 外部基线证据提交 `d7d4feb` 的 GPU full regression 为 `453 passed, 94 subtests passed`；GitHub Actions 运行不依赖 GPU 的仓库检查子集。测试计数绑定具体 commit 和环境，不作为滚动徽章。
 - R6-A hardening 提交 `87d8a34` 在同一 RTX 5070/CUDA 12.8 开发环境完成当前代码回归：focused 为 `254 passed, 20 subtests passed`，full 为 `501 passed, 100 subtests passed`，clean-tree public release check 为 `PASS`。这组结果验证事务回收与 scheduler decision 边界，不替代绑定历史提交的性能矩阵。
 - R7 证据提交 `61836b6` 的 vLLM/cu130 专项为 `21 passed`；cu128 全仓库为 `531 passed, 1 skipped, 100 subtests passed`，唯一 skip 是 cu128 环境未安装 vLLM。两套环境 `pip check` 与 clean-tree public release gate 均为 `PASS`。测试计数只证明对应提交的 correctness，不改变上述性能门槛结果。

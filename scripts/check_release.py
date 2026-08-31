@@ -209,6 +209,7 @@ RELEASE_EVIDENCE_PATHS = (
     "benchmarks/results/vllm_qwen_attention_summary.md",
     "benchmarks/results/vllm_qwen_model_correctness_summary.md",
     "benchmarks/results/vllm_qwen_model_latency_summary.md",
+    "benchmarks/results/vllm_qwen_long_context_model_latency_summary.md",
     "benchmarks/results/vllm_qwen_serving_summary.md",
     "docs/performance_report.md",
 )

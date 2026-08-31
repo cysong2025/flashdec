@@ -378,7 +378,7 @@ python benchmarks/summarize_flashinfer_baseline.py \
 
 ## vLLM Qwen2.5-3B 外部比较
 
-R7 必须在固定 `vLLM==0.25.1` 环境执行，并显式启用 plugin：
+R7 命令绑定历史闭环提交 `61836b6`，必须在该提交的独立 worktree/clone 与固定 `vLLM==0.25.1` 环境执行，并显式启用 plugin。当前 HEAD 的 model-latency runner/summarizer 已冻结为 R8 协议，不能用来重写 R7 的 12-row 负结果：
 
 ```bash
 export VLLM_PLUGINS=flashdec
@@ -442,4 +442,58 @@ python benchmarks/summarize_vllm_serving_benchmark.py \
   --output "$RESULT_DIR/serving_summary.md"
 ```
 
-正式 R7 中 attention 与 model-correctness summary 返回 0；model-latency 与 serving summarizer 在写出完整报告后按冻结门槛返回非零。复现者应把这个非零结果视为被验证的负结果，不能删除失败项或降低 threshold 后覆盖原报告。四份 canonical evidence 见[结果索引](results/README.md#r7-vllm-qwen外部比较)，完整实现边界见 [vLLM backend 设计](../docs/design_vllm_backend.md)。
+历史提交 `61836b6` 的正式 R7 中，attention 与 model-correctness summary 返回 0；model-latency 与 serving summarizer 在写出完整报告后按冻结门槛返回非零。复现者应把这个非零结果视为被验证的负结果，不能删除失败项、降低 threshold，或用当前 R8 summarizer 覆盖原报告。四份 canonical evidence 见[结果索引](results/README.md#r7-vllm-qwen外部比较)，完整实现边界见 [vLLM backend 设计](../docs/design_vllm_backend.md)。
+
+### R8 长上下文 fixed-batch formal
+
+R8 保留上面的 R7 负结果，并新增一个单独预注册的长上下文目标。使用同一个固定 vLLM/Qwen 环境，显式启用 V1 multiprocessing 和 FlashDec plugin：
+
+```bash
+export VLLM_PLUGINS=flashdec
+export VLLM_USE_FLASHINFER_SAMPLER=0
+export VLLM_WSL2_ENABLE_PIN_MEMORY=1
+export VLLM_ENABLE_V1_MULTIPROCESSING=1
+unset FLASHDEC_VLLM_NUM_SPLITS
+export MODEL_DIR=/home/<user>/models/Qwen2.5-3B-Instruct
+export RESULT_DIR=/home/<user>/flashdec_results/r8_$(git rev-parse --short HEAD)_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$RESULT_DIR"
+
+(cd "$MODEL_DIR" && sha256sum --check SHA256SUMS)
+
+python benchmarks/run_vllm_model_latency.py \
+  --model "$MODEL_DIR" \
+  --output "$RESULT_DIR/model_latency.csv" \
+  --case qwen_b8_i512_o2 \
+  --case qwen_b8_i8192_o4096 \
+  --trials 4 \
+  --prime-iters 1 \
+  --warmup-iters 1 \
+  --num-iters 1 \
+  --gpu-memory-utilization 0.85 \
+  --max-model-len 12288 \
+  --max-num-seqs 8 \
+  --max-num-batched-tokens 2048 \
+  --vllm-cache-base "$RESULT_DIR/vllm-cache" \
+  --require-clean
+
+python benchmarks/summarize_vllm_model_latency.py \
+  "$RESULT_DIR/model_latency.csv" \
+  --output "$RESULT_DIR/model_latency_summary.md"
+```
+
+commit `3ba68e3` 在 RTX 5070 上得到如下正式结果：
+
+| case | paired ratio FlashDec/vLLM | 结果 |
+| --- | ---: | --- |
+| `qwen_b8_i512_o2` guard | `1.0029x [0.9890,1.0100]` | `<= 1.05x`，PASS |
+| `qwen_b8_i8192_o4096` target | `0.9542x [0.9530,0.9560]` | latency `-4.58%`、TPS `+4.80%`；`<= 0.970x`，PASS |
+
+runner 对每个 case 使用 4 个独立 process pairs（共 8 对）、balanced AB/BA、每进程 1 次 full-length JIT-prime、1 次 warmup 和 1 次 measured generation。8/8 `CUSTOM` workers 的 capture-time marker 都验证为 B8/Q16/KV2/D128/BF16/8 splits。canonical summary 见 [R8 长上下文模型摘要](results/vllm_qwen_long_context_model_latency_summary.md)。仓库外原始证据的 SHA-256 为：
+
+- CSV：`ae57b1788abb61847e1faa4ee1a6ab57de0fba309c2cb5317d660e4913d503e2`；
+- summary：`f511af02757b66cc75007768c5df7e9180ae31f3ed34853d00d00038e9354520`；
+- run log：`8c1956118f877f4f006c4fba50f9c91c814dcc283457c84ebc3ec59723a4b7f7`；
+- summary log：`1c8b5e95716fbd1a84528e8d39d6420d1d0b7b3a9023403c854edba2a4509bc6`；
+- evidence manifest：`cf7ea96e39133ff4bf12959877b177c31547d9eb6f17273e94ab35d19946fd57`。
+
+这里测量的是离线固定 B8 的 blocking `LLM.generate`：计时包含 model execution、scheduler、KV cache、sampling 和 API 调用，排除 startup/model load、full-length JIT-prime 和 warmup。它不是 online serving benchmark，不能从这组结果推导 TTFT、TPOT、并发请求吞吐或默认/最快 vLLM backend 的收益；外部基线明确固定为 `TRITON_ATTN`。

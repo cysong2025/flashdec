@@ -736,6 +736,13 @@ def test_release_tree_requires_flashinfer_baseline_evidence():
     )
 
 
+def test_release_evidence_requires_r8_long_context_model_latency_summary():
+    assert (
+        "benchmarks/results/vllm_qwen_long_context_model_latency_summary.md"
+        in RELEASE_EVIDENCE_PATHS
+    )
+
+
 def test_release_tree_requires_public_results_chart_surface():
     for relative in (
         "benchmarks/results/public_results_snapshot.json",

@@ -16,6 +16,8 @@ FlashDec `0.0.0` 是研究原型版本。本文件只记录版本级能力变化
 - 实现 Cache-owned trusted transaction provenance，避免已验证位置在每个 layer 重复执行 device reduction 与 host scalar extraction。
 - 实现 integrated scheduled multi-layer workload，覆盖 dynamic arrival、mixed prefix、caller-supplied context、rollback、block reuse 和 terminal zero-used cleanup。
 - 增加固定 `vLLM==0.25.1` 的 out-of-tree `CUSTOM` attention backend：eligible Qwen single-token decode 使用 grouped-GQA、persistent-workspace split-KV kernel，prefill/mixed/unsupported path 回退原生 Triton。
+- 优化 vLLM/Qwen split-decode：partial reducer 改为 query-head 并行，自动选择 2 的幂 split；正式 B8/Q16/KV2/D128 路径使用 8 splits，单 split 回退原生 Triton，并保留 vLLM 独立 KV-update 与图级依赖合同。
+- 增加 capture-time split activation attestation：正式 `CUSTOM` worker 以唯一、canonical、fail-closed marker 绑定 commit、dataset、case、trial 与 split geometry，避免把未实际捕获 custom path 的结果计入性能门槛。
 
 ### 实验与证据
 
@@ -25,6 +27,7 @@ FlashDec `0.0.0` 是研究原型版本。本文件只记录版本级能力变化
 - 保留 persistent-metadata candidate 的预注册负结果；该实现未替换 materialized metadata 默认路径。
 - 增加固定 `flashinfer-python==0.6.15.post1` 的 FlashInfer paged-decode kernel baseline，并用 [`constraints/flashinfer-cu128.txt`](constraints/flashinfer-cu128.txt) 固定已验证 cu128/SM120a 环境。
 - 增加 vLLM/Qwen2.5-3B 的 attention、cross-backend generation、固定批量模型和在线 serving A/B；attention 外部门槛通过，模型 target 与 serving throughput target 的负结果按原样保留。
+- 增加 R8 长上下文 fixed-batch `LLM.generate` 确认性门槛：在 RTX 5070、Qwen2.5-3B BF16、B8/input8192/output4096 上，4 轮 balanced AB/BA 的 paired-median latency 降低 `4.58%`、output TPS 提升 `4.80%`，通过至少 3% 的冻结目标；短路径 guard 同时通过。该结论限定为离线固定批量，不替代在线 TTFT/TPOT/throughput 证据。
 - Canonical evidence 采用审核后的 Markdown summaries；原始 CSV、log、quick 和 profiler 产物留在 Git 之外。
 
 ### Repository surface

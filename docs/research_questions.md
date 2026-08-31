@@ -208,13 +208,13 @@ FlashDec 分离四类观察边界：
 | Complete token | 优化是否穿透 Engine、allocator 与 attention？ | 外部 Q/K/V 生成、prompt prefill |
 | Integrated workload | 调度、事务、prefix、rollback 与 reuse 能否组成正确轨迹？ | 生产流量与长期尾延迟外推 |
 | External vLLM kernel | 同一 vLLM KV/metadata contract 下 attention 是否更快？ | 模型其他层、scheduler、HTTP |
-| External Qwen model/serving | kernel 收益是否传到真实模型与 TPOT？ | 多 GPU、分布式流量、其他模型 |
+| External Qwen model/serving | kernel 收益是否传到真实模型、长上下文 `LLM.generate` 与 TPOT？ | 多 GPU、分布式流量、其他模型；offline 结果不替代 online 指标 |
 
 正式 latency 来自 non-instrumented CUDA event 或明确同步的 wall interval；profiler 只做阶段归因。Runner 固定 commit、seed、shape、dtype、warmup/repeat/trial 和 backend order，strict summarizer 校验矩阵、配对输入、状态轨迹和不变量后才生成摘要。
 
 外部基线将 FlashInfer 固定为 `flashinfer-python==0.6.15.post1`。FlashDec Triton、FlashInfer FA2 CUDA-core 与 tensor-core 共用逻辑 Q/K/V pages、page table、`seq_lens`、`sm_scale`、dtype 和 seed；FlashDec token-major view 与 FlashInfer HND view 不需要在计时区间内转换。公平性契约见[FlashInfer baseline 设计](design_flashinfer_baseline.md)。
 
-第二条外部路径固定 `vLLM==0.25.1` 与 Qwen2.5-3B BF16。vLLM 的 `CUSTOM` out-of-tree backend 继续使用原生 KV cache 与 metadata；FlashDec 对 eligible uniform single-token decode 使用 grouped-GQA split-KV，对 prefill、mixed batch 和不支持的 feature 回退原生 Triton。attention、固定批量模型和在线 serving 分别计时，不用 kernel 数字替代 model/TPOT/throughput。合同见 [vLLM backend 设计](design_vllm_backend.md)。
+第二条外部路径固定 `vLLM==0.25.1` 与 Qwen2.5-3B BF16。vLLM 的 `CUSTOM` out-of-tree backend 继续使用原生 KV cache 与 metadata；FlashDec 对 eligible uniform single-token decode 使用 grouped-GQA split-KV，对 prefill、mixed batch 和不支持的 feature 回退原生 Triton。R8 将 partial reduction 改为 query-head 并行；auto policy 在正式 Qwen B8 geometry 下选择 8 splits，formal protocol 要求实际观察到该 geometry，单 split 回退原生实现，并保留 vLLM 官方 KV-update 顺序。每个 CUSTOM worker 必须在 CUDA Graph capture 中写入唯一 activation marker；worker/parent runner 读盘验证，strict summarizer 对 CSV 中的 canonical JSON、SHA、commit、dataset 和 split shape 投影做 fail-closed 复核。attention、固定批量模型和在线 serving 分别计时，不用 kernel 数字替代 model/TPOT/throughput。合同见 [vLLM backend 设计](design_vllm_backend.md)。
 
 ### 正式证据
 
@@ -225,14 +225,15 @@ FlashDec 分离四类观察边界：
 - [vLLM Qwen attention](../benchmarks/results/vllm_qwen_attention_summary.md)
 - [Qwen cross-backend correctness](../benchmarks/results/vllm_qwen_model_correctness_summary.md)
 - [Qwen fixed-batch model](../benchmarks/results/vllm_qwen_model_latency_summary.md)
+- [R8 Qwen long-context fixed-batch model](../benchmarks/results/vllm_qwen_long_context_model_latency_summary.md)
 - [Qwen online serving](../benchmarks/results/vllm_qwen_serving_summary.md)
 - [综合性能报告](performance_report.md)
 
-FlashInfer 的共同 kernel matrix 中 p50 方向一致领先；vLLM Qwen matrix 中 FlashDec 在 B8/ctx1024 与 B8/ctx2048 的 attention p50 降低约 20%。后者传到完整模型和服务后只剩小幅正向观测：模型 target 与 serving throughput target 均未通过。正负结果共同说明外部比较必须按计时层次解释。
+FlashInfer 的共同 kernel matrix 中 p50 方向一致领先；R7 vLLM Qwen matrix 中 FlashDec 在 B8/ctx1024 与 B8/ctx2048 的 attention p50 降低约 20%。R7 较短 fixed-batch model target 与 serving overall gate 都未通过，这些负结果继续保留。R8 在预注册的 B8/input8192/output4096 离线 fixed-batch target 上取得 `0.9542x [0.9530,0.9560]` paired ratio，即 `4.58%` latency reduction 和 `4.80%` output-TPS uplift，达到至少 3% 的完整 `LLM.generate` 门槛；input512/output2 guard 为 `1.0029x` 并通过 `<=1.05x` 限制。正负结果共同说明外部比较必须按 workload 和计时层次解释，不能把长上下文收益写成所有请求或在线 serving 的统一加速。
 
 ### 边界
 
-FlashInfer 基线不能回答哪个 serving runtime 端到端更快。vLLM/Qwen serving 证据覆盖一个本地单 GPU HTTP workload，但不能外推到其他模型、并发、硬件、TP/PP 或多机。三轮 `[min,max]` 是观测范围而非置信区间；小样本 tail 不能被包装成生产尾延迟。复现实验前应同时阅读[性能报告](performance_report.md)和[复现指南](reproducibility.md)。
+FlashInfer 基线不能回答哪个 serving runtime 端到端更快。R8 所称“端到端”是离线固定批量、阻塞式 `LLM.generate`，包括 transformer、scheduler、KV cache、sampling 与 Python API，排除 startup/JIT；activation marker 证明图捕获阶段存在成功的 8-split launch，不是每次 measured replay 的逐次 device trace。R7 vLLM/Qwen serving 证据覆盖一个本地单 GPU HTTP workload，但不能外推到其他模型、并发、硬件、TP/PP 或多机。四轮或三轮 `[min,max]` 都是观测范围而非置信区间；小样本 tail 不能被包装成生产尾延迟。复现实验前应同时阅读[性能报告](performance_report.md)和[复现指南](reproducibility.md)。
 
 ## 结论
 
