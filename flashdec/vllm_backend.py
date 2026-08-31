@@ -65,9 +65,11 @@ def _select_num_splits(
 class FlashDecAttentionBackend(TritonAttentionBackend):
     """vLLM backend that substitutes FlashDec for eligible decode batches."""
 
-    # Eligible decode writes the current K/V token from the attention kernel.
-    # Unsupported paths explicitly invoke Triton's update before delegating.
-    forward_includes_kv_cache_update = True
+    # Keep vLLM's separate KV-update op and its explicit torch.compile data
+    # dependency for every path. The FlashDec kernel currently writes the same
+    # K/V token again on eligible decode; that redundant store is preferable to
+    # bypassing vLLM's graph-level ordering contract.
+    forward_includes_kv_cache_update = False
 
     @staticmethod
     def get_name() -> str:
@@ -147,41 +149,6 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
             and self.num_heads // self.num_kv_heads in (4, 8, 16)
         )
 
-    def _forward_with_triton(
-        self,
-        layer: torch.nn.Module,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-        kv_cache: torch.Tensor,
-        attn_metadata: TritonAttentionMetadata | None,
-        output: torch.Tensor,
-        output_scale: torch.Tensor | None,
-        output_block_scale: torch.Tensor | None,
-        *,
-        update_kv: bool,
-    ) -> torch.Tensor:
-        if update_kv:
-            assert attn_metadata is not None
-            self.do_kv_cache_update(
-                layer,
-                key,
-                value,
-                kv_cache,
-                attn_metadata.slot_mapping,
-            )
-        return super().forward(
-            layer,
-            query,
-            key,
-            value,
-            kv_cache,
-            attn_metadata,
-            output,
-            output_scale,
-            output_block_scale,
-        )
-
     def forward(
         self,
         layer: torch.nn.Module,
@@ -209,7 +176,7 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
             output_scale,
             output_block_scale,
         ):
-            return self._forward_with_triton(
+            return super().forward(
                 layer,
                 query,
                 key,
@@ -219,7 +186,6 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
                 output,
                 output_scale,
                 output_block_scale,
-                update_kv=attn_metadata is not None and owns_kv,
             )
 
         # Uniform single-token decode has one query token per metadata row. In
@@ -239,7 +205,7 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
         if num_reqs > attn_metadata.softmax_segm_output.shape[0]:
             num_splits = 1
         if num_splits == 1:
-            return self._forward_with_triton(
+            return super().forward(
                 layer,
                 query,
                 key,
@@ -249,7 +215,6 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
                 output,
                 output_scale,
                 output_block_scale,
-                update_kv=True,
             )
 
         _vllm_paged_decode_attention_into(

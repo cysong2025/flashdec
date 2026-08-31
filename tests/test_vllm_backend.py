@@ -18,7 +18,7 @@ from vllm.v1.attention.backends.triton_attn import TritonAttentionImpl
 def test_vllm_backend_identity_and_cache_contract():
     assert FlashDecAttentionBackend.get_name() == "CUSTOM"
     assert FlashDecAttentionBackend.get_impl_cls() is FlashDecAttentionImpl
-    assert FlashDecAttentionBackend.forward_includes_kv_cache_update is True
+    assert FlashDecAttentionBackend.forward_includes_kv_cache_update is False
     assert FlashDecAttentionBackend.get_kv_cache_shape(7, 16, 2, 128) == (
         7,
         2,
@@ -224,26 +224,26 @@ def test_eligible_context_boundary_passes_original_tensors_and_legal_split(
     ],
     ids=("explicit-one", "auto-one-high-batch", "workspace-forces-one"),
 )
-def test_final_single_split_updates_kv_then_uses_native_fallback(
+def test_final_single_split_relies_on_vllm_update_then_uses_native_fallback(
     monkeypatch, requested_splits, num_reqs, workspace_capacity
 ):
     impl = _impl_without_vllm_initialization()
     impl._requested_splits = requested_splits
-    calls = []
 
-    def record_update(*args):
-        calls.append(("update", args))
+    def unexpected_update(*args):
+        pytest.fail("vLLM must own the separate KV update for this backend")
 
     marker = object()
+    fallback_args = []
 
     def record_fallback(self, *args):
-        calls.append(("fallback", args))
+        fallback_args.append(args)
         return marker
 
     def unexpected_launcher(*args, **kwargs):
         pytest.fail("single-split decode must not enter the FlashDec kernel")
 
-    monkeypatch.setattr(impl, "do_kv_cache_update", record_update)
+    monkeypatch.setattr(impl, "do_kv_cache_update", unexpected_update)
     monkeypatch.setattr(TritonAttentionImpl, "forward", record_fallback)
     monkeypatch.setattr(
         backend_module,
@@ -273,32 +273,25 @@ def test_final_single_split_updates_kv_then_uses_native_fallback(
     )
 
     assert returned is marker
-    assert calls == [
-        (
-            "update",
-            (layer, key, value, kv_cache, metadata.slot_mapping),
-        ),
-        (
-            "fallback",
-            (layer, query, key, value, kv_cache, metadata, output, None, None),
-        ),
+    assert fallback_args == [
+        (layer, query, key, value, kv_cache, metadata, output, None, None),
     ]
 
 
-def test_context_511_updates_kv_then_uses_native_fallback(monkeypatch):
+def test_context_511_relies_on_vllm_update_then_uses_native_fallback(monkeypatch):
     impl = _impl_without_vllm_initialization()
-    calls = []
 
-    def record_update(*args):
-        calls.append(("update", args))
+    def unexpected_update(*args):
+        pytest.fail("vLLM must own the separate KV update for this backend")
 
     marker = object()
+    fallback_args = []
 
     def record_fallback(self, *args):
-        calls.append(("fallback", args))
+        fallback_args.append(args)
         return marker
 
-    monkeypatch.setattr(impl, "do_kv_cache_update", record_update)
+    monkeypatch.setattr(impl, "do_kv_cache_update", unexpected_update)
     monkeypatch.setattr(TritonAttentionImpl, "forward", record_fallback)
     query = torch.empty((4, 16, 128), dtype=torch.float16)
     key = torch.empty((4, 2, 128), dtype=torch.float16)
@@ -319,15 +312,8 @@ def test_context_511_updates_kv_then_uses_native_fallback(monkeypatch):
     )
 
     assert returned is marker
-    assert calls == [
-        (
-            "update",
-            (layer, key, value, kv_cache, metadata.slot_mapping),
-        ),
-        (
-            "fallback",
-            (layer, query, key, value, kv_cache, metadata, output, None, None),
-        ),
+    assert fallback_args == [
+        (layer, query, key, value, kv_cache, metadata, output, None, None),
     ]
 
 
