@@ -62,8 +62,9 @@ class Case:
 CASES = (
     Case("qwen_b8_i128_o128", 8, 128, 128),
     Case("qwen_b8_i2048_o128", 8, 2048, 128),
-    # Decode-heavy cases are explicit opt-ins so historical default runs remain
-    # unchanged and callers must deliberately provision their longer capacity.
+    # Formal/pilot additions are explicit opt-ins so historical defaults remain
+    # unchanged and callers deliberately select the intended evidence workload.
+    Case("qwen_b8_i128_o2", 8, 128, 2, run_by_default=False),
     Case("qwen_b8_i2048_o2048", 8, 2048, 2048, run_by_default=False),
     Case("qwen_b8_i8192_o4096", 8, 8192, 4096, run_by_default=False),
 )
@@ -246,7 +247,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--trials", type=int, default=3)
-    parser.add_argument("--prime-iters", type=int, default=2)
+    parser.add_argument("--prime-iters", type=int, default=1)
     parser.add_argument("--warmup-iters", type=int, default=3)
     parser.add_argument("--num-iters", type=int, default=5)
     parser.add_argument("--dataset-seed", type=int, default=20260830)
@@ -270,8 +271,8 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         help=(
             "Run only a named built-in or --case-spec case; may be repeated. "
-            "The decode-heavy qwen_b8_i2048_o2048 and qwen_b8_i8192_o4096 "
-            "built-ins are opt-in."
+            "The qwen_b8_i128_o2, qwen_b8_i2048_o2048, and "
+            "qwen_b8_i8192_o4096 built-ins are opt-in."
         ),
     )
     parser.add_argument(

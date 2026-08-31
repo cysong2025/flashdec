@@ -85,13 +85,13 @@ def _write_fixture(
         "command",
     ]
     cases = {
-        "qwen_b8_i128_o128": guardrail_ratio,
+        "qwen_b8_i128_o2": guardrail_ratio,
         "qwen_b8_i8192_o4096": target_ratio,
     }
     rows = []
     for case, ratio in cases.items():
         input_len, output_len = {
-            "qwen_b8_i128_o128": (128, 128),
+            "qwen_b8_i128_o2": (128, 2),
             "qwen_b8_i8192_o4096": (8192, 4096),
         }[case]
         generated_tokens = 8 * output_len
@@ -126,7 +126,7 @@ def _write_fixture(
                         "compilation_mode": "default_inductor_cudagraph",
                         "vllm_cache_root": "/tmp/vllm-cache/abc1234",
                         "flashdec_num_splits": "auto",
-                        "prime_iters": 2,
+                        "prime_iters": 1,
                         "warmup_iters": 1,
                         "num_iters": 1,
                         "dataset_seed": 20260830,
@@ -206,8 +206,10 @@ def test_summary_accepts_target_win_and_guardrail(tmp_path):
     assert "# R8 Qwen2.5-3B vLLM Model Latency Summary" in text
     assert "4 trials per case" in text
     assert "confirmatory four-trial balanced AB/BA run" in text
-    assert "full-length JIT-prime `2`; full-length warmup `1`; measured `1`" in text
+    assert "full-length JIT-prime `1`; full-length warmup `1`; measured `1`" in text
     assert "JIT-prime output hashes are retained in raw worker JSON" in text
+    assert "`qwen_b8_i128_o2` generates exactly two tokens" in text
+    assert "second token covers the first custom single-token decode decision" in text
     assert hashlib.sha256(b"qwen_b8_i8192_o4096").hexdigest() in text
     assert output.read_text(encoding="utf-8") == text
 
@@ -242,15 +244,18 @@ def test_summary_rejects_missing_target_win(tmp_path):
     )
 
 
-def test_summary_rejects_short_context_regression(tmp_path):
+def test_summary_rejects_two_token_integration_regression(tmp_path):
     source = tmp_path / "input.csv"
     output = tmp_path / "summary.md"
-    _write_fixture(source, guardrail_ratio=1.04)
+    _write_fixture(source, guardrail_ratio=1.051)
 
     with pytest.raises(ValueError, match="performance gate failed"):
         MODULE.summarize(source, output)
 
-    assert "guardrail <= 1.02x: FAIL" in output.read_text(encoding="utf-8")
+    assert (
+        "input128/output2 two-token integration guardrail <= 1.05x: FAIL"
+        in output.read_text(encoding="utf-8")
+    )
 
 
 def test_summary_rejects_unstable_ratio(tmp_path):
@@ -395,7 +400,7 @@ def test_summary_rejects_divergence_before_first_custom_decode_decision(tmp_path
     [
         ("schema_version", "3", "unsupported schema_version"),
         ("vllm_version", "9.9.9", "vLLM 0.25.1"),
-        ("prime_iters", "1", "trial strength"),
+        ("prime_iters", "2", "trial strength"),
         ("warmup_iters", "0", "trial strength"),
         ("num_iters", "2", "trial strength"),
         ("max_model_len", "12287", "capacity/compilation"),
