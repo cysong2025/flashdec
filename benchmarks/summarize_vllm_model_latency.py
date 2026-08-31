@@ -20,9 +20,9 @@ BACKEND_ARGS = {
     "flashdec": "CUSTOM",
 }
 TARGET_CASE = "qwen_b8_i8192_o4096"
-GUARDRAIL_CASE = "qwen_b8_i128_o2"
+GUARDRAIL_CASE = "qwen_b8_i512_o2"
 FORMAL_CASE_SHAPES = {
-    GUARDRAIL_CASE: (8, 128, 2),
+    GUARDRAIL_CASE: (8, 512, 2),
     TARGET_CASE: (8, 8192, 4096),
 }
 FORMAL_TRIALS = {1, 2, 3, 4}
@@ -466,9 +466,9 @@ def summarize(input_path: Path, output_path: Path) -> str:
             "audit only; warmup and measured hashes remain the determinism gate."
         ),
         (
-            f"- Integration guardrail: `{GUARDRAIL_CASE}` generates exactly two "
-            "tokens; the second token covers the first custom single-token "
-            "decode decision."
+            f"- Integration guardrail: `{GUARDRAIL_CASE}` uses the 512-token "
+            "prompt boundary and generates exactly two tokens; the second "
+            "generated token covers the first eligible FlashDec split decode."
         ),
         f"- Git commit: `{first['git_commit']}`; clean at start: True.",
         "- Per-case prompt dataset identities:",
@@ -523,7 +523,7 @@ def summarize(input_path: Path, output_path: Path) -> str:
                 f"{'PASS' if target_pass else 'FAIL'}."
             ),
             (
-                "- B8 input128/output2 two-token integration guardrail <= "
+                "- B8 input512/output2 two-token split-decode guardrail <= "
                 f"{GUARDRAIL_RATIO_LIMIT:.2f}x: "
                 f"{'PASS' if guardrail_pass else 'FAIL'}."
             ),
@@ -533,8 +533,9 @@ def summarize(input_path: Path, output_path: Path) -> str:
             ),
             (
                 f"- Every request shares at least {ACCURACY_PREFIX_LEN} output "
-                "tokens across backends (the second token exercises custom "
-                f"decode): {'PASS' if accuracy_pass else 'FAIL'}."
+                "tokens across backends (the second generated token covers the "
+                "first eligible FlashDec split decode): "
+                f"{'PASS' if accuracy_pass else 'FAIL'}."
             ),
             f"- Geometric-mean p50 ratio: {geo_ratio:.4f}x.",
             f"- Overall external-model gate: **{'PASS' if gate_pass else 'FAIL'}**.",
@@ -549,8 +550,9 @@ def summarize(input_path: Path, output_path: Path) -> str:
             ),
             (
                 "The first two greedy tokens must match from identical prompt state; "
-                "the second generated token is the first decision after a custom "
-                "single-token decode step. Full autoregressive rollout hashes are "
+                "at the 512-token prompt boundary, the second generated token "
+                "covers the first eligible FlashDec split-decode decision. Full "
+                "autoregressive rollout hashes are "
                 "descriptive because one "
                 "near-tied floating-point choice can change all later inputs."
             ),

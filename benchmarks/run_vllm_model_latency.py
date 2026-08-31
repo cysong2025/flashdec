@@ -65,6 +65,7 @@ CASES = (
     # Formal/pilot additions are explicit opt-ins so historical defaults remain
     # unchanged and callers deliberately select the intended evidence workload.
     Case("qwen_b8_i128_o2", 8, 128, 2, run_by_default=False),
+    Case("qwen_b8_i512_o2", 8, 512, 2, run_by_default=False),
     Case("qwen_b8_i2048_o2048", 8, 2048, 2048, run_by_default=False),
     Case("qwen_b8_i8192_o4096", 8, 8192, 4096, run_by_default=False),
 )
@@ -271,8 +272,9 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         help=(
             "Run only a named built-in or --case-spec case; may be repeated. "
-            "The qwen_b8_i128_o2, qwen_b8_i2048_o2048, and "
-            "qwen_b8_i8192_o4096 built-ins are opt-in."
+            "The qwen_b8_i128_o2, qwen_b8_i512_o2, "
+            "qwen_b8_i2048_o2048, and qwen_b8_i8192_o4096 built-ins are "
+            "opt-in."
         ),
     )
     parser.add_argument(

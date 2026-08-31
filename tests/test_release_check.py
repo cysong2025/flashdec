@@ -25,7 +25,12 @@ from benchmarks.run_vllm_model_latency_worker import (
     TIMING_SCOPE as MODEL_LATENCY_WORKER_TIMING_SCOPE,
 )
 from benchmarks.summarize_vllm_model_latency import (
+    FORMAL_CASE_SHAPES,
     FORMAL_PRIME_ITERS,
+    GUARDRAIL_CASE,
+    GUARDRAIL_RATIO_LIMIT,
+    TARGET_CASE,
+    TARGET_RATIO_LIMIT,
     TIMING_SCOPE as MODEL_LATENCY_SUMMARY_TIMING_SCOPE,
 )
 from scripts.check_docs import PUBLIC_ENTRY_FILES
@@ -250,6 +255,12 @@ def test_release_model_latency_protocol_requires_explicit_jit_prime():
     assert MODEL_LATENCY_WORKER_SCHEMA_VERSION == 2
     assert MODEL_LATENCY_CSV_SCHEMA_VERSION == 4
     assert FORMAL_PRIME_ITERS == 1
+    assert GUARDRAIL_CASE == "qwen_b8_i512_o2"
+    assert FORMAL_CASE_SHAPES[GUARDRAIL_CASE] == (8, 512, 2)
+    assert GUARDRAIL_RATIO_LIMIT == 1.05
+    assert TARGET_CASE == "qwen_b8_i8192_o4096"
+    assert FORMAL_CASE_SHAPES[TARGET_CASE] == (8, 8192, 4096)
+    assert TARGET_RATIO_LIMIT == 0.970
     assert (
         MODEL_LATENCY_TIMING_SCOPE
         == MODEL_LATENCY_WORKER_TIMING_SCOPE

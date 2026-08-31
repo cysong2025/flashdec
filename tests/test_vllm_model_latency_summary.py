@@ -85,13 +85,13 @@ def _write_fixture(
         "command",
     ]
     cases = {
-        "qwen_b8_i128_o2": guardrail_ratio,
+        "qwen_b8_i512_o2": guardrail_ratio,
         "qwen_b8_i8192_o4096": target_ratio,
     }
     rows = []
     for case, ratio in cases.items():
         input_len, output_len = {
-            "qwen_b8_i128_o2": (128, 2),
+            "qwen_b8_i512_o2": (512, 2),
             "qwen_b8_i8192_o4096": (8192, 4096),
         }[case]
         generated_tokens = 8 * output_len
@@ -208,8 +208,11 @@ def test_summary_accepts_target_win_and_guardrail(tmp_path):
     assert "confirmatory four-trial balanced AB/BA run" in text
     assert "full-length JIT-prime `1`; full-length warmup `1`; measured `1`" in text
     assert "JIT-prime output hashes are retained in raw worker JSON" in text
-    assert "`qwen_b8_i128_o2` generates exactly two tokens" in text
-    assert "second token covers the first custom single-token decode decision" in text
+    assert "`qwen_b8_i512_o2` uses the 512-token prompt boundary" in text
+    assert (
+        "second generated token covers the first eligible FlashDec split decode"
+        in text
+    )
     assert hashlib.sha256(b"qwen_b8_i8192_o4096").hexdigest() in text
     assert output.read_text(encoding="utf-8") == text
 
@@ -253,7 +256,7 @@ def test_summary_rejects_two_token_integration_regression(tmp_path):
         MODULE.summarize(source, output)
 
     assert (
-        "input128/output2 two-token integration guardrail <= 1.05x: FAIL"
+        "input512/output2 two-token split-decode guardrail <= 1.05x: FAIL"
         in output.read_text(encoding="utf-8")
     )
 
@@ -390,9 +393,10 @@ def test_summary_rejects_divergence_before_first_custom_decode_decision(tmp_path
     with pytest.raises(ValueError, match="performance gate failed"):
         MODULE.summarize(source, output)
 
-    assert "second token exercises custom decode): FAIL" in output.read_text(
-        encoding="utf-8"
-    )
+    assert (
+        "second generated token covers the first eligible FlashDec split decode): "
+        "FAIL"
+    ) in output.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(

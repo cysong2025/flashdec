@@ -182,8 +182,13 @@ def test_opt_in_builtins_are_explicit_and_custom_cases_are_supported():
         "qwen_b8_i2048_o128",
     ]
 
-    guardrail = RUNNER._resolve_cases(["qwen_b8_i128_o2"], None)
-    assert guardrail == [RUNNER.Case("qwen_b8_i128_o2", 8, 128, 2, False)]
+    historical_guardrail = RUNNER._resolve_cases(["qwen_b8_i128_o2"], None)
+    assert historical_guardrail == [
+        RUNNER.Case("qwen_b8_i128_o2", 8, 128, 2, False)
+    ]
+
+    guardrail = RUNNER._resolve_cases(["qwen_b8_i512_o2"], None)
+    assert guardrail == [RUNNER.Case("qwen_b8_i512_o2", 8, 512, 2, False)]
 
     long_case = RUNNER._resolve_cases(["qwen_b8_i2048_o2048"], None)
     assert long_case == [RUNNER.Case("qwen_b8_i2048_o2048", 8, 2048, 2048, False)]
