@@ -153,6 +153,10 @@ def validate_split_attestation(
     block_size = _json_int(payload, "block_size")
     if num_splits not in VALID_SPLIT_COUNTS:
         raise ValueError("split attestation did not observe a multi-split launch")
+    if num_splits > logical_blocks:
+        raise ValueError(
+            "split attestation num_splits exceeds the logical block count"
+        )
     if block_size not in VALID_BLOCK_SIZES:
         raise ValueError("split attestation block_size is unsupported")
     if logical_blocks != (max_seq_len + block_size - 1) // block_size:

@@ -16,7 +16,6 @@ from pathlib import Path
 from flashdec.benchmark import validate_vllm_cache_root
 from flashdec.vllm_attestation import (
     SPLIT_ATTESTATION_CSV_FIELDS,
-    VALID_SPLIT_COUNTS,
     canonical_attestation_bytes,
     validate_split_attestation,
 )
@@ -200,7 +199,7 @@ def _validate_row_attestation(
                 f"split-attestation flattened {field} differs from payload"
             )
     if (
-        payload["num_splits"] not in VALID_SPLIT_COUNTS
+        payload["num_splits"] != 8
         or payload["num_reqs"] != 8
         or payload["num_q_heads"] != 16
         or payload["num_kv_heads"] != 2

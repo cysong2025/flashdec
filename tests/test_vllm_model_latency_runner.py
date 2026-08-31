@@ -256,8 +256,8 @@ def _valid_worker_result(tmp_path, *, num_iters=1):
         "trial": 2,
         "dataset_sha256": digest,
         "git_commit": "c" * 40,
-        "max_seq_len": 2,
-        "logical_blocks": 1,
+        "max_seq_len": 32,
+        "logical_blocks": 2,
         "num_reqs": 1,
         "num_splits": 2,
         "num_q_heads": 16,
@@ -451,6 +451,14 @@ def test_parent_revalidates_split_attestation_payload_and_marker(tmp_path):
     result["split_activation_attestation"]["num_splits"] = 1
 
     with pytest.raises(ValueError, match="multi-split launch"):
+        RUNNER._validate_worker_result(result, **kwargs)
+
+
+def test_parent_rejects_more_splits_than_logical_blocks(tmp_path):
+    result, kwargs, _output_sha256 = _valid_worker_result(tmp_path)
+    result["split_activation_attestation"]["num_splits"] = 4
+
+    with pytest.raises(ValueError, match="exceeds the logical block count"):
         RUNNER._validate_worker_result(result, **kwargs)
 
 

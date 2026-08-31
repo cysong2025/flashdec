@@ -339,6 +339,22 @@ def test_summary_rejects_eager_only_split_attestation(tmp_path):
         MODULE.summarize(source, output)
 
 
+def test_summary_requires_frozen_eight_way_split_observation(tmp_path):
+    source = tmp_path / "input.csv"
+    output = tmp_path / "summary.md"
+    _write_fixture(source)
+    rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
+    custom = next(row for row in rows if row["backend"] == "flashdec")
+    _rewrite_attestation(custom, num_splits=4)
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="observed shape differs"):
+        MODULE.summarize(source, output)
+
+
 def test_summary_rejects_duplicate_split_nonce_and_native_claim(tmp_path):
     source = tmp_path / "input.csv"
     output = tmp_path / "summary.md"
