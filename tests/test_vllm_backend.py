@@ -50,6 +50,87 @@ def _metadata(num_reqs=3, max_seq_len=1024):
     )
 
 
+@pytest.mark.parametrize("value", ["0", "1", "2", "4", "8", "16"])
+def test_requested_split_parser_accepts_only_supported_values(value):
+    assert backend_module._parse_requested_splits(value) == int(value)
+
+
+@pytest.mark.parametrize("value", ["auto", "-1", "3", "6", "11", "12", "17"])
+def test_requested_split_parser_rejects_unsupported_values(value):
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"FLASHDEC_VLLM_NUM_SPLITS must be one of "
+            r"0, 1, 2, 4, 8, or 16 \(0 selects auto\)"
+        ),
+    ):
+        backend_module._parse_requested_splits(value)
+
+
+@pytest.mark.parametrize(
+    ("num_reqs", "expected"),
+    [
+        (4, 16),
+        (5, 16),
+        (6, 8),
+        (7, 8),
+        (8, 8),
+        (9, 8),
+        (10, 8),
+        (11, 4),
+        (12, 4),
+    ],
+)
+def test_auto_split_policy_uses_power_of_two_near_batch_boundaries(
+    num_reqs, expected
+):
+    selected = backend_module._select_num_splits(
+        0,
+        num_reqs=num_reqs,
+        num_kv_heads=2,
+        logical_blocks=64,
+    )
+
+    assert selected == expected
+    assert selected in (1, 2, 4, 8, 16)
+
+
+@pytest.mark.parametrize(
+    ("logical_blocks", "expected"),
+    [(1, 1), (2, 2), (3, 2), (6, 4), (11, 8), (12, 8), (16, 8)],
+)
+def test_auto_split_policy_caps_to_power_of_two_context_boundary(
+    logical_blocks, expected
+):
+    assert (
+        backend_module._select_num_splits(
+            0,
+            num_reqs=8,
+            num_kv_heads=2,
+            logical_blocks=logical_blocks,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("requested", "logical_blocks", "expected"),
+    [(2, 1, 1), (4, 3, 2), (8, 6, 4), (16, 11, 8), (16, 12, 8)],
+)
+def test_explicit_split_policy_caps_to_power_of_two_context_boundary(
+    requested, logical_blocks, expected
+):
+    assert (
+        backend_module._select_num_splits(
+            requested,
+            num_reqs=8,
+            num_kv_heads=2,
+            logical_blocks=logical_blocks,
+        )
+        == expected
+    )
+
+
 def test_eligible_forward_passes_original_vllm_tensors_to_unchecked_launcher(
     monkeypatch,
 ):

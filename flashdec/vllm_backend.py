@@ -22,6 +22,46 @@ from vllm.v1.attention.backends.triton_attn import (
 from .kernels.paged_decode import _vllm_paged_decode_attention_into
 
 
+_VALID_REQUESTED_SPLITS = (0, 1, 2, 4, 8, 16)
+_VALID_NUM_SPLITS = _VALID_REQUESTED_SPLITS[1:]
+
+
+def _parse_requested_splits(value: str) -> int:
+    try:
+        requested_splits = int(value)
+    except ValueError:
+        requested_splits = -1
+    if requested_splits not in _VALID_REQUESTED_SPLITS:
+        raise ValueError(
+            "FLASHDEC_VLLM_NUM_SPLITS must be one of 0, 1, 2, 4, 8, or 16 "
+            "(0 selects auto)"
+        )
+    return requested_splits
+
+
+def _select_num_splits(
+    requested_splits: int,
+    *,
+    num_reqs: int,
+    num_kv_heads: int,
+    logical_blocks: int,
+) -> int:
+    max_context_splits = max(
+        split for split in _VALID_NUM_SPLITS if split <= max(1, logical_blocks)
+    )
+    if requested_splits == 0:
+        target_programs = 128
+        programs_per_split = max(1, num_reqs * num_kv_heads)
+        requested_splits = min(
+            _VALID_NUM_SPLITS,
+            key=lambda split: (
+                abs(programs_per_split * split - target_programs),
+                split,
+            ),
+        )
+    return min(requested_splits, max_context_splits)
+
+
 class FlashDecAttentionBackend(TritonAttentionBackend):
     """vLLM backend that substitutes FlashDec for eligible decode batches."""
 
@@ -46,10 +86,9 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        requested_splits = int(os.environ.get("FLASHDEC_VLLM_NUM_SPLITS", "0"))
-        if requested_splits < 0 or requested_splits > 16:
-            raise ValueError("FLASHDEC_VLLM_NUM_SPLITS must be in [0, 16]")
-        self._requested_splits = requested_splits
+        self._requested_splits = _parse_requested_splits(
+            os.environ.get("FLASHDEC_VLLM_NUM_SPLITS", "0")
+        )
 
     def _supports_flashdec_decode(
         self,
@@ -161,14 +200,12 @@ class FlashDecAttentionImpl(TritonAttentionImpl):
         logical_blocks = (
             attn_metadata.max_seq_len + block_size - 1
         ) // block_size
-        requested_splits = self._requested_splits
-        if requested_splits == 0:
-            target_programs = 128
-            programs_per_split = max(1, num_reqs * self.num_kv_heads)
-            requested_splits = (
-                target_programs + programs_per_split - 1
-            ) // programs_per_split
-        num_splits = min(16, logical_blocks, max(1, requested_splits))
+        num_splits = _select_num_splits(
+            self._requested_splits,
+            num_reqs=num_reqs,
+            num_kv_heads=self.num_kv_heads,
+            logical_blocks=logical_blocks,
+        )
         if (
             attn_metadata.max_seq_len < 512
             or num_reqs > attn_metadata.softmax_segm_output.shape[0]
